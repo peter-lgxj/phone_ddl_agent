@@ -196,7 +196,7 @@ class OCRLocator:
 
 # ===== 测试 =====
 if __name__ == "__main__":
-    from screen_agent import PhoneController
+    from phone_controller import PhoneController
     locator = OCRLocator()
     phone = PhoneController(locator)
     phone.screenshot("screen_current.png")

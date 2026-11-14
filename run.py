@@ -18,7 +18,10 @@ def clear_background_apps():
             print(f"已点击：{text}")
             time.sleep(1)
             return
-    phone.device.swipe(540, 1200, 540, 200, duration=0.3)
+    width, height = phone.device.window_size()
+    # 从屏幕中部往上滑，坐标按分辨率比例计算，避免写死 1080x2400
+    phone.device.swipe(width // 2, int(height * 0.5), width // 2, int(height * 0.1),
+                       duration=0.3)
     time.sleep(0.5)
     for text in ["全部清除", "清除全部", "一键清理", "Clear all"]:
         btn = phone.device(text=text)
