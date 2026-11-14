@@ -15,7 +15,9 @@ cd phone_ddl_agent
 pip install -r requirements.txt
 ```
 
-用 `adb devices` 确认手机已连接并完成授权。将 `.env.example` 复制为 `.env`，填写所使用服务的密钥。默认执行模型为 `qwen`，规划模型为 `qwen3`，均读取 `DASHSCOPE_API_KEY`。其他模型与接口配置见 `config.py`。
+用 `adb devices` 确认手机已连接并完成授权。将 `.env.example` 复制为 `.env`，填写所使用服务的密钥。默认执行模型为 `qwen`，规划模型为 `qwen3`（单任务与多应用模式都从 `config.PLANNER_PROVIDER` 读取），均读取 `DASHSCOPE_API_KEY`。其他模型与接口配置见 `config.py`。
+
+首次运行会通过 EasyOCR 下载中文识别模型（需要联网，体积较大）；截图定位还依赖 uiautomator2 在手机上安装的自动化组件。
 
 `.env`、任务运行记录和手机界面导出文件不提交到仓库。
 
@@ -47,7 +49,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 - `app.py` / `templates/`：Flask 网页界面
 - `config.py` / `.env.example`：模型配置和密钥模板
 
-输入框检测使用的 `models/input_box.pt` 权重未随代码提供，使用相关功能前需自行准备。`config.json` 为保留的旧版配置；当前模型配置以 `config.py` 为准。
+输入框定位优先使用 uiautomator2 的控件树（`EditText` 等）；`models/input_box.pt` 是 YOLO 视觉兜底权重，未随代码提供，缺失时会跳过兜底并打印提示，不会中断任务。需要视觉定位时请自行准备权重放到 `models/` 下。`config.json` 为保留的旧版配置；当前模型配置以 `config.py` 为准。
 
 ## 注意事项
 
