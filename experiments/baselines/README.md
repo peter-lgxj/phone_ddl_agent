@@ -36,6 +36,17 @@ print(json.dumps({"summary": proc.stdout.strip()[-500:],
                   "elapsed": round(time.time() - started, 1)}, ensure_ascii=False))
 ```
 
+## 已提供的 wrapper 骨架
+
+| 文件 | 环境变量 | 需要替换 |
+|---|---|---|
+| `openautoglm_wrapper.py` | `OPEN_AUTOGLM_DIR` | `build_command()` 的入口/参数、`step_marker` |
+| `mobile_agent_v2_wrapper.py` | `MOBILE_AGENT_V2_DIR` | 同上 |
+| `appagent_wrapper.py` | `APPAGENT_DIR` | 同上（另需先跑上游探索阶段生成 App 文档） |
+
+`_common.py` 负责读 stdin、校验目录、计时与输出 JSON。三个骨架**未在真实仓库上验证**，
+单元测试只覆盖"读协议 → 调命令 → 汇总 steps/summary"这段管道。
+
 ## 运行
 
 ```bash
