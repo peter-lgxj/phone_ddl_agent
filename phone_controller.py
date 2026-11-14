@@ -33,18 +33,13 @@ class PhoneController:
         print(f"滑动：({x1},{y1}) → ({x2},{y2})")
         time.sleep(0.8)
 
-    # def type_text(self, text: str):
-    #     """
-    #     输入文字，完美支持中文。
-    #     原理：uiautomator2 内部用 jsonrpc 调用设备端 agent 完成输入。
-    #     """
-    #     self.device.send_keys(text, clear=False)
-    #     print(f"输入文字：{text}")
-    #     time.sleep(0.5)
-    
     def type_text(self, text: str):
-        """输入文字，自动激活输入框，支持中文"""
-        
+        """
+        输入文字，自动激活输入框，支持中文。
+        只负责输入，不自动发送——发送由智能体的 send 动作单独完成，
+        以免与动作序列里的 send 叠加导致重复发送或重复回车。
+        """
+
         # 先尝试点击激活输入框
         self.tap_input_box()
         time.sleep(0.5)
@@ -79,7 +74,7 @@ class PhoneController:
 
 
     def tap_input_box(self) -> bool:
-        """智能查找并点击输入框"""
+        """智能查找并点击输入框：控件（XML）优先，YOLO 作为兜底"""
         # 方式1：标准 EditText
         try:
             box = self.device(className="android.widget.EditText")
@@ -88,8 +83,8 @@ class PhoneController:
                 print("点击输入框(EditText)")
                 time.sleep(0.8)
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"点击输入框(EditText)失败：{e}")
 
         # 方式2：微信输入框特殊类名
         try:
@@ -100,10 +95,30 @@ class PhoneController:
                 print("点击输入框(微信)")
                 time.sleep(0.8)
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"点击输入框(微信)失败：{e}")
 
-        print("未找到输入框控件")
+        # 方式3：YOLO 视觉检测兜底
+        # 权重（config.INPUT_BOX_MODEL）缺失或加载失败时只提示并返回 False，
+        # 不能把 FileNotFoundError 抛到任务循环里导致整个任务中断。
+        try:
+            if not hasattr(self, "_input_detector"):
+                from input_detector import InputDetector
+                self._input_detector = InputDetector()
+            self.screenshot("screen_for_detection.png")
+            detected = self._input_detector.find_best("screen_for_detection.png")
+        except Exception as e:
+            print(f"YOLO 输入框检测不可用（{e}）")
+            return False
+
+        if detected:
+            cx, cy = detected["center"]
+            print(f"YOLO 检测到输入框，置信度:{detected['confidence']}  坐标:({cx},{cy})")
+            self.device.click(cx, cy)
+            time.sleep(0.8)
+            return True
+
+        print("未找到输入框控件，YOLO 也未检测到输入框")
         return False
 
     def press_back(self):
@@ -148,86 +163,6 @@ class PhoneController:
         return "mInputShown=true" in result.stdout
 
 
-    def tap_input_box(self) -> bool:
-        """用 YOLO 检测输入框位置并点击"""
-        # 懒加载，第一次调用时初始化
-        if not hasattr(self, '_input_detector'):
-            from input_detector import InputDetector
-            self._input_detector = InputDetector()
-
-        # 截当前屏幕用于检测
-        self.screenshot("screen_for_detection.png")
-
-        box = self._input_detector.find_best("screen_for_detection.png")
-        if box:
-            cx, cy = box["center"]
-            print(f"YOLO 检测到输入框，置信度:{box['confidence']}  坐标:({cx},{cy})")
-            self.device.click(cx, cy)
-            time.sleep(0.8)
-            return True
-
-        print("YOLO 未检测到输入框")
-        return False
-
-    
-    def type_text(self, text):
-        
-        """输入文字，自动激活输入框，输入完自动发送"""
-        # 确保键盘已弹出
-        if not self.is_keyboard_shown():
-            self.tap_input_box()
-            time.sleep(0.5)
-            
-        # time.sleep(1)
-        # self.tap(404, 2342)
-        # time.sleep(0.5)
-        self.device.send_keys(text, clear=False)
-        print(f"输入文字：{text}")
-        time.sleep(0.5)
-        self._auto_send2(text)
-        time.sleep(0.5)
-        # 输入完自动发送
-        self._auto_send()
-
-    def _auto_send2(self,text):
-        elements=self.locator.detect("screen_current.png")
-        # print(elements)
-        try:
-            for el in elements:
-                if el["text"] == text:
-                    x,y=el['center'][0], el['center'][1]
-                elif el["type"] == "input":
-                    x,y=el['center'][0], el['center'][1]
-            self.tap(x,y)
-            time.sleep(1)
-            self.tap(674, 2343)
-            time.sleep(1)
-        except Exception as e:
-            print(e)
-        
-        
-    def _auto_send(self):
-        """输入完成后自动发送：优先找发送按钮，找不到用 ADB 回车"""
-        import subprocess
-        time.sleep(0.1)
-        try:
-            for label in ["Send", "发送"]:
-                btn = self.device(text=label)
-                if btn.exists:
-                    btn.click()
-                    print(f"自动发送：点击'{label}'按钮")
-                    time.sleep(0.8)
-                    return
-        except Exception:
-            pass
-
-        # 找不到按钮，用 ADB 回车
-        subprocess.run(["adb", "shell", "input", "keyevent", "66"])
-        print("自动发送：ADB 回车")
-        time.sleep(1.5)
-
-
-    
     def tap_send_button(self):
         """发送消息，优先找 Send 按钮，找不到用回车"""
         try:
