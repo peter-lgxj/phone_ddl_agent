@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>手机智能体控制台</title>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #08090f;
+  --surface: #0e1117;
+  --surface2: #13161f;
+  --border: #1c2133;
+  --border2: #242c3f;
+  --accent: #3b82f6;
+  --accent-dim: rgba(59,130,246,0.12);
+  --accent2: #8b5cf6;
+  --green: #22c55e;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --cyan: #06b6d4;
+  --text: #e2e8f0;
+  --text2: #94a3b8;
+  --text3: #475569;
+  --mono: 'JetBrains Mono','Cascadia Code','Fira Code',monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── HEADER ─── */
+header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.logo-icon {
+  width: 28px; height: 28px;
+  background: linear-gradient(135deg,#3b82f6,#8b5cf6);
+  border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px;
+}
+
+.logo-sub {
+  font-size: 9px;
+  color: var(--text3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.mode-toggle {
+  display: flex;
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+  margin-left: 8px;
+}
+
+.mode-btn {
+  padding: 5px 14px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  border: none;
+  font-family: var(--mono);
+  color: var(--text3);
+  background: transparent;
+  transition: all 0.15s;
+}
+.mode-btn.active { background: var(--accent); color: #fff; box-shadow: 0 0 10px rgba(59,130,246,.3); }
+.mode-btn:not(.active):hover { color: var(--text2); }
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+}
+
+.sdot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--text3);
+  transition: all .3s;
+}
+.sdot.running { background: var(--green); box-shadow: 0 0 8px var(--green); animation: blink 1.2s ease-in-out infinite; }
+.sdot.done    { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.sdot.error   { background: var(--red); }
+
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+.stext {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text3);
+  transition: color .3s;
+}
+.stext.running { color: var(--green); }
+.stext.done    { color: var(--accent); }
+.stext.error   { color: var(--red); }
+
+.step-badge {
+  padding: 3px 10px;
+  background: var(--accent-dim);
+  border: 1px solid rgba(59,130,246,.25);
+  border-radius: 20px;
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity .3s;
+}
+.step-badge.vis { opacity: 1; }
+
+/* ─── TASK BAR ─── */
+.task-bar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.task-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 14px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+.task-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.1); }
+.task-input::placeholder { color: var(--text3); }
+
+.btn-run {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 20px;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: .04em;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.btn-run:hover:not(:disabled) { background: #2563eb; box-shadow: 0 0 16px rgba(59,130,246,.4); }
+.btn-run:active:not(:disabled) { transform: scale(.98); }
+.btn-run:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ─── MAIN ─── */
+.main {
+  display: grid;
+  gap: 1px;
+  flex: 1;
+  overflow: hidden;
+  background: var(--border);
+  transition: grid-template-columns .3s;
+}
+
+.main.single { grid-template-columns: 1fr 1fr 1fr; }
+.main.multi  { grid-template-columns: 220px 1fr 1fr 1fr; }
+
+.panel {
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ph {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+
+.pdot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+
+/* ─── TODO PANEL ─── */
+.todo-panel { background: var(--surface); }
+
+.todo-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.todo-list::-webkit-scrollbar { width: 3px; }
+.todo-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.todo-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text3);
+  font-size: 11px;
+  height: 100%;
+  text-align: center;
+  padding: 20px;
+  line-height: 1.75;
+}
+.te-icon { font-size: 26px; opacity: .2; }
+
+.todo-item {
+  border-radius: 8px;
+  padding: 9px 10px 9px 13px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  transition: all .2s;
+  position: relative;
+  overflow: hidden;
+  animation: fadeUp .2s ease;
+}
+@keyframes fadeUp {
+  from { opacity:0; transform:translateY(4px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+
+.todo-item::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  border-radius: 0 1px 1px 0;
+  transition: all .2s;
+}
+.todo-item.pending::before { background: var(--border2); }
+.todo-item.running::before { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+.todo-item.done::before    { background: var(--green); }
+.todo-item.failed::before  { background: var(--red); }
+
+.todo-item.running { border-color: rgba(245,158,11,.3); background: rgba(245,158,11,.03); }
+.todo-item.done    { border-color: rgba(34,197,94,.2); opacity: .65; }
+.todo-item.failed  { border-color: rgba(239,68,68,.2); opacity: .65; }
+
+.ti-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.ti-idx {
+  width: 17px; height: 17px;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.pending .ti-idx { background: var(--border2); color: var(--text3); }
+.running .ti-idx { background: var(--amber); color: #000; animation: pulse-idx 1.5s ease-in-out infinite; }
+.done    .ti-idx { background: var(--green); color: #000; }
+.failed  .ti-idx { background: var(--red); color: #fff; }
+@keyframes pulse-idx { 0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0)} 50%{box-shadow:0 0 0 3px rgba(245,158,11,.35)} }
+
+.ti-icon { font-size: 10px; flex-shrink: 0; }
+
+.ti-app {
+  font-size: 9px;
+  letter-spacing: .06em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 70px;
+}
+
+.ti-goal {
+  font-size: 11px;
+  color: var(--text2);
+  line-height: 1.55;
+  word-break: break-all;
+}
+
+.ti-result {
+  margin-top: 5px;
+  font-size: 10px;
+  color: var(--text3);
+  line-height: 1.5;
+  border-top: 1px solid var(--border);
+  padding-top: 5px;
+  display: none;
+}
+.ti-result.show { display: block; }
+.ti-result .res-label { color: var(--green); }
+
+.plan-footer {
+  padding: 7px 12px;
+  background: var(--surface2);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text3);
+  display: none;
+  align-items: center;
+  gap: 8px;
+}
+.plan-footer.show { display: flex; }
+
+.prog-bar {
+  flex: 1;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.prog-fill {
+  height: 100%;
+  background: linear-gradient(90deg,var(--accent),var(--green));
+  border-radius: 2px;
+  transition: width .5s ease;
+  width: 0%;
+}
+
+/* ─── SCREEN ─── */
+.screen-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 12px;
+  position: relative;
+}
+
+.phone-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid var(--border2);
+  box-shadow: 0 4px 24px rgba(0,0,0,.4);
+}
+
+.aoverlay {
+  position: absolute;
+  pointer-events: none;
+  top: 12px; left: 12px; right: 12px; bottom: 12px;
+}
+
+.tap-dot {
+  position: absolute;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: rgba(239,68,68,.9);
+  border: 2px solid #fff;
+  transform: translate(-50%,-50%);
+  animation: tap-ripple 1.2s ease-out infinite;
+}
+@keyframes tap-ripple {
+  0%   { box-shadow: 0 0 0 0 rgba(239,68,68,.7); }
+  100% { box-shadow: 0 0 0 18px rgba(239,68,68,0); }
+}
+
+.tap-label {
+  position: absolute;
+  background: rgba(239,68,68,.93);
+  color: #fff;
+  padding: 3px 9px;
+  border-radius: 5px;
+  font-size: 10px;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: translateX(-50%);
+  margin-top: 12px;
+}
+
+.chip-bar {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 7px 12px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.chip {
+  padding: 3px 8px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  border: 1px solid transparent;
+  opacity: .3;
+  transition: all .2s;
+}
+.chip.active { opacity: 1; }
+.ch-tap           { border-color: var(--red);    color: var(--red); }
+.ch-type          { border-color: var(--cyan);   color: var(--cyan); }
+.ch-tap_input_box { border-color: var(--cyan);   color: var(--cyan); }
+.ch-send          { border-color: var(--green);  color: var(--green); }
+.ch-swipe         { border-color: var(--amber);  color: var(--amber); }
+.ch-back,
+.ch-home,
+.ch-wait          { border-color: var(--text3);  color: var(--text3); }
+.ch-open          { border-color: var(--accent2); color: var(--accent2); }
+.ch-finish        { border-color: var(--green);  color: var(--green); }
+
+.chip-desc {
+  font-size: 11px;
+  color: var(--text3);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.obs-text {
+  font-size: 11px;
+  color: var(--amber);
+  padding: 7px 12px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  min-height: 34px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+/* empty state */
+.empty-st {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text3);
+  font-size: 12px;
+  height: 100%;
+}
+.empty-icon { font-size: 26px; opacity: .18; }
+
+/* ─── LOG ─── */
+.log-panel { overflow: hidden; }
+
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+
+.btn-clear {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border2);
+  color: var(--text3);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+  cursor: pointer;
+  font-family: var(--mono);
+  transition: all .15s;
+}
+.btn-clear:hover { border-color: var(--text3); color: var(--text2); }
+
+.log-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px;
+  font-size: 11.5px;
+  line-height: 1.85;
+}
+.log-body::-webkit-scrollbar { width: 3px; }
+.log-body::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.ll { white-space: pre-wrap; word-break: break-all; }
+.l-sep    { color: var(--text3); opacity: .4; }
+.l-step   { color: var(--accent); font-weight: 700; margin-top: 5px; }
+.l-think  { color: #a78bfa; }
+.l-action { color: var(--green); }
+.l-obs    { color: var(--amber); }
+.l-launch { color: #f472b6; }
+.l-plan   { color: var(--cyan); font-weight: 600; }
+.l-replan { color: var(--accent2); }
+.l-done   { color: var(--green); font-weight: 700; }
+.l-error  { color: var(--red); }
+.l-other  { color: var(--text3); }
+.l-subtask { color: var(--amber); font-weight: 700; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">🤖</div>
+    <div>
+      <div>MOBILE AGENT</div>
+      <div class="logo-sub">Phone Automation Console</div>
+    </div>
+  </div>
+
+  <div class="mode-toggle">
+    <button class="mode-btn active" id="modeSingle" onclick="setMode('single')">单任务</button>
+    <button class="mode-btn"        id="modeMulti"  onclick="setMode('multi')">多应用</button>
+  </div>
+
+  <div class="status-indicator">
+    <div class="sdot" id="sdot"></div>
+    <span class="stext" id="stext">待机</span>
+    <span class="step-badge" id="stepBadge">—</span>
+  </div>
+</header>
+
+<div class="task-bar">
+  <input id="taskInput" class="task-input"
+         placeholder="输入任务，例如：打开微信阅读包航消息，然后用高德地图查询他提到的地点"
+         onkeydown="if(event.key==='Enter') startTask()">
+  <button id="runBtn" class="btn-run" onclick="startTask()">▶ 执行</button>
+</div>
+
+<div class="main single" id="mainGrid">
+
+  <!-- TODO ─── -->
+  <div class="panel todo-panel" id="todoPanel" style="display:none">
+    <div class="ph">
+      <div class="pdot" style="background:var(--cyan)"></div>
+      任务计划
+      <span id="todoCount" style="margin-left:auto">—</span>
+    </div>
+    <div class="todo-list" id="todoList">
+      <div class="todo-empty" id="todoEmpty">
+        <div class="te-icon">📋</div>
+        <div>任务开始后将自动<br>显示 AI 规划的子任务列表</div>
+      </div>
+    </div>
+    <div class="plan-footer" id="planFooter">
+      <div class="prog-bar"><div class="prog-fill" id="progFill"></div></div>
+      <span id="progText">0/0</span>
+    </div>
+  </div>
+
+  <!-- CURRENT ─── -->
+  <div class="panel">
+    <div class="ph">
+      <div class="pdot" style="background:var(--accent)"></div>
+      当前屏幕
+    </div>
+    <div class="screen-wrap" id="curWrap">
+      <div class="empty-st" id="curEmpty">
+        <div class="empty-icon">📱</div>
+        <div>等待任务开始</div>
+      </div>
+      <img id="curImg" class="phone-img" style="display:none">
+      <div class="aoverlay" id="aoverlay"></div>
+    </div>
+    <div class="chip-bar" id="chipBar">
+      <span class="chip ch-tap"           id="chip-tap">TAP</span>
+      <span class="chip ch-tap_input_box" id="chip-tap_input_box">INPUT</span>
+      <span class="chip ch-type"          id="chip-type">TYPE</span>
+      <span class="chip ch-send"          id="chip-send">SEND</span>
+      <span class="chip ch-swipe"         id="chip-swipe">SWIPE</span>
+      <span class="chip ch-back"          id="chip-back">BACK</span>
+      <span class="chip ch-home"          id="chip-home">HOME</span>
+      <span class="chip ch-open"          id="chip-open">OPEN</span>
+      <span class="chip ch-wait"          id="chip-wait">WAIT</span>
+      <span class="chip ch-finish"        id="chip-finish">FINISH</span>
+      <span class="chip-desc" id="chipDesc">—</span>
+    </div>
+  </div>
+
+  <!-- OBSERVE ─── -->
+  <div class="panel">
+    <div class="ph">
+      <div class="pdot" style="background:var(--green)"></div>
+      执行后观察
+    </div>
+    <div class="screen-wrap">
+      <div class="empty-st" id="obsEmpty">
+        <div class="empty-icon">👁</div>
+        <div>等待执行结果</div>
+      </div>
+      <img id="obsImg" class="phone-img" style="display:none">
+    </div>
+    <div class="obs-text" id="obsText">—</div>
+  </div>
+
+  <!-- LOG ─── -->
+  <div class="panel log-panel">
+    <div class="log-toolbar">
+      <div class="pdot" style="background:var(--accent2)"></div>
+      执行日志
+      <button class="btn-clear" onclick="clearLog()">清空</button>
+    </div>
+    <div class="log-body" id="logBody"></div>
+  </div>
+
+</div>
+
+<script>
+const socket = io();
+let mode = 'single';
+let imgW = 1, imgH = 1;
+let todos = {};
+let doneCount = 0, totalCount = 0;
+
+// ── 模式切换 ─────────────────────────────
+function setMode(m) {
+  mode = m;
+  document.getElementById('modeSingle').classList.toggle('active', m === 'single');
+  document.getElementById('modeMulti').classList.toggle('active', m === 'multi');
+  const panel = document.getElementById('todoPanel');
+  const grid  = document.getElementById('mainGrid');
+  if (m === 'multi') {
+    panel.style.display = '';
+    grid.className = 'main multi';
+  } else {
+    panel.style.display = 'none';
+    grid.className = 'main single';
+    resetTodo();
+  }
+  log(`[模式] 切换至 ${m === 'multi' ? '多应用' : '单任务'}`, 'l-other');
+}
+
+// ── 发起任务 ─────────────────────────────
+function startTask() {
+  const task = document.getElementById('taskInput').value.trim();
+  if (!task) return;
+  resetTodo();
+  clearOverlay();
+  socket.emit('start_task', { task, mode });
+}
+
+// ── Socket ───────────────────────────────
+socket.on('connect',    () => log('WebSocket 已连接', 'l-other'));
+socket.on('disconnect', () => log('连接断开', 'l-error'));
+
+socket.on('started', d => {
+  setStatus('running', '执行中');
+  document.getElementById('runBtn').disabled = true;
+  log(`${'═'.repeat(46)}`, 'l-sep');
+  log(`▶ 任务开始 [${d.mode === 'multi' ? '多应用' : '单任务'}]`, 'l-step');
+  log(`  ${d.task}`, 'l-other');
+  log(`${'─'.repeat(46)}`, 'l-sep');
+});
+
+socket.on('plan_ready', d => {
+  if (!d || !d.subtasks || !d.subtasks.length) return;
+  log(`\n📋 规划完成 — 共 ${d.subtasks.length} 个子任务`, 'l-plan');
+  if (d.analysis) log(`   ${d.analysis}`, 'l-other');
+  log(`${'─'.repeat(46)}`, 'l-sep');
+  renderPlan(d.subtasks);
+});
+
+socket.on('subtask_start', d => {
+  setTodoStatus(d.index, 'running');
+  log(`\n📍 子任务 [${d.index}/${totalCount}]`, 'l-subtask');
+  log(`   App：${d.app || '—'}`, 'l-other');
+  log(`   目标：${d.goal}`, 'l-other');
+  log(`${'─'.repeat(46)}`, 'l-sep');
+});
+
+socket.on('subtask_done', d => {
+  setTodoStatus(d.index, d.status || 'done');
+  setTodoResult(d.index, d.result);
+  log(`\n${d.status === 'done' ? '✅' : '❌'} 子任务 [${d.index}] ${d.status === 'done' ? '完成' : '失败'}`, d.status === 'done' ? 'l-done' : 'l-error');
+  if (d.result) log(`   ${d.result}`, 'l-other');
+  updateProg();
+});
+
+socket.on('replan', d => {
+  log(`\n🔄 规划器重新评估后续子任务...`, 'l-replan');
+  (d.updated || []).forEach(u => {
+    if (todos[u.index]) {
+      todos[u.index].el.querySelector('.ti-goal').textContent = u.goal;
+      log(`   ✏️ 更新子任务[${u.index}]：${u.goal}`, 'l-replan');
+    }
+  });
+  (d.added || []).forEach(u => {
+    addTodoItem(u);
+    log(`   ➕ 新增子任务[${u.index}]：${u.goal}`, 'l-replan');
+    totalCount = Math.max(totalCount, u.index);
+  });
+  updateProg();
+});
+
+socket.on('update', d => {
+  const sb = document.getElementById('stepBadge');
+  sb.textContent = `Step ${d.step}`;
+  sb.classList.add('vis');
+
+  const img = document.getElementById('curImg');
+  const emp = document.getElementById('curEmpty');
+  if (d.current_img) {
+    img.src = 'data:image/png;base64,' + d.current_img;
+    img.style.display = 'block';
+    emp.style.display = 'none';
+    img.onload = () => { imgW = img.naturalWidth; imgH = img.naturalHeight; renderOverlay(d.action); };
+  }
+  const a = d.action || {};
+  const t = a.action_type || '';
+  document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+  const chip = document.getElementById('chip-' + t);
+  if (chip) chip.classList.add('active');
+  document.getElementById('chipDesc').textContent = a.description || '—';
+
+  log(`┌─ 第 ${d.step} 步 ${'─'.repeat(34)}`, 'l-step');
+  if (a.thought)     log(`│ 💭 ${a.thought}`, 'l-think');
+  if (a.description) log(`│ ▶  ${a.description}  [${t}]`, 'l-action');
+});
+
+socket.on('observe', d => {
+  const img = document.getElementById('obsImg');
+  const emp = document.getElementById('obsEmpty');
+  if (d.observe_img) {
+    img.src = 'data:image/png;base64,' + d.observe_img;
+    img.style.display = 'block';
+    emp.style.display = 'none';
+  }
+  const obs = d.observation || '';
+  document.getElementById('obsText').textContent = obs;
+  log(`│ 👁  ${obs}`, 'l-obs');
+  log(`└${'─'.repeat(40)}`, 'l-sep');
+});
+
+socket.on('log', d => {
+  const text = d.text || '';
+  const skipParts = ['截图已保存','┌─ 第','│  💭','│  ▶','│  👁','└─','│ 💭','│ ▶','│ 👁'];
+  if (skipParts.some(s => text.includes(s))) return;
+  let cls = 'l-other';
+  if      (text.match(/🚀|启动 App/))              cls = 'l-launch';
+  else if (text.match(/📋|规划完成/))               cls = 'l-plan';
+  else if (text.match(/🔄|重新评估/))               cls = 'l-replan';
+  else if (text.match(/📍|子任务.*开始/))            cls = 'l-subtask';
+  else if (text.match(/✅|任务.*完成|子任务.*完成/)) cls = 'l-done';
+  else if (text.match(/❌|出错|失败/))               cls = 'l-error';
+  else if (text.match(/══|──/))                     cls = 'l-sep';
+  log(text, cls);
+});
+
+socket.on('done', d => {
+  setStatus('done', '完成');
+  log(`\n${'═'.repeat(46)}`, 'l-sep');
+  log(`✅ ${d.message || '任务完成'}`, 'l-done');
+  log(`${'═'.repeat(46)}`, 'l-sep');
+  document.getElementById('runBtn').disabled = false;
+  document.getElementById('stepBadge').classList.remove('vis');
+});
+
+socket.on('error', d => {
+  setStatus('error', '错误');
+  log(`❌ ${d.message || '未知错误'}`, 'l-error');
+  document.getElementById('runBtn').disabled = false;
+});
+
+// ── TODO ─────────────────────────────────
+function renderPlan(subtasks) {
+  const list = document.getElementById('todoList');
+  list.innerHTML = '';
+  todos = {};
+  doneCount = 0;
+  totalCount = subtasks.length;
+  document.getElementById('todoEmpty') && null;
+  document.getElementById('planFooter').classList.add('show');
+  document.getElementById('todoCount').textContent = `0/${totalCount}`;
+  subtasks.forEach(st => addTodoItem(st));
+  updateProg();
+}
+
+function addTodoItem(st) {
+  const list = document.getElementById('todoList');
+  const el = document.createElement('div');
+  el.className = 'todo-item pending';
+  el.dataset.index = st.index;
+  el.innerHTML = `
+    <div class="ti-head">
+      <div class="ti-idx">${st.index}</div>
+      <span class="ti-icon">⏳</span>
+      ${st.app ? `<span class="ti-app">${st.app}</span>` : ''}
+    </div>
+    <div class="ti-goal">${st.goal}</div>
+    <div class="ti-result" id="tr-${st.index}">
+      <span class="res-label">结果：</span><span class="res-val"></span>
+    </div>`;
+  list.appendChild(el);
+  todos[st.index] = { el };
+}
+
+function setTodoStatus(idx, status) {
+  const item = todos[idx];
+  if (!item) return;
+  item.el.className = `todo-item ${status}`;
+  const iconMap = { pending:'⏳', running:'⚡', done:'✅', failed:'❌' };
+  item.el.querySelector('.ti-icon').textContent = iconMap[status] || '•';
+}
+
+function setTodoResult(idx, result) {
+  if (!result) return;
+  const el = document.getElementById(`tr-${idx}`);
+  if (el) { el.querySelector('.res-val').textContent = result; el.classList.add('show'); }
+}
+
+function updateProg() {
+  doneCount = Object.values(todos).filter(i => i.el.classList.contains('done')).length;
+  const failCount = Object.values(todos).filter(i => i.el.classList.contains('failed')).length;
+  const pct = totalCount > 0 ? ((doneCount + failCount) / totalCount * 100) : 0;
+  document.getElementById('progFill').style.width = pct + '%';
+  document.getElementById('progText').textContent  = `${doneCount}/${totalCount}`;
+  document.getElementById('todoCount').textContent = `${doneCount}/${totalCount}`;
+}
+
+function resetTodo() {
+  const list = document.getElementById('todoList');
+  list.innerHTML = `<div class="todo-empty" id="todoEmpty">
+    <div class="te-icon">📋</div>
+    <div>任务开始后将自动<br>显示 AI 规划的子任务列表</div>
+  </div>`;
+  todos = {}; doneCount = 0; totalCount = 0;
+  document.getElementById('planFooter').classList.remove('show');
+  document.getElementById('progFill').style.width = '0%';
+  document.getElementById('todoCount').textContent = '—';
+}
+
+// ── 屏幕标注 ─────────────────────────────
+function renderOverlay(action) {
+  const overlay = document.getElementById('aoverlay');
+  overlay.innerHTML = '';
+  if (!action) return;
+  const t = action.action_type;
+  const img = document.getElementById('curImg');
+  const sx = img.width  / imgW;
+  const sy = img.height / imgH;
+  const ox = img.offsetLeft;
+  const oy = img.offsetTop;
+
+  if (t === 'tap' && action.x != null && action.y != null) {
+    const x  = parseFloat(Array.isArray(action.x) ? action.x[0] : action.x);
+    const y  = parseFloat(Array.isArray(action.y) ? action.y[0] : action.y);
+    const px = ox + x * sx;
+    const py = oy + y * sy;
+    const dot = document.createElement('div');
+    dot.className = 'tap-dot';
+    dot.style.cssText = `left:${px}px;top:${py}px`;
+    overlay.appendChild(dot);
+    const lbl = document.createElement('div');
+    lbl.className = 'tap-label';
+    lbl.style.cssText = `left:${px}px;top:${py+10}px`;
+    lbl.textContent = action.description || '点击';
+    overlay.appendChild(lbl);
+  }
+
+  if (t === 'swipe') {
+    const x1 = ox + action.x  * sx, y1 = oy + action.y  * sy;
+    const x2 = ox + action.x2 * sx, y2 = oy + action.y2 * sy;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none';
+    svg.innerHTML = `<defs><marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#f59e0b"/></marker></defs>
+      <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
+            stroke="#f59e0b" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#arr)"/>
+      <circle cx="${x1}" cy="${y1}" r="5" fill="#f59e0b"/>`;
+    overlay.appendChild(svg);
+  }
+}
+
+function clearOverlay() { document.getElementById('aoverlay').innerHTML = ''; }
+
+// ── 工具 ─────────────────────────────────
+function log(text, cls) {
+  const body = document.getElementById('logBody');
+  const el = document.createElement('div');
+  el.className = 'll ' + cls;
+  el.textContent = text;
+  body.appendChild(el);
+  body.scrollTop = body.scrollHeight;
+}
+
+function clearLog() { document.getElementById('logBody').innerHTML = ''; }
+
+function setStatus(type, text) {
+  document.getElementById('sdot').className  = 'sdot ' + type;
+  const st = document.getElementById('stext');
+  st.className = 'stext ' + type;
+  st.textContent = text;
+}
+</script>
+</body>
+</html>

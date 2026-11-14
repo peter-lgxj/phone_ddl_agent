@@ -1,0 +1,10 @@
+Flask
+Flask-SocketIO
+streamlit
+Pillow
+uiautomator2
+openai
+zhipuai
+easyocr
+ultralytics
+python-dotenv

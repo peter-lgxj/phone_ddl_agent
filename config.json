@@ -1,0 +1,15 @@
+{
+    "api_keys": {
+        "glm": "your_glm_api_key_here",
+        "openai": "your_openai_api_key_here"
+    },
+    "app_paths": {
+        "food_delivery": "com.ele.me",
+        "shopping": "com.jd.app.mobile"
+    },
+    "settings": {
+        "language": "zh-CN",
+        "timeout": 30,
+        "debug": false
+    }
+}

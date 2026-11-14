@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+*.egg-info/
+dist/
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific - Runtime files
+agent_state.json
+task_log*.json
+multi_task_log.json
+*.png
+*.jpg
+*.jpeg
+ui.xml
+ui_dump.xml
+
+# Logs
+*.log
+
+# Local credentials and personal working notes
+.env
+.env.*
+!.env.example
+config.local.*
+task_list.md
+todo_list.md
+
+# Local model weights
+models/
+*.pt
