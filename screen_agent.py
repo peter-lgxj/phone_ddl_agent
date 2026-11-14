@@ -162,9 +162,10 @@ class ScreenAgent:
         with open("screen_current.png", "rb") as f:
             current_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-        # 上一轮 observe 截图
+        # 上一轮 observe 截图（provider 支持多图时才一起发送）
+        has_prev = self.support_multi_image and len(memory.steps) > 0
         content = []
-        if len(memory.steps) > 0:
+        if has_prev:
             try:
                 with open("screen_observe.png", "rb") as f:
                     prev_b64 = base64.b64encode(f.read()).decode("utf-8")
@@ -173,16 +174,17 @@ class ScreenAgent:
                     "image_url": {"url": f"data:image/png;base64,{prev_b64}"}
                 })
             except FileNotFoundError:
-                pass
+                print("  ⚠️  未找到上一步截图 screen_observe.png，只发送当前截图")
+                has_prev = False
 
         content.append({
             "type": "image_url",
             "image_url": {"url": f"data:image/png;base64,{current_b64}"}
         })
 
-        # ── 文字大模型先做语义分析（有历史才分析）──────────────
+        # ── 文字大模型先做语义分析（有历史才分析，可用消融开关关闭）──
         semantic_analysis = ""
-        if memory.steps:
+        if memory.steps and config.ENABLE_SEMANTIC_ANALYSIS:
             semantic_analysis = self._analyze_history(memory.task, memory.steps)
 
         known_apps = "、".join(AppLauncher.KNOWN_APPS.keys())
@@ -207,8 +209,8 @@ class ScreenAgent:
     {ocr_result}
 
     ## 图片说明
-    {'- 第一张：上一步执行后的屏幕' if len(memory.steps) > 0 else ''}
-    - {'第二张' if len(memory.steps) > 0 else '第一张'}：当前屏幕（本次需要决策）
+    {'- 第一张：上一步执行后的屏幕' if has_prev else ''}
+    - {'第二张' if has_prev else '第一张'}：当前屏幕（本次需要决策）
 
     ## 可用动作
     {self.ACTIONS}
@@ -252,6 +254,7 @@ class ScreenAgent:
 
         response = self.client.chat.completions.create(
             model=self.model,
+            temperature=config.LLM_TEMPERATURE,
             messages=[{"role": "user", "content": content}]
         )
 
@@ -315,6 +318,7 @@ class ScreenAgent:
 
         response = self.client.chat.completions.create(
             model=self.model,
+            temperature=config.LLM_TEMPERATURE,
             messages=[
                 {
                     "role": "user",
@@ -385,6 +389,7 @@ class ScreenAgent:
 
         response = self.client.chat.completions.create(
             model=self.model,
+            temperature=config.LLM_TEMPERATURE,
             messages=[
                 {
                     "role": "user",
@@ -436,42 +441,21 @@ class ScreenAgent:
         for step in range(1, self.max_steps + 1):
             print(f"\n┌─ 第 {step} 步 {'─'*38}")
 
-            action = self._think_and_act(memory)
-            print(f"│  💭  {action.get('thought', '')}")
-            print(f"│  ▶   {action.get('description', '')}  [{action.get('action_type')}]")
-            # Streamlit 控制台读的就是这个状态文件，之前只在 init_state 写过一次，
-            # 导致页面永远停在「执行中」并无限自动刷新
-            ui_state.update_step(step, action.get("thought", ""), action)
+            try:
+                finished, done, summary = self._execute_step(step, memory)
+            except Exception as e:
+                # 单步重试次数用尽：落状态后交给上层（Web 端会推 error 事件）
+                ui_state.set_status("error", f"第 {step} 步失败：{e}")
+                raise
 
-            finished = self._execute(action)
-            observation = "任务完成" if finished else self._observe(action, memory)
-            print(f"│  👁   {observation}")
-            ui_state.update_observation(observation)
-
-            memory.add_step(
-                thought=action.get("thought", ""),
-                action=action,
-                observation=observation
-            )
-
-            if finished:
+            if finished or done:
                 print(f"\n{'='*52}")
-                print(f"  ✅  {action.get('summary', '任务完成')}")
+                print(f"  ✅  {summary}")
                 print(f"{'='*52}")
                 print(memory.summary())
                 memory.save()
-                ui_state.set_status("finished", action.get("summary", "任务完成"))
+                ui_state.set_status("finished", summary)
                 return
-
-            if step >= 3:
-                if self._check_task_done(memory):
-                    print(f"\n{'='*52}")
-                    print(f"  ✅  任务已完成")
-                    print(f"{'='*52}")
-                    print(memory.summary())
-                    memory.save()
-                    ui_state.set_status("finished", "任务已完成")
-                    return
 
             print(f"└{'─'*42}")
             time.sleep(0.5)
@@ -479,3 +463,41 @@ class ScreenAgent:
         print(f"\n⚠️  已达最大步数 {self.max_steps} 步")
         memory.save()
         ui_state.set_status("finished", f"达到最大步数 {self.max_steps}")
+
+    def _execute_step(self, step: int, memory: TaskMemory):
+        """
+        执行一步（思考 → 动作 → 观察 → 记录），失败时按 config.STEP_RETRIES 重试。
+        返回 (finished, done, summary)：finished 表示模型主动 finish，
+        done 表示完成检测判定已完成，summary 为结束说明。
+        """
+        last_error = None
+        for attempt in range(1, config.STEP_RETRIES + 2):
+            try:
+                action = self._think_and_act(memory)
+                print(f"│  💭  {action.get('thought', '')}")
+                print(f"│  ▶   {action.get('description', '')}  [{action.get('action_type')}]")
+                # Streamlit 控制台读的就是这个状态文件，之前只在 init_state 写过一次，
+                # 导致页面永远停在「执行中」并无限自动刷新
+                ui_state.update_step(step, action.get("thought", ""), action)
+
+                finished = self._execute(action)
+                observation = "任务完成" if finished else self._observe(action, memory)
+                print(f"│  👁   {observation}")
+                ui_state.update_observation(observation)
+
+                memory.add_step(
+                    thought=action.get("thought", ""),
+                    action=action,
+                    observation=observation
+                )
+
+                done = False if finished else (step >= 3 and self._check_task_done(memory))
+                summary = action.get("summary") or ("任务已完成" if done else "")
+                return finished, done, summary
+            except Exception as e:
+                last_error = e
+                print(f"│  ⚠️  第 {step} 步第 {attempt} 次尝试失败：{e}")
+                ui_state.update_observation(f"第 {step} 步尝试失败：{e}")
+                if attempt <= config.STEP_RETRIES:
+                    time.sleep(min(2 ** attempt, 8))
+        raise RuntimeError(f"第 {step} 步重试 {config.STEP_RETRIES} 次后仍失败：{last_error}") from last_error

@@ -76,9 +76,17 @@ TEXT_ONLY_PROVIDERS = {"deepseek", "minimax"}
 
 INPUT_BOX_MODEL = "models/input_box.pt"
 
+# 微信输入框的 resource-id 随版本变化，置空则跳过该分支只走通用控件/YOLO 定位
+WECHAT_INPUT_RESOURCE_ID = "com.tencent.mm:id/b4z"
+
 # ============================================================
 #  其他配置
 # ============================================================
 
-MAX_STEPS = 20          # 最大执行步数
+# 最大执行步数：与 test.md 实验规程的 30 步保持一致，可用环境变量覆盖（如 MAX_STEPS=20）
+MAX_STEPS = int(os.getenv("MAX_STEPS", "30"))
+STEP_RETRIES = 2            # 单步失败后的重试次数，避免一次 API 抖动直接判任务失败
+LLM_TEMPERATURE = 0.0       # 决策/观察调用温度，固定后重复实验才可比
+ENABLE_SEMANTIC_ANALYSIS = True  # 消融开关：关闭后不调用文字模型做语义校正
+ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "runs")  # 每步截图与动作记录的归档目录
 OBSERVE_CONFIDENCE = 0.4  # OCR 置信度阈值
