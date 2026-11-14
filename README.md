@@ -10,8 +10,8 @@
 - 可用的模型 API 密钥
 
 ```bash
-git clone https://github.com/peter-lgxj/phone-agent.git
-cd phone-agent
+git clone https://github.com/peter-lgxj/phone_ddl_agent.git
+cd phone_ddl_agent
 pip install -r requirements.txt
 ```
 
