@@ -10,7 +10,14 @@ class PhoneController:
 
     def __init__(self,locator):
         # 自动连接 USB 设备
-        self.device = u2.connect()
+        try:
+            self.device = u2.connect()
+        except Exception as e:
+            raise RuntimeError(
+                "无法连接手机：请确认已安装 adb 并加入 PATH、手机已开启开发者选项与 USB 调试、"
+                "`adb devices` 能看到已授权设备。"
+                f"（原始错误：{e}）"
+            ) from e
         self.locator=locator
         print(f"已连接设备：{self.device.info.get('productName', '未知')}")
 

@@ -61,6 +61,19 @@ PROVIDERS = {
     },
 }
 
+# 各 provider 需要的环境变量名，启动校验时用来给出可执行的提示
+API_KEY_ENV = {
+    "zhipu":    "ZHIPU_API_KEY",
+    "qwen":     "DASHSCOPE_API_KEY",
+    "qwen3":    "DASHSCOPE_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "minimax":  "MINIMAX_API_KEY",
+    "openai":   "OPENAI_API_KEY",
+}
+
+# 纯文本 provider：把截图发给它们会直接报错或得到无意义结果，不能当执行模型
+TEXT_ONLY_PROVIDERS = {"deepseek", "minimax"}
+
 INPUT_BOX_MODEL = "models/input_box.pt"
 
 # ============================================================

@@ -1,4 +1,5 @@
 import base64
+import shutil
 import threading
 import sys
 from flask import Flask, render_template
@@ -33,12 +34,22 @@ def encode_image(path: str) -> str:
         return ""
 
 
+def _require_adb():
+    """启动任务前确认 adb 可用，否则报错只指向 FileNotFoundError，难以定位"""
+    if shutil.which("adb") is None:
+        raise RuntimeError(
+            "未找到 adb：请安装 Android Platform Tools 并把 adb 加入 PATH，"
+            "再用 `adb devices` 确认手机已连接且已授权 USB 调试。"
+        )
+
+
 # ── 单任务模式 ─────────────────────────────────────────
 def run_single(task: str):
     global agent_running
     agent_running = True
     sys.stdout = WebLogger(sys.__stdout__)
     try:
+        _require_adb()
         import config
         from screen_agent import ScreenAgent
 
@@ -80,6 +91,7 @@ def run_multi(task: str):
     agent_running = True
     sys.stdout = WebLogger(sys.__stdout__)
     try:
+        _require_adb()
         import config
         from multi_agent import MultiAppAgent, SubTaskScreenAgent
 

@@ -24,6 +24,18 @@ def _fix_json(raw: str) -> str:
     return raw
 
 
+def _require_api_key(provider_name: str, provider: dict, role: str):
+    """启动前校验密钥，避免 OpenAI 客户端抛出与根因无关的底层异常"""
+    if provider.get("api_key"):
+        return
+    env_name = config.API_KEY_ENV.get(provider_name, "对应的 API Key 环境变量")
+    raise RuntimeError(
+        f"未配置{role}密钥：{role}当前为 {provider_name}（{provider.get('model')}），"
+        f"需要环境变量 {env_name}。已在项目根目录查找 .env，"
+        f"请复制 .env.example 为 .env 并填写后重试。"
+    )
+
+
 class ScreenAgent:
 
     ACTIONS = """
@@ -43,6 +55,13 @@ class ScreenAgent:
         provider_name = config.ACTIVE_PROVIDER
         provider      = config.PROVIDERS[provider_name]
 
+        if provider_name in config.TEXT_ONLY_PROVIDERS:
+            raise RuntimeError(
+                f"provider「{provider_name}」不支持图片输入，不能作为执行模型；"
+                f"请把 config.ACTIVE_PROVIDER 改为 qwen / zhipu / openai 之一。"
+            )
+        _require_api_key(provider_name, provider, role="执行模型")
+
         self.model               = provider["model"]
         self.support_multi_image = provider["support_multi_image"]
 
@@ -55,6 +74,7 @@ class ScreenAgent:
         # 纯文字大模型：负责语义分析、纠正 VL 的理解偏差
         planner_name = getattr(config, "PLANNER_PROVIDER", provider_name)
         planner_cfg  = config.PROVIDERS[planner_name]
+        _require_api_key(planner_name, planner_cfg, role="规划模型")
         self.text_client = OpenAI(
             api_key=planner_cfg["api_key"],
             base_url=planner_cfg["base_url"],
