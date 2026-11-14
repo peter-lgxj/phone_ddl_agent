@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Parse every Python file
+        run: python -m compileall -q .
+
+      - name: Validate task set JSON
+        run: python -m json.tool experiments/tasks.json > /dev/null
+
+      - name: Experiment runner dry-run
+        run: python experiments/run_experiment.py --tasks experiments/tasks.json --dry-run

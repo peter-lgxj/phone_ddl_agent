@@ -72,11 +72,20 @@ def main() -> int:
     data = json.loads(task_file.read_text(encoding="utf-8"))
     tasks = load_tasks(task_file)
     repeat = args.repeat or (data.get("default_repeat", 3) if isinstance(data, dict) else 3)
+    repeat_by_level = data.get("repeat_by_level", {}) if isinstance(data, dict) else {}
 
-    print(f"任务集：{task_file}（{len(tasks)} 个任务），重复 {repeat} 次，模式 {args.mode}")
+    def repeat_for(task):
+        """按任务等级覆盖重复次数（test.md 中 Level 3 为 2 次），--repeat 可强制统一"""
+        if args.repeat:
+            return args.repeat
+        return int(repeat_by_level.get(str(task.get("level")), repeat))
+
+    print(f"任务集：{task_file}（{len(tasks)} 个任务），重复 {repeat} 次"
+          f"（按等级覆盖：{repeat_by_level or '无'}），模式 {args.mode}")
     if args.dry_run:
         for t in tasks:
-            print(f"  {t['id']} L{t.get('level', '?')} theory={t.get('theory_steps', '?')} {t['task']}")
+            print(f"  {t['id']} L{t.get('level', '?')} theory={t.get('theory_steps', '?')} "
+                  f"repeat={repeat_for(t)} {t['task']}")
         print("dry-run：未导入执行器，未连接设备，未调用模型")
         return 0
 
@@ -107,6 +116,7 @@ def main() -> int:
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "mode": f"baseline:{args.baseline}" if adapter else args.mode,
         "repeat": repeat,
+        "repeat_by_level": repeat_by_level,
         "max_steps": config.MAX_STEPS,
         "semantic_analysis": config.ENABLE_SEMANTIC_ANALYSIS,
         "active_provider": config.ACTIVE_PROVIDER,
@@ -120,7 +130,8 @@ def main() -> int:
     results_path = out_dir / "results.jsonl"
     with open(results_path, "a", encoding="utf-8") as f:
         for t in tasks:
-            for attempt in range(1, repeat + 1):
+            task_repeat = repeat_for(t)
+            for attempt in range(1, task_repeat + 1):
                 record = {
                     "task_id": t["id"],
                     "level": t.get("level"),
