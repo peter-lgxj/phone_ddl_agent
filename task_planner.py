@@ -12,25 +12,9 @@ from openai import OpenAI
 import config
 
 
-PLANNER_PROVIDERS = {
-    "deepseek": {
-        "api_key":  config.PROVIDERS.get("deepseek", {}).get("api_key", ""),
-        "base_url": "https://api.deepseek.com/v1",
-        "model":    "deepseek-chat",
-    },
-    "qwen": {
-        "api_key":  config.PROVIDERS.get("qwen", {}).get("api_key", ""),
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model":    "qwen-max",
-    },
-    "openai": {
-        "api_key":  config.PROVIDERS.get("openai", {}).get("api_key", ""),
-        "base_url": "https://api.openai.com/v1",
-        "model":    "gpt-4o",
-    },
-}
-
-ACTIVE_PLANNER = getattr(config, "PLANNER_PROVIDER", "qwen")
+# 规划模型直接复用 config.PROVIDERS：原先这里维护了一份独立的 provider 表，
+# 只有 deepseek/qwen/openai，而 config.PLANNER_PROVIDER 默认是 qwen3，
+# 结果规划器静默回落到 qwen-max，与 README 及配置声明的模型不一致。
 
 
 # ══════════════════════════════════════════════
@@ -182,10 +166,16 @@ class TaskPlanner:
 """
 
     def __init__(self):
-        cfg = PLANNER_PROVIDERS.get(ACTIVE_PLANNER, PLANNER_PROVIDERS["qwen"])
-        self.client = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"])
-        self.model  = cfg["model"]
-        print(f"📋  规划器：{ACTIVE_PLANNER} / {self.model}")
+        name = getattr(config, "PLANNER_PROVIDER", config.ACTIVE_PROVIDER)
+        provider = config.PROVIDERS.get(name)
+        if provider is None:
+            print(f"  ⚠️  未找到规划 provider「{name}」，回退到 {config.ACTIVE_PROVIDER}")
+            name = config.ACTIVE_PROVIDER
+            provider = config.PROVIDERS[name]
+        self.provider_name = name
+        self.client = OpenAI(api_key=provider["api_key"], base_url=provider["base_url"])
+        self.model  = provider["model"]
+        print(f"📋  规划器：{self.provider_name} / {self.model}")
 
     def _call_llm(self, user_msg: str, system: str = None) -> str:
         msgs = []
