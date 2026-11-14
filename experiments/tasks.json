@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "source": "test.md 三、测试任务集设计",
+  "note": "success 由人工按 test.md 第 4 节标准判定，脚本不自动打分",
+  "default_repeat": 3,
+  "tasks": [
+    {"id": "T01", "level": 1, "apps": ["微信"], "theory_steps": 5, "category": "action", "task": "打开微信，向「文件传输助手」发送「测试消息123」"},
+    {"id": "T02", "level": 1, "apps": ["设置"], "theory_steps": 4, "category": "info", "task": "打开设置，查看当前WiFi名称并截图"},
+    {"id": "T03", "level": 1, "apps": ["高德地图"], "theory_steps": 4, "category": "info", "task": "打开高德地图，搜索「天安门」，查看当前步行距离"},
+    {"id": "T04", "level": 1, "apps": ["淘宝"], "theory_steps": 6, "category": "info", "task": "打开淘宝，搜索「机械键盘」，按销量排序，报告第一名价格"},
+    {"id": "T05", "level": 1, "apps": ["美团"], "theory_steps": 5, "category": "info", "task": "打开美团，搜索「黄焖鸡」，报告附近评分最高的店名"},
+    {"id": "T06", "level": 1, "apps": ["微信"], "theory_steps": 4, "category": "info", "task": "打开微信，进入「发现」→「朋友圈」，报告最新一条动态内容"},
+    {"id": "T07", "level": 1, "apps": ["网易云音乐"], "theory_steps": 5, "category": "action", "task": "打开网易云音乐，搜索「稻香」，播放第一首"},
+    {"id": "T08", "level": 1, "apps": ["京东"], "theory_steps": 6, "category": "action", "task": "打开京东，搜索「AirPods Pro」，收藏第一个商品"},
+    {"id": "T09", "level": 2, "apps": ["微信", "高德地图"], "theory_steps": 9, "category": "multi_app", "task": "打开微信，阅读指定联系人最新消息，提取消息中的地点，用高德地图导航过去"},
+    {"id": "T10", "level": 2, "apps": ["微信", "大众点评"], "theory_steps": 9, "category": "multi_app", "task": "打开微信，阅读指定联系人推荐的餐厅名，去大众点评搜索该餐厅，报告评分"},
+    {"id": "T11", "level": 2, "apps": ["备忘录", "淘宝"], "theory_steps": 8, "category": "multi_app", "task": "打开备忘录，读取购物清单第一项，去淘宝搜索并报告价格"},
+    {"id": "T12", "level": 2, "apps": ["微信", "京东"], "theory_steps": 9, "category": "multi_app", "task": "打开微信，阅读指定联系人发来的商品名，去京东搜索，报告最低价"},
+    {"id": "T13", "level": 2, "apps": ["高德地图", "微信"], "theory_steps": 10, "category": "multi_app", "task": "打开高德地图，搜索附近的星巴克，记录最近一家的地址，发微信告知指定联系人"},
+    {"id": "T14", "level": 2, "apps": ["美团", "微信"], "theory_steps": 10, "category": "multi_app", "task": "打开美团，找到「黄焖鸡米饭」评分最高的店，将店名用微信发给指定联系人"},
+    {"id": "T15", "level": 2, "apps": ["淘宝", "微信"], "theory_steps": 10, "category": "multi_app", "task": "打开淘宝搜索指定商品，记录价格，发微信告知指定联系人"},
+    {"id": "T16", "level": 2, "apps": ["微信", "网易云音乐"], "theory_steps": 9, "category": "multi_app", "task": "打开微信阅读联系人消息中的歌曲名，打开网易云音乐搜索并播放"},
+    {"id": "T17", "level": 3, "apps": ["微信", "大众点评", "高德地图"], "theory_steps": 14, "category": "multi_app", "task": "读微信联系人消息提取餐厅名，大众点评查地址，高德地图导航"},
+    {"id": "T18", "level": 3, "apps": ["淘宝", "京东", "微信"], "theory_steps": 14, "category": "multi_app", "task": "淘宝搜索商品记录价格，京东搜索同款比价，微信发送比价结果"},
+    {"id": "T19", "level": 3, "apps": ["微信", "高德地图"], "theory_steps": 13, "category": "multi_app", "task": "打开微信找到与萧遥的对话，确认他在哪，用高德查询公共交通路线，再用微信回复路线安排"},
+    {"id": "T20", "level": 3, "apps": ["美团", "网易云音乐", "微信"], "theory_steps": 15, "category": "multi_app", "task": "美团查餐厅评分，网易云音乐搜索该餐厅BGM，微信分享给联系人"}
+  ]
+}
