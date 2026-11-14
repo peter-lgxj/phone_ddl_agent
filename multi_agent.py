@@ -45,50 +45,46 @@ class SubTaskScreenAgent(ScreenAgent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.last_summary = ""
+        self._sub_index   = 0
 
     def run(self, task: str) -> str:
-        """执行单个子任务，返回结果摘要"""
+        """执行单个子任务，返回结果摘要（共用基类的重试与证据归档）"""
+        from pathlib import Path
+
         memory = TaskMemory(task)
         self.last_memory = memory   # 供实验脚本统计实际步数
+
+        # 每个子任务单独一个证据目录，避免多次执行互相覆盖
+        self._sub_index += 1
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        self.run_dir = Path(config.ARTIFACT_DIR) / f"{stamp}_sub{self._sub_index}"
+        self.run_dir.mkdir(parents=True, exist_ok=True)
 
         import ui_state
         ui_state.init_state(task)
 
         for step in range(1, self.max_steps + 1):
             print(f"\n{C.BLUE}  ┌─ Step {step} {'─'*34}{C.RESET}")
-
-            action = self._think_and_act(memory)
-            print(f"{C.PURPLE}  │ 💭 {action.get('thought', '')}{C.RESET}")
-            print(f"{C.GREEN}  │ ▶  {action.get('description', '')}  [{action.get('action_type')}]{C.RESET}")
-
-            finished = self._execute(action)
-            observation = "子任务完成" if finished else self._observe(action, memory)
-            print(f"{C.AMBER}  │ 👁  {observation}{C.RESET}")
+            try:
+                finished, done, summary = self._execute_step(step, memory)
+            except Exception as e:
+                self.last_summary = f"第 {step} 步失败：{e}"
+                raise
             print(f"{C.DIM}  └{'─'*40}{C.RESET}")
 
-            memory.add_step(
-                thought=action.get("thought", ""),
-                action=action,
-                observation=observation,
-            )
-
-            if finished:
-                summary = action.get("summary", "子任务完成")
+            if finished or done:
+                summary = summary or "子任务完成"
                 self.last_summary = summary
                 memory.save(path=f"task_log_sub{len(memory.steps)}.json")
-                return summary
-
-            if step >= 3 and self._check_task_done(memory):
-                summary = f"子任务完成：{memory.get_last_observation()}"
-                self.last_summary = summary
-                memory.save(path=f"task_log_sub{len(memory.steps)}.json")
+                memory.save(path=str(self.run_dir / "task_log.json"))
                 return summary
 
             time.sleep(0.5)
 
         summary = f"达到最大步数，最后状态：{memory.get_last_observation()}"
         self.last_summary = summary
-        memory.save()
+        memory.save(path=f"task_log_sub{len(memory.steps)}.json")
+        memory.save(path=str(self.run_dir / "task_log.json"))
         return summary
 
 

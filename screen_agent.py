@@ -48,6 +48,7 @@ class ScreenAgent:
 - swipe(x1, y1, x2, y2)：滑动屏幕
 - type(text)：输入文字，必须在 tap_input_box 之后调用
 - send()：发送消息或提交
+- press_enter()：按回车（等同 send）
 - back()：返回键
 - home()：回桌面
 - wait()：等待加载
@@ -237,7 +238,7 @@ class ScreenAgent:
     ## 只返回 JSON：
     {{
     "thought": "语义分析显示...，当前截图显示...，下一步应该...",
-    "action_type": "open_app/tap/type/send/swipe/back/home/wait/finish",
+    "action_type": "open_app/tap/tap_input_box/type/send/press_enter/swipe/back/home/wait/finish",
     "app_name": "（open_app时填）",
     "x": 数字,
     "y": 数字,
@@ -353,7 +354,11 @@ class ScreenAgent:
         elif t == "tap_input_box":
             self.phone.tap_input_box()
         elif t == "type":
-            self.phone.type_text(action["text"])
+            text = action.get("text")
+            if not text:
+                print("  ⚠️  type 动作缺少 text 字段，跳过本步")
+                return False
+            self.phone.type_text(text)
         elif t == "send":
             subprocess.run(["adb", "shell", "input", "keyevent", "66"])
             print("ADB 回车发送")
@@ -369,10 +374,16 @@ class ScreenAgent:
         elif t == "finish":
             return True
         elif t == "tap":
+            if action.get("x") is None or action.get("y") is None:
+                print("  ⚠️  tap 动作缺少坐标，跳过本步")
+                return False
             x = self._parse_coord(action["x"])
             y = self._parse_coord(action["y"])
             self.phone.tap(x, y)
         elif t == "swipe":
+            if any(action.get(k) is None for k in ("x", "y", "x2", "y2")):
+                print("  ⚠️  swipe 动作缺少坐标，跳过本步")
+                return False
             x  = self._parse_coord(action["x"])
             y  = self._parse_coord(action["y"])
             x2 = self._parse_coord(action["x2"])
@@ -465,7 +476,7 @@ class ScreenAgent:
                 print(f"  ✅  {summary}")
                 print(f"{'='*52}")
                 print(memory.summary())
-                memory.save()
+                self._save_log(memory)
                 ui_state.set_status("finished", summary)
                 return
 
@@ -473,7 +484,7 @@ class ScreenAgent:
             time.sleep(0.5)
 
         print(f"\n⚠️  已达最大步数 {self.max_steps} 步")
-        memory.save()
+        self._save_log(memory)
         ui_state.set_status("finished", f"达到最大步数 {self.max_steps}")
 
     def _execute_step(self, step: int, memory: TaskMemory):
@@ -514,6 +525,12 @@ class ScreenAgent:
                 if attempt <= config.STEP_RETRIES:
                     time.sleep(min(2 ** attempt, 8))
         raise RuntimeError(f"第 {step} 步重试 {config.STEP_RETRIES} 次后仍失败：{last_error}") from last_error
+
+    def _save_log(self, memory: TaskMemory):
+        """保存任务日志，并复制一份到本次运行的证据目录"""
+        memory.save()
+        if self.run_dir is not None:
+            memory.save(path=str(self.run_dir / "task_log.json"))
 
     def _archive_step(self, step: int, action: dict, observation: str):
         """把本步动作（含原始坐标）和前后截图写入 run_dir，失败不影响主流程"""
