@@ -72,24 +72,38 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 
 ## 实验
 
-`experiments/tasks.json` 收录 `test.md` 的 20 个任务（含 App、理论步数、难度等级），runner 按 repeat 次数重复执行并落盘：
+`experiments/tasks.json` 收录 `test.md` 的 20 个任务（含 App、理论步数、难度等级），runner 按等级自动决定重复次数（Level 1/2 为 3 次，Level 3 为 2 次，可用 `--repeat` 强制统一）：
 
 ```bash
-# 执行任务集（需要真机与密钥），每个任务重复 3 次
-python experiments/run_experiment.py --tasks experiments/tasks.json --repeat 3 --mode single
+# 执行任务集（需要真机与密钥）
+python experiments/run_experiment.py --tasks experiments/tasks.json --mode single
 
-# 聚合 TSR / SE / AT / ST / CS
+# 聚合 TSR / 多 App TSR / SE / AT / ST / CS
 python experiments/metrics.py experiments/results/<run_dir>
 
 # 消融：关闭语义分析层
-python experiments/run_experiment.py --tasks experiments/tasks.json --repeat 3 --no-semantic --tag no_semantic
+python experiments/run_experiment.py --tasks experiments/tasks.json --no-semantic --tag no_semantic
+
+# 强制每个任务只跑 3 次（覆盖按等级规则）
+python experiments/run_experiment.py --tasks experiments/tasks.json --repeat 3
 ```
 
-结果默认写到 `experiments/results/`（已在 `.gitignore` 中）；判定为"成功/失败"仍需人工复核，脚本只负责采集和聚合。
+结果默认写到 `experiments/results/`（已在 `.gitignore` 中）；判定为"成功/失败"仍需人工复核，脚本只负责采集和聚合。每任务的原始执行证据在 `runs/<时间戳>/`。
+
+CI（`.github/workflows/ci.yml`）只做语法编译、任务集 JSON 校验和 runner dry-run，不连接手机也不调用模型。
+
+## 已知限制（未在真实环境验证）
+
+- 全部运行时行为（点击坐标、OCR 识别、模型决策、重试、跨 App 信息传递）只经过代码审查，未在真机上跑通。
+- `requirements.txt` 只有版本下限，精确版本需在可用环境中 `pip freeze` 固定。
+- 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）只提供适配协议，未实际接入。
+- 需要 Python 3.10+（使用了 `dict | None` 等注解，3.8/3.9 导入即报错）。
 
 ## 注意事项
 
-执行任务会操作真实手机，请在测试设备上验证流程，并关注涉及消息发送、下单和支付的操作。上传前仅进行 Python 语法检查，尚未在连接手机和模型 API 的环境中验证完整流程。
+执行任务会操作真实手机，请在测试设备上验证流程，并关注涉及消息发送、下单和支付的操作。
+
+Web 界面的 `SECRET_KEY` 与 CORS 可用环境变量 `FLASK_SECRET_KEY`、`CORS_ALLOWED_ORIGINS` 覆盖，默认值只适合本机调试。
 
 截图会经模型 API 上传至对应服务商；涉及聊天记录等隐私内容时请自行评估。
 
