@@ -13,7 +13,11 @@
 git clone https://github.com/peter-lgxj/phone_ddl_agent.git
 cd phone_ddl_agent
 pip install -r requirements.txt
+# 需要可复现环境时改用锁定版本（在目标机器上重新生成）：
+# pip install -r requirements-lock.txt
 ```
+
+`requirements-lock.txt` 是本项目在 Windows + Python 3.12 下实际解析出的完整版本清单（含传递依赖），仅作为参考基线；实验室机器或 GPU 环境请重新 `pip freeze`。
 
 用 `adb devices` 确认手机已连接并完成授权。将 `.env.example` 复制为 `.env`，填写所使用服务的密钥。默认执行模型为 `qwen`，规划模型为 `qwen3`（单任务与多应用模式都从 `config.PLANNER_PROVIDER` 读取），均读取 `DASHSCOPE_API_KEY`。其他模型与接口配置见 `config.py`。
 
@@ -90,14 +94,25 @@ python experiments/run_experiment.py --tasks experiments/tasks.json --repeat 3
 
 结果默认写到 `experiments/results/`（已在 `.gitignore` 中）；判定为"成功/失败"仍需人工复核，脚本只负责采集和聚合。每任务的原始执行证据在 `runs/<时间戳>/`。
 
-CI（`.github/workflows/ci.yml`）只做语法编译、任务集 JSON 校验和 runner dry-run，不连接手机也不调用模型。
+CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
 
 ## 已知限制（未在真实环境验证）
 
-- 全部运行时行为（点击坐标、OCR 识别、模型决策、重试、跨 App 信息传递）只经过代码审查，未在真机上跑通。
-- `requirements.txt` 只有版本下限，精确版本需在可用环境中 `pip freeze` 固定。
-- 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）只提供适配协议，未实际接入。
+- 全部运行时行为（点击坐标、OCR 识别、模型决策、重试、跨 App 信息传递）只经过代码审查与导入冒烟，未在真机上跑通。
+- 依赖版本：`requirements-lock.txt` 是在 Windows + Python 3.12 的虚拟环境里实际解析得到的；换机器（尤其 GPU/系统不同）需重新 `pip freeze` 替换。
+- 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）只有 wrapper 骨架与协议，未在真实仓库上跑过。
 - 需要 Python 3.10+（使用了 `dict | None` 等注解，3.8/3.9 导入即报错）。
+
+## 开发与测试
+
+```bash
+pip install -r requirements-dev.txt
+
+pytest -q          # 单元测试：动作容错、指标聚合、任务集校验、配置加载、baseline 协议
+ruff check .       # 只启用能发现真实错误的规则（E9/F63/F7/F82）
+```
+
+CI（`.github/workflows/ci.yml`）会做语法编译、任务集 JSON 校验、runner dry-run、ruff 与 pytest。CI 不安装 easyocr/ultralytics，所以涉及 `screen_agent` 的用例会自动 skip，本地装全依赖后才会真正执行。
 
 ## 注意事项
 
