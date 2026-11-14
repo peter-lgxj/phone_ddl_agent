@@ -115,8 +115,8 @@ def run_multi(task: str):
 
         class WebMultiAgent(MultiAppAgent):
             def __init__(self):
-                super().__init__(emit_fn=socketio.emit)
-                self.exec_agent = WebSubAgent(max_steps=config.MAX_STEPS)
+                super().__init__(emit_fn=socketio.emit,
+                                 exec_agent=WebSubAgent(max_steps=config.MAX_STEPS))
 
         import subprocess, time
         subprocess.run(["adb", "shell", "input", "keyevent", "3"])

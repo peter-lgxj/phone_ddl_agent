@@ -103,9 +103,10 @@ class MultiAppAgent:
              用于 Flask-SocketIO 集成（app.py 里传入 socketio.emit）
     """
 
-    def __init__(self, emit_fn=None):
+    def __init__(self, emit_fn=None, exec_agent=None):
         self.planner    = TaskPlanner()
-        self.exec_agent = SubTaskScreenAgent(max_steps=config.MAX_STEPS)
+        # 允许注入执行器（Web 端需要子类化以推送步骤事件），避免重复构造
+        self.exec_agent = exec_agent or SubTaskScreenAgent(max_steps=config.MAX_STEPS)
         self.emit_fn    = emit_fn or (lambda e, d: None)
         self.log_path   = "multi_task_log.json"
 
@@ -147,7 +148,8 @@ class MultiAppAgent:
         self._emit('plan_ready', {
             'analysis':  getattr(plan, 'analysis', ''),
             'subtasks':  [
-                {'index': t.index, 'goal': t.goal, 'app': t.app}
+                {'index': t.index, 'goal': t.goal, 'app': t.app,
+                 'context_needed': t.context_needed}
                 for t in plan.subtasks
             ]
         })
@@ -186,8 +188,17 @@ class MultiAppAgent:
 
             self._go_home()
 
+            exec_goal = current.goal
+            if current.context_needed:
+                # 把前序任务的关键信息显式注入子任务目标，避免执行层再从零推断
+                exec_goal = (
+                    f"{current.goal}\n\n"
+                    f"【前序任务提供的信息（可直接作为事实使用）】\n{current.context_needed}"
+                )
+                print(f"{C.DIM}  🔗  注入上下文：{current.context_needed}{C.RESET}")
+
             try:
-                result = self.exec_agent.run(current.goal)
+                result = self.exec_agent.run(exec_goal)
                 current.result = result
                 current.status = "done"
                 print(f"\n{C.GREEN}  ✅  子任务 [{current.index}] 完成{C.RESET}")

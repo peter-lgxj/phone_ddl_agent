@@ -22,16 +22,19 @@ import config
 # ══════════════════════════════════════════════
 
 class SubTask:
-    def __init__(self, index: int, goal: str, app: str = "", depends_on=None):
-        self.index      = index
-        self.goal       = goal
-        self.app        = app
-        self.depends_on = depends_on or []
-        self.status     = "pending"
-        self.result     = ""
+    def __init__(self, index: int, goal: str, app: str = "", depends_on=None,
+                 context_needed: str = ""):
+        self.index          = index
+        self.goal           = goal
+        self.app            = app
+        self.depends_on     = depends_on or []
+        self.context_needed = context_needed   # 需要从前序任务带入的信息（由重规划填充）
+        self.status         = "pending"
+        self.result         = ""
 
     def to_dict(self):
         return {"index": self.index, "goal": self.goal, "app": self.app,
+                "context_needed": self.context_needed,
                 "status": self.status, "result": self.result}
 
     def __repr__(self):
@@ -154,7 +157,8 @@ class TaskPlanner:
       "index": 与原计划一致的数字,
       "app": "App名称",
       "goal": "更新后的目标（如有关键信息请直接写入）",
-      "depends_on": []
+      "depends_on": [],
+      "context_needed": "前序结果中需要带入本任务的关键信息（没有则填空字符串）"
     }}
   ]
 }}
@@ -219,6 +223,7 @@ class TaskPlanner:
                 goal=item["goal"],
                 app=item.get("app", ""),
                 depends_on=item.get("depends_on", []),
+                context_needed=item.get("context_needed", ""),
             )
             subtasks.append(st)
             print(f"  📌  [{st.index}]({st.app}) {st.goal}")
@@ -244,7 +249,8 @@ class TaskPlanner:
         ) or "（无）"
 
         remaining_text = json.dumps(
-            [{"index": t.index, "app": t.app, "goal": t.goal} for t in remaining],
+            [{"index": t.index, "app": t.app, "goal": t.goal,
+              "context_needed": t.context_needed} for t in remaining],
             ensure_ascii=False, indent=2
         )
 
@@ -285,12 +291,15 @@ class TaskPlanner:
                 if t.status != "pending":
                     continue
                 if t.index in updated_map:
-                    new_goal = updated_map[t.index].get("goal", t.goal)
-                    new_app  = updated_map[t.index].get("app", t.app)
-                    if new_goal != t.goal or new_app != t.app:
+                    item = updated_map[t.index]
+                    new_goal = item.get("goal", t.goal)
+                    new_app  = item.get("app", t.app)
+                    new_ctx  = item.get("context_needed", t.context_needed)
+                    if new_goal != t.goal or new_app != t.app or new_ctx != t.context_needed:
                         print(f"  ✏️  更新[{t.index}]({new_app})：{new_goal}")
                         t.goal = new_goal
                         t.app  = new_app
+                        t.context_needed = new_ctx
 
             for item in updated:
                 if item["index"] not in existing:
@@ -299,6 +308,7 @@ class TaskPlanner:
                         goal=item["goal"],
                         app=item.get("app", ""),
                         depends_on=item.get("depends_on", []),
+                        context_needed=item.get("context_needed", ""),
                     )
                     plan.subtasks.append(new_st)
                     print(f"  ➕  新增[{new_st.index}]({new_st.app})：{new_st.goal}")
