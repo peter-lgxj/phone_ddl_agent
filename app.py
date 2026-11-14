@@ -1,4 +1,5 @@
 import base64
+import os
 import shutil
 import threading
 import sys
@@ -6,8 +7,13 @@ from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'mobile_agent_secret'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# 默认值仅用于本地调试；对外暴露时请通过环境变量覆盖
+app.config['SECRET_KEY'] = os.getenv("FLASK_SECRET_KEY", "mobile_agent_secret")
+socketio = SocketIO(
+    app,
+    cors_allowed_origins=os.getenv("CORS_ALLOWED_ORIGINS", "*"),
+    async_mode='threading',
+)
 
 agent_running = False
 
