@@ -3,6 +3,7 @@ import subprocess
 import time
 from PIL import Image
 import io
+import config
 
 
 class PhoneController:
@@ -60,8 +61,8 @@ class PhoneController:
                 print(f"输入文字(EditText)：{text}")
                 time.sleep(0.5)
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"输入文字(EditText)失败：{e}")
 
         # 方式2：focused 状态的控件（当前获得焦点的输入框）
         try:
@@ -71,8 +72,8 @@ class PhoneController:
                 print(f"输入文字(focused)：{text}")
                 time.sleep(0.5)
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"输入文字(focused)失败：{e}")
 
         # 方式3：send_keys 兜底
         self.device.send_keys(text, clear=False)
@@ -93,17 +94,18 @@ class PhoneController:
         except Exception as e:
             print(f"点击输入框(EditText)失败：{e}")
 
-        # 方式2：微信输入框特殊类名
-        try:
-            box = self.device(className="android.widget.LinearLayout", 
-                            resourceId="com.tencent.mm:id/b4z")
-            if box.exists:
-                box.click()
-                print("点击输入框(微信)")
-                time.sleep(0.8)
-                return True
-        except Exception as e:
-            print(f"点击输入框(微信)失败：{e}")
+        # 方式2：微信输入框特殊类名（resource-id 随微信版本变化，可在 config 中置空关闭）
+        if config.WECHAT_INPUT_RESOURCE_ID:
+            try:
+                box = self.device(className="android.widget.LinearLayout",
+                                resourceId=config.WECHAT_INPUT_RESOURCE_ID)
+                if box.exists:
+                    box.click()
+                    print("点击输入框(微信)")
+                    time.sleep(0.8)
+                    return True
+            except Exception as e:
+                print(f"点击输入框(微信)失败：{e}")
 
         # 方式3：YOLO 视觉检测兜底
         # 权重（config.INPUT_BOX_MODEL）缺失或加载失败时只提示并返回 False，
@@ -181,8 +183,8 @@ class PhoneController:
                     print(f"点击发送按钮：{text}")
                     time.sleep(0.8)
                     return
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"查找发送按钮失败：{e}")
 
         # 找不到按钮才用回车
         self.device.press("enter")

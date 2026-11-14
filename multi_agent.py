@@ -112,8 +112,9 @@ class MultiAppAgent:
     def _emit(self, event: str, data: dict):
         try:
             self.emit_fn(event, data)
-        except Exception:
-            pass
+        except Exception as e:
+            # 事件推送失败不应影响任务执行，但必须留下线索
+            print(f"{C.DIM}  ⚠️  事件推送失败({event})：{e}{C.RESET}")
 
     def _go_home(self):
         subprocess.run(["adb", "shell", "input", "keyevent", "3"], capture_output=True)
