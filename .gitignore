@@ -54,3 +54,9 @@ models/
 # Per-run evidence (screenshots + step actions)
 runs/
 experiments/results/
+
+# Python tooling caches
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/

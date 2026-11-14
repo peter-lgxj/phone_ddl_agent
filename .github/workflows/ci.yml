@@ -21,3 +21,12 @@ jobs:
 
       - name: Experiment runner dry-run
         run: python experiments/run_experiment.py --tasks experiments/tasks.json --dry-run
+
+      - name: Install test dependencies
+        run: pip install python-dotenv openai "pytest>=8" "ruff>=0.6"
+
+      - name: Lint (error-level rules only)
+        run: ruff check .
+
+      - name: Unit tests
+        run: pytest -q
