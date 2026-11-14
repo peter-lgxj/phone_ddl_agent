@@ -30,6 +30,7 @@ class TaskMemory:
             "action_type": action.get("action_type", ""),
             "action_desc": action.get("description", ""),
             "text": action.get("text", ""),       # ← 新增，保存输入的文字
+            "action": action,                     # ← 完整动作（含坐标），供事后复盘
             "observation": observation,
         })
 

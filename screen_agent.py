@@ -1,7 +1,10 @@
 import json
 import base64
+import os
+import shutil
 import time
 import subprocess
+from pathlib import Path
 from phone_controller import PhoneController
 from app_launcher import AppLauncher
 from memory import TaskMemory
@@ -85,6 +88,7 @@ class ScreenAgent:
         self.phone    = PhoneController(self.ocr)
         self.launcher = AppLauncher(self.phone)
         self.max_steps = max_steps or config.MAX_STEPS
+        self.run_dir   = None
 
         print(f"视觉模型：{provider_name} / {self.model}")
         print(f"语义模型：{planner_name} / {self.text_model}")
@@ -434,8 +438,15 @@ class ScreenAgent:
         memory = TaskMemory(task)
         ui_state.init_state(task)
 
+        # 每次运行一个独立目录，逐步截图 + 动作/观察 JSON 全量留证，
+        # 便于事后定位失败步骤和论文里的典型案例分析
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        self.run_dir = Path(config.ARTIFACT_DIR) / stamp
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+
         print(f"\n{'='*52}")
         print(f"  🎯  任务：{task}")
+        print(f"  证据目录：{self.run_dir}")
         print(f"{'='*52}")
 
         for step in range(1, self.max_steps + 1):
@@ -490,6 +501,7 @@ class ScreenAgent:
                     action=action,
                     observation=observation
                 )
+                self._archive_step(step, action, observation)
 
                 done = False if finished else (step >= 3 and self._check_task_done(memory))
                 summary = action.get("summary") or ("任务已完成" if done else "")
@@ -501,3 +513,18 @@ class ScreenAgent:
                 if attempt <= config.STEP_RETRIES:
                     time.sleep(min(2 ** attempt, 8))
         raise RuntimeError(f"第 {step} 步重试 {config.STEP_RETRIES} 次后仍失败：{last_error}") from last_error
+
+    def _archive_step(self, step: int, action: dict, observation: str):
+        """把本步动作（含原始坐标）和前后截图写入 run_dir，失败不影响主流程"""
+        if self.run_dir is None:
+            return
+        try:
+            record = {"step": step, "action": action, "observation": observation}
+            with open(self.run_dir / f"step_{step:03d}.json", "w", encoding="utf-8") as f:
+                json.dump(record, f, ensure_ascii=False, indent=2)
+            for src, suffix in (("screen_current.png", "current"),
+                                ("screen_observe.png", "observe")):
+                if os.path.exists(src):
+                    shutil.copy(src, self.run_dir / f"step_{step:03d}_{suffix}.png")
+        except Exception as e:
+            print(f"  ⚠️  证据归档失败：{e}")

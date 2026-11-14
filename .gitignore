@@ -50,3 +50,7 @@ todo_list.md
 # Local model weights
 models/
 *.pt
+
+# Per-run evidence (screenshots + step actions)
+runs/
+experiments/results/
