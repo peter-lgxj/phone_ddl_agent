@@ -112,8 +112,13 @@ def run_task_thread(task: str):
     import sys
     sys.path.insert(0, ".")
     from screen_agent import ScreenAgent
-    agent = ScreenAgent()
-    agent.run(task)
+    try:
+        agent = ScreenAgent()
+        agent.run(task)
+    except Exception as e:
+        # 出错也要落状态，否则页面会一直停在「执行中」并无限刷新
+        ui_state.set_status("error", str(e))
+        raise
 
 # ------------------------------------------------------------------ #
 #  页面布局
@@ -216,7 +221,7 @@ with col_right:
         if status == "running" else
         f'<span class="status-finished">✅ 已完成（共 {step_now} 步）</span>'
         if status == "finished" else
-        f'<span style="color:#f87171">⚠️ {status}</span>'
+        f'<span style="color:#f87171">⚠️ {state.get("summary") or status}</span>'
     )
 
     st.subheader("📋 执行日志")

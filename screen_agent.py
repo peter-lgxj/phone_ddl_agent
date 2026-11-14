@@ -439,10 +439,14 @@ class ScreenAgent:
             action = self._think_and_act(memory)
             print(f"│  💭  {action.get('thought', '')}")
             print(f"│  ▶   {action.get('description', '')}  [{action.get('action_type')}]")
+            # Streamlit 控制台读的就是这个状态文件，之前只在 init_state 写过一次，
+            # 导致页面永远停在「执行中」并无限自动刷新
+            ui_state.update_step(step, action.get("thought", ""), action)
 
             finished = self._execute(action)
             observation = "任务完成" if finished else self._observe(action, memory)
             print(f"│  👁   {observation}")
+            ui_state.update_observation(observation)
 
             memory.add_step(
                 thought=action.get("thought", ""),
@@ -456,6 +460,7 @@ class ScreenAgent:
                 print(f"{'='*52}")
                 print(memory.summary())
                 memory.save()
+                ui_state.set_status("finished", action.get("summary", "任务完成"))
                 return
 
             if step >= 3:
@@ -465,6 +470,7 @@ class ScreenAgent:
                     print(f"{'='*52}")
                     print(memory.summary())
                     memory.save()
+                    ui_state.set_status("finished", "任务已完成")
                     return
 
             print(f"└{'─'*42}")
@@ -472,3 +478,4 @@ class ScreenAgent:
 
         print(f"\n⚠️  已达最大步数 {self.max_steps} 步")
         memory.save()
+        ui_state.set_status("finished", f"达到最大步数 {self.max_steps}")
