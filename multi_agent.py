@@ -49,6 +49,7 @@ class SubTaskScreenAgent(ScreenAgent):
     def run(self, task: str) -> str:
         """执行单个子任务，返回结果摘要"""
         memory = TaskMemory(task)
+        self.last_memory = memory   # 供实验脚本统计实际步数
 
         import ui_state
         ui_state.init_state(task)
@@ -109,6 +110,7 @@ class MultiAppAgent:
         self.exec_agent = exec_agent or SubTaskScreenAgent(max_steps=config.MAX_STEPS)
         self.emit_fn    = emit_fn or (lambda e, d: None)
         self.log_path   = "multi_task_log.json"
+        self.total_steps = 0   # 本次多应用任务累计执行的子任务步数
 
     def _emit(self, event: str, data: dict):
         try:
@@ -208,6 +210,10 @@ class MultiAppAgent:
                 current.status = "failed"
                 print(f"\n{C.RED}  ❌  子任务 [{current.index}] 出错：{e}{C.RESET}")
                 import traceback; traceback.print_exc()
+            finally:
+                # 无论成功失败都累计步数，供实验统计
+                memory = getattr(self.exec_agent, "last_memory", None)
+                self.total_steps += len(memory.steps) if memory else 0
 
             # 推送子任务结果
             self._emit('subtask_done', {

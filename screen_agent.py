@@ -436,6 +436,7 @@ class ScreenAgent:
 
     def run(self, task: str):
         memory = TaskMemory(task)
+        self.last_memory = memory   # 供实验脚本统计实际步数
         ui_state.init_state(task)
 
         # 每次运行一个独立目录，逐步截图 + 动作/观察 JSON 全量留证，
