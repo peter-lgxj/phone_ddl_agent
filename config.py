@@ -89,4 +89,3 @@ STEP_RETRIES = 2            # 单步失败后的重试次数，避免一次 API 
 LLM_TEMPERATURE = 0.0       # 决策/观察调用温度，固定后重复实验才可比
 ENABLE_SEMANTIC_ANALYSIS = True  # 消融开关：关闭后不调用文字模型做语义校正
 ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "runs")  # 每步截图与动作记录的归档目录
-OBSERVE_CONFIDENCE = 0.4  # OCR 置信度阈值
