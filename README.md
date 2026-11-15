@@ -69,7 +69,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个 wrapper 骨架）
-- 测试与工程化：`tests/`（24 个不依赖设备的用例）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 测试与工程化：`tests/`（33 个用例，其中 22 个不依赖 torch/easyocr，CI 会执行；其余在装齐依赖的本地环境执行）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 

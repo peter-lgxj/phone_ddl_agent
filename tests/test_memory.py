@@ -3,7 +3,7 @@
 import json
 
 from memory import TaskMemory
-from task_planner import SubTask
+from task_planner import SubTask, build_exec_goal
 
 
 def test_add_step_keeps_full_action():
@@ -37,3 +37,13 @@ def test_subtask_carries_context_needed():
     assert d["context_needed"] == "地点=天安门"
     assert d["status"] == "pending"
     assert d["index"] == 2
+
+
+def test_build_exec_goal_injects_context():
+    st = SubTask(index=2, goal="导航到指定地点", app="高德地图", context_needed="地点=天安门")
+    goal = build_exec_goal(st)
+    assert goal.startswith("导航到指定地点")
+    assert "地点=天安门" in goal
+
+    plain = SubTask(index=1, goal="打开微信")
+    assert build_exec_goal(plain) == "打开微信"

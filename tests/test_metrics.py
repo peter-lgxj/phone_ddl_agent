@@ -75,3 +75,30 @@ def test_unjudged_tasks_are_excluded(tmp_path):
     assert result["judged"] == 1
     assert result["TSR"] == 100.0
     assert result["unjudged"] == ["T02"]
+
+
+def judged_run(tmp_path, judgement):
+    """三条 attempt 都没手工标注，只靠 judgement.json 判定"""
+    records = [
+        {"task_id": "T01", "level": 1, "apps": ["微信"], "theory_steps": 5,
+         "attempt": i, "success": None, "steps": 5, "elapsed": 10.0}
+        for i in (1, 2, 3)
+    ]
+    run_dir = write_run(tmp_path, records, judgement=judgement)
+    records, judgement = metrics.load_records(run_dir)
+    return metrics.group_by_task(metrics.resolve_success(records, judgement))
+
+
+def test_task_level_judgement_does_not_fake_cs(tmp_path):
+    """任务级布尔只能算 TSR；CS 必须为 N/A，而不是恒等于 TSR"""
+    result = metrics.summarize(judged_run(tmp_path, {"T01": True}))
+
+    assert result["TSR"] == 100.0
+    assert result["CS"] is None
+
+
+def test_attempt_level_judgement_computes_cs(tmp_path):
+    result = metrics.summarize(judged_run(tmp_path, {"T01": [True, False, True]}))
+
+    assert result["TSR"] == 100.0
+    assert result["CS"] == 0.0
