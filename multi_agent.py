@@ -13,7 +13,7 @@ import json
 import time
 import subprocess
 
-from task_planner import TaskPlanner, TaskPlan, SubTask, build_exec_goal
+from task_planner import TaskPlanner, TaskPlan, SubTask, build_exec_goal, unfinished_subtasks
 from screen_agent import ScreenAgent
 from memory import TaskMemory
 import config
@@ -164,13 +164,16 @@ class MultiAppAgent:
         # ── 循环执行 ─────────────────────────────
         max_loops = len(plan.subtasks) * 2
         loop_count = 0
+        task_done = False
 
         while not plan.is_all_done() and loop_count < max_loops:
             loop_count += 1
 
             candidates = plan.pending_tasks()
             if not candidates:
-                print(f"{C.AMBER}  ⚠️  无可执行子任务（依赖未满足）{C.RESET}")
+                stuck = [t for t in plan.subtasks if t.status == "pending"]
+                print(f"{C.AMBER}  ⚠️  {len(stuck)} 个子任务的依赖无法满足"
+                      f"（{', '.join(f'[{t.index}]' for t in stuck)}），本轮结束将判定为未完成{C.RESET}")
                 break
 
             current = candidates[0]
@@ -246,8 +249,8 @@ class MultiAppAgent:
                 # 不直接 return：统一走下面的失败检查，避免最后一步超时/失败被记成完成
                 break
 
-        # 结束
-        unfinished = [t for t in plan.subtasks if t.status in ("failed", "timeout")]
+        # 结束：failed/timeout 一律算未完成；非显式完成时，pending（含 max_loops 耗尽）也算
+        unfinished = unfinished_subtasks(plan, task_done)
         print(f"\n{C.CYAN}{'═'*56}{C.RESET}")
         if not unfinished:
             print(f"{C.GREEN}  ✅  所有子任务完成{C.RESET}")

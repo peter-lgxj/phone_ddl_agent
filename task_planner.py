@@ -47,9 +47,49 @@ class TaskPlan:
         self.subtasks   = subtasks
         self.analysis   = analysis
         self.start_time = time.time()
+        self.warnings   = []
+        self._sanitize_dependencies()
+
+    def _sanitize_dependencies(self):
+        """过滤不存在的依赖索引，并去掉成环的依赖边。
+        模型给的 depends_on 可能是任意整数，不校验会导致 pending 永远无法满足。
+        """
+        indexes = {t.index for t in self.subtasks}
+        for t in self.subtasks:
+            kept = []
+            for d in t.depends_on:
+                if d not in indexes:
+                    self.warnings.append(f"子任务 {t.index} 依赖不存在的子任务 {d}，已忽略")
+                elif d == t.index:
+                    self.warnings.append(f"子任务 {t.index} 依赖自身，已忽略")
+                elif d not in kept:
+                    kept.append(d)
+            t.depends_on = kept
+
+        graph = {t.index: list(t.depends_on) for t in self.subtasks}
+        visiting, finished = set(), set()
+
+        def dfs(node):
+            if node in finished:
+                return True
+            if node in visiting:
+                return False
+            visiting.add(node)
+            for dep in list(graph.get(node, [])):
+                if not dfs(dep):
+                    graph[node].remove(dep)
+                    self.warnings.append(f"检测到环形依赖 {node}->{dep}，已忽略该依赖")
+            visiting.discard(node)
+            finished.add(node)
+            return True
+
+        for node in list(graph):
+            dfs(node)
+        for t in self.subtasks:
+            t.depends_on = list(graph[t.index])
 
     def pending_tasks(self):
-        done_idx = {t.index for t in self.subtasks if t.status == "done"}
+        done_idx = {t.index for t in self.subtasks if t.status in ("done", "skipped")}
         return [t for t in self.subtasks
                 if t.status == "pending"
                 and all(d in done_idx for d in t.depends_on)]
@@ -80,6 +120,14 @@ def build_exec_goal(subtask: "SubTask") -> str:
         return subtask.goal
     return (f"{subtask.goal}\n\n"
             f"【前序任务提供的信息（可直接作为事实使用）】\n{subtask.context_needed}")
+
+
+def unfinished_subtasks(plan: "TaskPlan", task_done: bool = False) -> list:
+    """整体任务是否未完成：failed/timeout 一律算，pending 在非显式完成时也算"""
+    bad = [t for t in plan.subtasks if t.status in ("failed", "timeout")]
+    if task_done:
+        return bad
+    return bad + [t for t in plan.subtasks if t.status == "pending"]
 
 
 class TaskPlanner:
@@ -327,6 +375,8 @@ class TaskPlanner:
                     plan.subtasks.append(new_st)
                     print(f"  ➕  新增[{new_st.index}]({new_st.app})：{new_st.goal}")
 
+            # 模型可能返回不存在的依赖或成环依赖，重新校验后再决定是否还有 pending
+            plan._sanitize_dependencies()
             plan.subtasks.sort(key=lambda t: t.index)
 
         return False, ""
