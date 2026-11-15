@@ -80,12 +80,13 @@ def run_single(task: str):
                 return obs
 
         import subprocess, time
-        subprocess.run(["adb", "shell", "input", "keyevent", "3"])
-        time.sleep(1)
-        agent = WebAgent(max_steps=config.MAX_STEPS)
         with device_lock(timeout=30) as locked:
             if not locked:
                 raise RuntimeError("设备正被其它任务占用（另一个 Web/CLI/实验任务在运行），请稍后重试")
+            # 回桌面与执行器构造都在锁内，避免与另一个任务的重置互相穿插
+            subprocess.run(["adb", "shell", "input", "keyevent", "3"])
+            time.sleep(1)
+            agent = WebAgent(max_steps=config.MAX_STEPS)
             agent.run(task)
         socketio.emit('done', {'message': '任务完成'})
     except Exception as e:
@@ -130,12 +131,13 @@ def run_multi(task: str):
                                  exec_agent=WebSubAgent(max_steps=config.MAX_STEPS))
 
         import subprocess, time
-        subprocess.run(["adb", "shell", "input", "keyevent", "3"])
-        time.sleep(1)
-        agent = WebMultiAgent()
         with device_lock(timeout=30) as locked:
             if not locked:
                 raise RuntimeError("设备正被其它任务占用（另一个 Web/CLI/实验任务在运行），请稍后重试")
+            # 回桌面与执行器构造都在锁内，避免与另一个任务的重置互相穿插
+            subprocess.run(["adb", "shell", "input", "keyevent", "3"])
+            time.sleep(1)
+            agent = WebMultiAgent()
             agent.run(task)
         socketio.emit('done', {'message': '多应用任务完成'})
     except Exception as e:

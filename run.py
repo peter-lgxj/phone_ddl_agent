@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import time
 from device_lock import device_lock
 from screen_agent import ScreenAgent
@@ -39,7 +40,7 @@ def run_agent(task: str):
     with device_lock(timeout=60) as locked:
         if not locked:
             print("设备正被其它任务占用，请稍后重试")
-            return
+            sys.exit(1)
         # clear_background_apps()
         subprocess.run(["adb", "shell", "input", "keyevent", "3"])
         time.sleep(1)

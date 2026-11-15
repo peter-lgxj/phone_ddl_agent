@@ -67,12 +67,22 @@ def acquire(timeout: int = 30) -> str | None:
     while True:
         try:
             fd = os.open(LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, json.dumps({
-                "token": token,
-                "pid": os.getpid(),
-                "started": time.strftime("%Y-%m-%d %H:%M:%S"),
-            }).encode())
-            os.close(fd)
+            try:
+                os.write(fd, json.dumps({
+                    "token": token,
+                    "pid": os.getpid(),
+                    "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }).encode())
+            except OSError:
+                # 先关 fd 再删（Windows 上打开状态无法 unlink），不能留空锁
+                os.close(fd)
+                try:
+                    LOCK_PATH.unlink()
+                except OSError:
+                    pass
+                raise
+            else:
+                os.close(fd)
             return token
         except FileExistsError:
             info = _read_lock()
