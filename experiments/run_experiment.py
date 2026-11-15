@@ -23,57 +23,118 @@ manifest.json 记录 git SHA、模型全名、温度、任务集哈希与设备�
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
 import traceback
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-# 已知 App 的包名，用于每个任务前 force-stop 还原初始状态
+# 已知 App 的候选包名（同一 App 在不同 ROM 上包名不同），用于每个任务前 force-stop
 PACKAGE_BY_APP = {
-    "微信": "com.tencent.mm",
-    "设置": "com.android.settings",
-    "高德地图": "com.autonavi.minimap",
-    "淘宝": "com.taobao.taobao",
-    "美团": "com.sankuai.meituan",
-    "网易云音乐": "com.netease.cloudmusic",
-    "京东": "com.jingdong.app.mall",
-    "大众点评": "com.dianping.v1",
+    "微信": ["com.tencent.mm"],
+    "设置": ["com.android.settings"],
+    "高德地图": ["com.autonavi.minimap"],
+    "淘宝": ["com.taobao.taobao"],
+    "美团": ["com.sankuai.meituan"],
+    "网易云音乐": ["com.netease.cloudmusic"],
+    "京东": ["com.jingdong.app.mall"],
+    "大众点评": ["com.dianping.v1"],
+    "备忘录": ["com.miui.notes", "com.huawei.notepad", "com.coloros.note", "com.android.notes"],
 }
 
+DEVICE_LOCK = ROOT / "runs" / ".device.lock"
 
-def adb(args: list[str], timeout: int = 15) -> str:
-    """调用 adb，失败返回空串（不影响实验流程，但会在 manifest 里留下空值）"""
+
+def adb(args: list[str], timeout: int = 15):
+    """返回 (returncode, stdout)。adb 缺失/超时/异常时 returncode 为 None"""
     try:
-        return subprocess.run(["adb", *args], capture_output=True, text=True,
-                              timeout=timeout).stdout.strip()
+        proc = subprocess.run(["adb", *args], capture_output=True, text=True, timeout=timeout)
+        return proc.returncode, (proc.stdout or "").strip()
     except Exception:
-        return ""
+        return None, ""
 
 
-def reset_device(apps: list[str]) -> list[str]:
-    """按 test.md 还原初始状态：回桌面 + force-stop 本任务涉及的应用。
+def _prop(name: str) -> str:
+    rc, out = adb(["shell", "getprop", name])
+    return out if rc == 0 else ""
 
-    只做尽力而为的重置（不清理草稿/历史），失败不阻塞实验。
+
+def reset_device(apps: list[str]) -> dict:
+    """按 test.md 尽力还原初始状态：回桌面 + force-stop 本任务涉及的应用。
+
+    返回真实执行结果，只有 adb 返回 0 才算成功；无法自动清除应用内草稿/聊天记录。
     """
-    adb(["shell", "input", "keyevent", "3"])
-    stopped = []
+    result = {"home": False, "stopped": [], "failed": [], "not_mapped": []}
+    rc, _ = adb(["shell", "input", "keyevent", "3"])
+    result["home"] = rc == 0
     for app in apps:
-        pkg = PACKAGE_BY_APP.get(app)
-        if pkg:
-            adb(["shell", "am", "force-stop", pkg])
-            stopped.append(pkg)
-    return stopped
+        candidates = PACKAGE_BY_APP.get(app)
+        if not candidates:
+            result["not_mapped"].append(app)
+            continue
+        for pkg in candidates:
+            rc, _ = adb(["shell", "am", "force-stop", pkg])
+            if rc == 0:
+                result["stopped"].append(pkg)
+                break
+            result["failed"].append({"app": app, "package": pkg, "rc": rc})
+            if rc is None:   # adb 不可用，继续试其它包名没有意义
+                break
+    return result
+
+
+@contextmanager
+def device_lock(timeout: int = 30):
+    """进程级设备锁：避免 runner 与 Web 界面/另一个 runner 同时重置同一台手机。
+
+    拿不到锁时返回 False，由调用方跳过重置而不是强行打断正在运行的任务。
+    """
+    DEVICE_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + timeout
+    while True:
+        try:
+            fd = os.open(DEVICE_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, f"pid={os.getpid()} at={time.strftime('%Y-%m-%d %H:%M:%S')}".encode())
+            os.close(fd)
+            break
+        except FileExistsError:
+            try:
+                age = time.time() - DEVICE_LOCK.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if age > 300:                    # 陈旧锁（崩溃残留）自动清理
+                try:
+                    DEVICE_LOCK.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+            if time.time() > deadline:
+                yield False
+                return
+            time.sleep(1)
+    try:
+        yield True
+    finally:
+        try:
+            DEVICE_LOCK.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def device_info() -> dict:
+    rc, out = adb(["devices"])
+    connected = [line.split("\t")[0] for line in out.splitlines()[1:] if line.strip()]
     return {
-        "model": adb(["shell", "getprop", "ro.product.model"]),
-        "android": adb(["shell", "getprop", "ro.build.version.release"]),
-        "resolution": adb(["shell", "wm", "size"]),
+        "model": _prop("ro.product.model"),
+        "android": _prop("ro.build.version.release"),
+        "resolution": (lambda rc2, o: o if rc2 == 0 else "")(*adb(["shell", "wm", "size"])),
+        "adb_available": rc is not None,
+        "connected_devices": connected,
     }
 
 
@@ -213,11 +274,20 @@ def main() -> int:
                     "steps": None,
                     "elapsed": None,
                     "run_dir": "",
-                    "reset_apps": [],
+                    "reset": None,
                 }
                 print(f"\n=== {t['id']} 第 {attempt}/{repeat} 次：{t['task']}")
                 if not args.no_reset:
-                    record["reset_apps"] = reset_device(t.get("apps", []))
+                    with device_lock() as locked:
+                        if locked:
+                            record["reset"] = reset_device(t.get("apps", []))
+                            res = record["reset"]
+                            if res["failed"] or res["not_mapped"]:
+                                print(f"⚠️  重置未完全成功：failed={res['failed']} "
+                                      f"not_mapped={res['not_mapped']}（adb={'可用' if res['home'] or res['stopped'] else '不可用或设备离线'}）")
+                        else:
+                            record["reset"] = {"skipped": "device lock busy"}
+                            print("⚠️  设备锁被占用（可能有其它任务在跑），本次跳过重置")
                 started = time.time()
                 agent = None
                 try:
@@ -243,10 +313,16 @@ def main() -> int:
                 except Exception as e:
                     record["status"] = "error"
                     record["error"] = f"{type(e).__name__}: {e}"
+                    # test.md：超时或崩溃记为失败，避免被当作未判定而缩小 TSR 分母
+                    record["success"] = False
                     traceback.print_exc()
                 record["elapsed"] = round(time.time() - started, 1)
                 record["steps"] = collect_steps(agent) if agent else None
                 record["run_dir"] = collect_run_dir(agent) if agent else ""
+                record["agent_status"] = getattr(agent, "last_status", None) if agent else None
+                if record["agent_status"] == "timeout":
+                    # 达最大步数不等于成功
+                    record["success"] = False
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
                 f.flush()
 
