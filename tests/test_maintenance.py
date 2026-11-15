@@ -85,6 +85,22 @@ def test_baseline_command_falls_back_when_unset(monkeypatch):
     assert command_from_env("OPEN_AUTOGLM_CMD", ["fallback"], "任务") == ["fallback"]
 
 
+def test_at_aggregate_switch_changes_cross_task_weighting():
+    """尝试次数不等时，两种 AT 跨任务口径结果不同；默认仍是先任务内平均"""
+    grouped = metrics.group_by_task([
+        {"task_id": "T1", "level": 1, "attempt": 1, "elapsed": 10.0},
+        {"task_id": "T1", "level": 1, "attempt": 2, "elapsed": 20.0},
+        {"task_id": "T2", "level": 1, "attempt": 1, "elapsed": 100.0},
+    ])
+
+    task_mean = metrics.summarize(grouped, at_mode="all", at_aggregate="task_mean")["AT"]
+    total = metrics.summarize(grouped, at_mode="all", at_aggregate="total_per_task")["AT"]
+
+    assert task_mean == 57.5          # (15 + 100) / 2，任务等权
+    assert total == 65.0              # (10 + 20 + 100) / 2，总耗时 ÷ 任务数
+    assert metrics.summarize(grouped)["AT"] == task_mean
+
+
 def test_collect_run_dirs_keeps_every_subtask():
     """多应用模式 results.jsonl 要能追到每个子任务的证据目录"""
     agent = SimpleNamespace(sub_run_dirs=["runs/1_sub1", "runs/1_sub2"])
