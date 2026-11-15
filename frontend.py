@@ -111,10 +111,14 @@ def action_type_icon(t: str) -> str:
 def run_task_thread(task: str):
     import sys
     sys.path.insert(0, ".")
+    from device_lock import device_lock
     from screen_agent import ScreenAgent
     try:
-        agent = ScreenAgent()
-        agent.run(task)
+        with device_lock(timeout=60) as locked:
+            if not locked:
+                raise RuntimeError("设备正被其它任务占用（另一个 Web/CLI/实验任务在运行），请稍后重试")
+            agent = ScreenAgent()
+            agent.run(task)
     except Exception as e:
         # 出错也要落状态，否则页面会一直停在「执行中」并无限刷新
         ui_state.set_status("error", str(e))

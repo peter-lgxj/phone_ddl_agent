@@ -23,16 +23,16 @@ manifest.json 记录 git SHA、模型全名、温度、任务集哈希与设备�
 import argparse
 import hashlib
 import json
-import os
 import subprocess
 import sys
 import time
 import traceback
-from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+from device_lock import device_lock  # noqa: E402  同一把锁供 Web/CLI 共用
 
 # 已知 App 的候选包名（同一 App 在不同 ROM 上包名不同），用于每个任务前 force-stop
 PACKAGE_BY_APP = {
@@ -44,10 +44,9 @@ PACKAGE_BY_APP = {
     "网易云音乐": ["com.netease.cloudmusic"],
     "京东": ["com.jingdong.app.mall"],
     "大众点评": ["com.dianping.v1"],
-    "备忘录": ["com.miui.notes", "com.huawei.notepad", "com.coloros.note", "com.android.notes"],
+    "备忘录": ["com.miui.notes", "com.huawei.notepad", "com.hihonor.notepad",
+              "com.vivo.notes", "com.coloros.note", "com.android.notes"],
 }
-
-DEVICE_LOCK = ROOT / "runs" / ".device.lock"
 
 
 def adb(args: list[str], timeout: int = 15):
@@ -64,12 +63,20 @@ def _prop(name: str) -> str:
     return out if rc == 0 else ""
 
 
-def reset_device(apps: list[str]) -> dict:
-    """按 test.md 尽力还原初始状态：回桌面 + force-stop 本任务涉及的应用。
+def _installed(pkg: str):
+    """True/False；adb 不可用时返回 None（无法判断）"""
+    rc, out = adb(["shell", "pm", "list", "packages", pkg])
+    if rc is None:
+        return None
+    return f"package:{pkg}" in out
 
-    返回真实执行结果，只有 adb 返回 0 才算成功；无法自动清除应用内草稿/聊天记录。
+
+def reset_device(apps: list[str]) -> dict:
+    """按 test.md 尽力还原初始状态：回桌面 + force-stop 本任务涉及且已安装的应用。
+
+    返回真实执行结果；无法自动清除应用内草稿/聊天记录。
     """
-    result = {"home": False, "stopped": [], "failed": [], "not_mapped": []}
+    result = {"home": False, "stopped": [], "failed": [], "not_mapped": [], "not_installed": []}
     rc, _ = adb(["shell", "input", "keyevent", "3"])
     result["home"] = rc == 0
     for app in apps:
@@ -77,53 +84,33 @@ def reset_device(apps: list[str]) -> dict:
         if not candidates:
             result["not_mapped"].append(app)
             continue
+
+        installed = []
+        unknown = False
         for pkg in candidates:
+            state = _installed(pkg)
+            if state is None:
+                unknown = True
+                break
+            if state:
+                installed.append(pkg)
+            else:
+                result["not_installed"].append(pkg)
+
+        if unknown:
+            result["failed"].append({"app": app, "reason": "adb unavailable"})
+            continue
+        if not installed:
+            result["failed"].append({"app": app, "reason": "no candidate installed",
+                                     "candidates": candidates})
+            continue
+        for pkg in installed:
             rc, _ = adb(["shell", "am", "force-stop", pkg])
             if rc == 0:
                 result["stopped"].append(pkg)
-                break
-            result["failed"].append({"app": app, "package": pkg, "rc": rc})
-            if rc is None:   # adb 不可用，继续试其它包名没有意义
-                break
+            else:
+                result["failed"].append({"app": app, "package": pkg, "rc": rc})
     return result
-
-
-@contextmanager
-def device_lock(timeout: int = 30):
-    """进程级设备锁：避免 runner 与 Web 界面/另一个 runner 同时重置同一台手机。
-
-    拿不到锁时返回 False，由调用方跳过重置而不是强行打断正在运行的任务。
-    """
-    DEVICE_LOCK.parent.mkdir(parents=True, exist_ok=True)
-    deadline = time.time() + timeout
-    while True:
-        try:
-            fd = os.open(DEVICE_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, f"pid={os.getpid()} at={time.strftime('%Y-%m-%d %H:%M:%S')}".encode())
-            os.close(fd)
-            break
-        except FileExistsError:
-            try:
-                age = time.time() - DEVICE_LOCK.stat().st_mtime
-            except FileNotFoundError:
-                continue
-            if age > 300:                    # 陈旧锁（崩溃残留）自动清理
-                try:
-                    DEVICE_LOCK.unlink()
-                except FileNotFoundError:
-                    pass
-                continue
-            if time.time() > deadline:
-                yield False
-                return
-            time.sleep(1)
-    try:
-        yield True
-    finally:
-        try:
-            DEVICE_LOCK.unlink()
-        except FileNotFoundError:
-            pass
 
 
 def device_info() -> dict:
@@ -136,6 +123,15 @@ def device_info() -> dict:
         "adb_available": rc is not None,
         "connected_devices": connected,
     }
+
+
+def git_dirty() -> bool:
+    try:
+        proc = subprocess.run(["git", "status", "--porcelain"], cwd=str(ROOT),
+                              capture_output=True, text=True, timeout=15)
+        return bool(proc.stdout.strip())
+    except Exception:
+        return False
 
 
 def git_sha() -> str:
@@ -187,6 +183,8 @@ def main() -> int:
     ap.add_argument("--out", default=str(ROOT / "experiments" / "results"))
     ap.add_argument("--no-reset", action="store_true",
                     help="不在每个任务前 force-stop 应用（默认会尽力还原初始状态）")
+    ap.add_argument("--lock-timeout", type=int, default=60,
+                    help="等待设备锁的秒数；超时则本次 attempt 记为失败")
     ap.add_argument("--dry-run", action="store_true", help="只打印任务集，不导入执行器")
     args = ap.parse_args()
 
@@ -250,6 +248,8 @@ def main() -> int:
         "task_file": str(task_file),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
         "git_sha": git_sha(),
+        "git_dirty": git_dirty(),
+        "python_version": sys.version.split()[0],
         "device": device_info(),
         "reset_before_task": not args.no_reset,
         "tag": args.tag,
@@ -277,54 +277,58 @@ def main() -> int:
                     "reset": None,
                 }
                 print(f"\n=== {t['id']} 第 {attempt}/{repeat} 次：{t['task']}")
-                if not args.no_reset:
-                    with device_lock() as locked:
-                        if locked:
-                            record["reset"] = reset_device(t.get("apps", []))
-                            res = record["reset"]
-                            if res["failed"] or res["not_mapped"]:
-                                print(f"⚠️  重置未完全成功：failed={res['failed']} "
-                                      f"not_mapped={res['not_mapped']}（adb={'可用' if res['home'] or res['stopped'] else '不可用或设备离线'}）")
-                        else:
-                            record["reset"] = {"skipped": "device lock busy"}
-                            print("⚠️  设备锁被占用（可能有其它任务在跑），本次跳过重置")
                 started = time.time()
                 agent = None
-                try:
-                    if adapter is not None:
-                        result = adapter.run(t["task"])
-                        record.update({
-                            "status": "finished",
-                            "mode": f"baseline:{args.baseline}",
-                            "steps": result.steps,
-                            "elapsed": result.elapsed,
-                            "baseline_summary": result.summary,
-                            "baseline_raw": result.raw,
-                        })
+                # 锁覆盖 reset + 整个 attempt：避免另一个 runner/Web 任务在操作过程中 force-stop
+                with device_lock(timeout=args.lock_timeout) as locked:
+                    if not locked:
+                        record["status"] = "error"
+                        record["error"] = "device lock busy：另一个进程正在操作设备"
+                        record["success"] = False
+                        record["elapsed"] = 0.0
                         f.write(json.dumps(record, ensure_ascii=False) + "\n")
                         f.flush()
                         continue
-                    if args.mode == "multi":
-                        agent = MultiAppAgent()
-                    else:
-                        agent = ScreenAgent(max_steps=config.MAX_STEPS)
-                    agent.run(t["task"])
-                    record["status"] = "finished"
-                except Exception as e:
-                    record["status"] = "error"
-                    record["error"] = f"{type(e).__name__}: {e}"
-                    # test.md：超时或崩溃记为失败，避免被当作未判定而缩小 TSR 分母
-                    record["success"] = False
-                    traceback.print_exc()
-                record["elapsed"] = round(time.time() - started, 1)
-                record["steps"] = collect_steps(agent) if agent else None
-                record["run_dir"] = collect_run_dir(agent) if agent else ""
-                record["agent_status"] = getattr(agent, "last_status", None) if agent else None
-                if record["agent_status"] == "timeout":
-                    # 达最大步数不等于成功
-                    record["success"] = False
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
-                f.flush()
+                    try:
+                        if not args.no_reset:
+                            record["reset"] = reset_device(t.get("apps", []))
+                            res = record["reset"]
+                            if res["failed"] or res["not_mapped"] or not res["home"]:
+                                print(f"⚠️  重置未完全成功：home={res['home']} failed={res['failed']} "
+                                      f"not_mapped={res['not_mapped']} not_installed={len(res['not_installed'])}")
+                        if adapter is not None:
+                            result = adapter.run(t["task"])
+                            record.update({
+                                "status": "finished",
+                                "mode": f"baseline:{args.baseline}",
+                                "steps": result.steps,
+                                "elapsed": result.elapsed,
+                                "baseline_summary": result.summary,
+                                "baseline_raw": result.raw,
+                            })
+                        else:
+                            if args.mode == "multi":
+                                agent = MultiAppAgent()
+                            else:
+                                agent = ScreenAgent(max_steps=config.MAX_STEPS)
+                            agent.run(t["task"])
+                            record["status"] = "finished"
+                    except Exception as e:
+                        record["status"] = "error"
+                        record["error"] = f"{type(e).__name__}: {e}"
+                        # test.md：超时或崩溃记为失败，避免被当作未判定而缩小 TSR 分母
+                        record["success"] = False
+                        traceback.print_exc()
+                    finally:
+                        if record.get("elapsed") is None:   # baseline 已自带耗时则不覆盖
+                            record["elapsed"] = round(time.time() - started, 1)
+                        record["steps"] = collect_steps(agent) if agent else record.get("steps")
+                        record["run_dir"] = collect_run_dir(agent) if agent else ""
+                        record["agent_status"] = getattr(agent, "last_status", None) if agent else None
+                        if record["agent_status"] == "timeout":
+                            record["success"] = False
+                        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                        f.flush()
 
     print(f"\n结果已写入：{results_path}")
     print("下一步：人工标注 success 后执行 python experiments/metrics.py " + str(out_dir))

@@ -1,57 +1,108 @@
-"""reset 结果如实上报 + 设备锁的单元测试（不连接真机）。"""
+"""reset 结果如实上报 + 设备锁归属的单元测试（不连接真机）。"""
 
+import json
+import os
+
+import device_lock as dl
 import run_experiment as rwe
 
 
-def test_reset_reports_adb_failures(monkeypatch):
-    """adb 非 0 时不能把包记成已停止"""
-    monkeypatch.setattr(rwe, "adb", lambda args, timeout=15: (1, ""))
+def stub(monkeypatch, installed, force_stop_rc=0, adb_rc=0):
+    monkeypatch.setattr(rwe, "_installed", lambda pkg: pkg in installed if installed is not None else None)
 
-    result = rwe.reset_device(["微信", "未知应用"])
+    def fake_adb(args, timeout=15):
+        if args[:3] == ["shell", "am", "force-stop"]:
+            return force_stop_rc, ""
+        if args[:2] == ["shell", "input"]:
+            return adb_rc, ""
+        return adb_rc, ""
+
+    monkeypatch.setattr(rwe, "adb", fake_adb)
+
+
+def test_reset_reports_force_stop_failure(monkeypatch):
+    stub(monkeypatch, {"com.tencent.mm"}, force_stop_rc=1)
+
+    result = rwe.reset_device(["微信"])
 
     assert result["stopped"] == []
     assert result["failed"][0]["package"] == "com.tencent.mm"
     assert result["failed"][0]["rc"] == 1
-    assert result["not_mapped"] == ["未知应用"]
-    assert result["home"] is False
 
 
 def test_reset_reports_missing_adb(monkeypatch):
+    monkeypatch.setattr(rwe, "_installed", lambda pkg: None)
     monkeypatch.setattr(rwe, "adb", lambda args, timeout=15: (None, ""))
 
     result = rwe.reset_device(["微信"])
 
     assert result["stopped"] == []
-    assert result["failed"][0]["rc"] is None
+    assert result["failed"][0]["reason"] == "adb unavailable"
     assert result["home"] is False
 
 
-def test_reset_stops_first_successful_candidate(monkeypatch):
-    def fake_adb(args, timeout=15):
-        if args[-1] == "com.miui.notes":
-            return 1, ""
-        return 0, ""
+def test_reset_skips_uninstalled_candidates_without_false_alarm(monkeypatch):
+    """未安装的候选包不算失败，真正安装的包才被 stop"""
+    stub(monkeypatch, {"com.huawei.notepad"}, force_stop_rc=0)
 
-    monkeypatch.setattr(rwe, "adb", fake_adb)
     result = rwe.reset_device(["备忘录"])
 
     assert result["stopped"] == ["com.huawei.notepad"]
-    assert result["home"] is True
+    assert result["failed"] == []
+    assert "com.miui.notes" in result["not_installed"]
 
 
-def test_memo_app_has_rom_candidates():
-    assert "备忘录" in rwe.PACKAGE_BY_APP
-    assert len(rwe.PACKAGE_BY_APP["备忘录"]) >= 2
+def test_reset_fails_when_no_candidate_installed(monkeypatch):
+    stub(monkeypatch, set())
+
+    result = rwe.reset_device(["备忘录"])
+
+    assert result["stopped"] == []
+    assert result["failed"][0]["reason"] == "no candidate installed"
 
 
-def test_device_lock_skips_when_busy(monkeypatch, tmp_path):
+def test_reset_reports_unmapped_app(monkeypatch):
+    stub(monkeypatch, set())
+
+    result = rwe.reset_device(["未知应用"])
+
+    assert result["not_mapped"] == ["未知应用"]
+
+
+def test_memo_app_covers_review_devices():
+    candidates = rwe.PACKAGE_BY_APP["备忘录"]
+    assert "com.vivo.notes" in candidates
+    assert "com.hihonor.notepad" in candidates
+
+
+def test_device_lock_busy_when_owner_alive(monkeypatch, tmp_path):
     lock = tmp_path / ".device.lock"
-    lock.write_text("pid=999")
-    monkeypatch.setattr(rwe, "DEVICE_LOCK", lock)
+    lock.write_text(json.dumps({"token": "other", "pid": os.getpid()}), encoding="utf-8")
+    monkeypatch.setattr(dl, "LOCK_PATH", lock)
 
-    acquired = []
-    with rwe.device_lock(timeout=0) as ok:
-        acquired.append(ok)
+    with dl.device_lock(timeout=0) as ok:
+        assert ok is False
+    assert lock.exists(), "不能删除活进程持有的锁"
 
-    assert acquired == [False]
-    assert lock.exists(), "不能删除别人持有的锁"
+
+def test_device_lock_reclaims_dead_owner(monkeypatch, tmp_path):
+    lock = tmp_path / ".device.lock"
+    lock.write_text(json.dumps({"token": "dead", "pid": 99999999}), encoding="utf-8")
+    monkeypatch.setattr(dl, "LOCK_PATH", lock)
+
+    with dl.device_lock(timeout=1) as ok:
+        assert ok is True
+
+    assert not lock.exists()
+
+
+def test_release_does_not_remove_someone_elses_lock(monkeypatch, tmp_path):
+    lock = tmp_path / ".device.lock"
+    monkeypatch.setattr(dl, "LOCK_PATH", lock)
+
+    token = dl.acquire(timeout=1)
+    assert token
+    lock.write_text(json.dumps({"token": "newer", "pid": os.getpid()}), encoding="utf-8")
+    dl.release(token)
+
+    assert lock.exists(), "旧持有者退出时不能删掉新持有者的锁"

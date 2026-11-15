@@ -6,6 +6,8 @@ import sys
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
 
+from device_lock import device_lock
+
 app = Flask(__name__)
 # 默认值仅用于本地调试；对外暴露时请通过环境变量覆盖
 app.config['SECRET_KEY'] = os.getenv("FLASK_SECRET_KEY", "mobile_agent_secret")
@@ -81,7 +83,10 @@ def run_single(task: str):
         subprocess.run(["adb", "shell", "input", "keyevent", "3"])
         time.sleep(1)
         agent = WebAgent(max_steps=config.MAX_STEPS)
-        agent.run(task)
+        with device_lock(timeout=30) as locked:
+            if not locked:
+                raise RuntimeError("设备正被其它任务占用（另一个 Web/CLI/实验任务在运行），请稍后重试")
+            agent.run(task)
         socketio.emit('done', {'message': '任务完成'})
     except Exception as e:
         socketio.emit('error', {'message': str(e)})
@@ -128,7 +133,10 @@ def run_multi(task: str):
         subprocess.run(["adb", "shell", "input", "keyevent", "3"])
         time.sleep(1)
         agent = WebMultiAgent()
-        agent.run(task)
+        with device_lock(timeout=30) as locked:
+            if not locked:
+                raise RuntimeError("设备正被其它任务占用（另一个 Web/CLI/实验任务在运行），请稍后重试")
+            agent.run(task)
         socketio.emit('done', {'message': '多应用任务完成'})
     except Exception as e:
         socketio.emit('error', {'message': str(e)})
