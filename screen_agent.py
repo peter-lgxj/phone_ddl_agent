@@ -67,7 +67,7 @@ class ScreenAgent:
         _require_api_key(provider_name, provider, role="执行模型")
 
         self.model               = provider["model"]
-        self.support_multi_image = provider["support_multi_image"]
+        self.support_multi_image = provider.get("support_multi_image", False)
 
         # VL 模型：负责看截图、决定下一步操作
         self.client = OpenAI(
@@ -303,6 +303,9 @@ class ScreenAgent:
             os.remove("screen_observe.png")
         except FileNotFoundError:
             pass
+        except OSError as e:
+            # Windows 上被前端读取时会 PermissionError；清理失败不应终止任务
+            print(f"│  ⚠️  旧观察截图无法删除（{e}），完成检测前会再次尝试")
 
     def _observe(self, last_action: dict, memory: TaskMemory) -> str:
         """执行动作后截图，VL 模型描述结果（原始输出，不做额外处理）"""
@@ -599,6 +602,9 @@ class ScreenAgent:
                 json.dump(record, f, ensure_ascii=False, indent=2)
             for src, suffix in (("screen_current.png", "current"),
                                 ("screen_observe.png", "observe")):
+                # finish 没有执行动作，screen_observe.png 是上一步的，归档会造成证据错位
+                if suffix == "observe" and action.get("action_type") == "finish":
+                    continue
                 if os.path.exists(src):
                     shutil.copy(src, self.run_dir / f"step_{step:03d}_{suffix}.png")
         except Exception as e:
