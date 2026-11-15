@@ -60,6 +60,17 @@ def test_installed_requires_exact_package_match(monkeypatch):
     assert rwe._installed("com.tencent.mm") is False
 
 
+def test_installed_accepts_rom_suffixes(monkeypatch):
+    """MIUI 会输出 package:com.miui.notes:MIUI，部分 adb 会带 uid: 后缀"""
+    output = ("package:com.miui.notes:MIUI\n"
+              "package:com.tencent.mm uid:10086\n")
+    monkeypatch.setattr(rwe, "adb", lambda args, timeout=15: (0, output))
+
+    assert rwe._installed("com.miui.notes") is True
+    assert rwe._installed("com.tencent.mm") is True
+    assert rwe._installed("com.tencent.mm2") is False
+
+
 def test_installed_returns_none_when_command_fails(monkeypatch):
     monkeypatch.setattr(rwe, "adb", lambda args, timeout=15: (1, "error: device offline"))
 

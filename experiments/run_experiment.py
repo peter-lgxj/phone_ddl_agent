@@ -68,8 +68,15 @@ def _installed(pkg: str):
     rc, out = adb(["shell", "pm", "list", "packages", pkg])
     if rc is None or rc != 0:
         return None
-    # 精确匹配整行，避免 "com.foo" 命中 "com.foobar"
-    return any(line.strip() == f"package:{pkg}" for line in out.splitlines())
+    # 形如 package:com.foo、package:com.foo:MIUI、package:com.foo uid:1000 都要能识别
+    for line in out.splitlines():
+        line = line.strip()
+        if not line.startswith("package:"):
+            continue
+        token = line[len("package:"):].replace(":", " ").split()
+        if token and token[0] == pkg:
+            return True
+    return False
 
 
 def reset_device(apps: list[str]) -> dict:
