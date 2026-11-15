@@ -69,7 +69,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个 wrapper 骨架）
-- 测试与工程化：`tests/`（59 个用例，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 测试与工程化：`tests/`（64 个用例，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
@@ -115,9 +115,30 @@ python experiments/run_experiment.py --tasks experiments/tasks.json --no-semanti
 
 # 强制每个任务只跑 3 次（覆盖按等级规则）
 python experiments/run_experiment.py --tasks experiments/tasks.json --repeat 3
+
+# 多设备：指定 adb serial（等价于设置 ANDROID_SERIAL）
+python experiments/run_experiment.py --tasks experiments/tasks.json --serial emulator-5554
+
+# 失败重放：只重跑上次失败/超时/崩溃的任务
+python experiments/run_experiment.py --tasks experiments/tasks.json \
+  --only-failed experiments/results/<run_dir>/results.jsonl
+
+# AT 口径可切换：all（默认）/ success（仅成功尝试）/ best（每任务最快一次）
+python experiments/metrics.py experiments/results/<run_dir> --at-mode success
 ```
 
 结果默认写到 `experiments/results/`（已在 `.gitignore` 中）。runner 会在每个任务前回桌面并 force-stop 本任务涉及的已知应用（`--no-reset` 可关闭），`manifest.json` 记录 git SHA、执行/规划模型全名、温度、任务集哈希与设备信息。
+
+baseline 接入：三个 wrapper 都支持用环境变量覆盖完整命令，无需改代码：
+
+```bash
+export OPEN_AUTOGLM_DIR=/path/to/Open-AutoGLM
+export OPEN_AUTOGLM_CMD="python main.py --task {task}"   # 可选，按上游 README 填
+python experiments/run_experiment.py --baseline openautoglm \
+  --baseline-command "python experiments/baselines/openautoglm_wrapper.py"
+```
+
+Mobile-Agent-v2 用 `MOBILE_AGENT_V2_DIR` / `MOBILE_AGENT_V2_CMD`，AppAgent 用 `APPAGENT_DIR` / `APPAGENT_CMD`；上游输出格式不同可设 `BASELINE_STEP_MARKER`。协议（stdin JSON → stdout JSON + 退出码透传）已有离线假上游测试，但三个系统本身仍未安装验证。
 
 任务成功与否仍需人工判定：可写 `results.jsonl` 的 `success` 字段，或同目录 `judgement.json`。注意任务级布尔 `{"T01": true}` 只能算 TSR，要算 CS 必须逐次判定 `{"T01": [true, false, true]}`。每任务的原始执行证据在 `runs/<时间戳>/`。
 
@@ -127,7 +148,7 @@ CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
 
 - 全部运行时行为（点击坐标、OCR 识别、模型决策、重试、跨 App 信息传递）只经过代码审查与导入冒烟，未在真机上跑通。
 - 依赖版本：`requirements-lock.txt` 是在 Windows + Python 3.12 的虚拟环境里实际解析得到的；换机器（尤其 GPU/系统不同）需重新 `pip freeze` 替换。
-- 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）只有 wrapper 骨架与协议，未在真实仓库上跑过。
+- 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）的接入代码与命令覆盖机制已就绪，协议用假上游测过；三个真实系统仍未安装、未联调。
 - 任务前重置只做「回桌面 + force-stop 已知包名」，**无法自动清除应用内草稿、聊天输入框、剪贴板与输入法状态**；`reset` 字段会区分 `stopped` / `failed` / `not_installed` / `not_mapped`。
 - `run.py`、`app.py`、`frontend.py`、实验 runner 共用 `runs/.device.lock`：锁覆盖「reset + 整个任务执行期」，拿不到锁的入口会直接报错/记为失败，不会在别人操作手机时 force-stop。锁文件记录 token + pid，释放时校验归属；僵尸锁只在持有进程已退出时回收。
 - 需要 Python 3.10+（使用了 `dict | None` 等注解，3.8/3.9 导入即报错）。
