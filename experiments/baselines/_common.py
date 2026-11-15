@@ -6,6 +6,7 @@
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -14,6 +15,20 @@ import time
 def fail(message: str):
     print(f"[baseline] {message}", file=sys.stderr)
     raise SystemExit(2)
+
+
+def command_from_env(env_name: str, default: list[str], task: str) -> list[str]:
+    """优先用环境变量覆盖完整命令，便于适配上游不同入口。
+
+    env 示例：
+      OPEN_AUTOGLM_CMD="python main.py --task {task} --device emulator-5554"
+    未设置时回退到 default。
+    """
+    raw = os.getenv(env_name, "").strip()
+    if not raw:
+        return default
+    raw = raw.replace("{task}", task)
+    return shlex.split(raw, posix=(os.name != "nt"))
 
 
 def read_task() -> str:
@@ -59,6 +74,7 @@ def run_and_report(name: str, cmd: list[str], cwd: str,
         "steps": steps or None,
         "elapsed": round(time.time() - started, 1),
         "returncode": proc.returncode,
+        "command": cmd,
     }, ensure_ascii=False))
     # 透传退出码：上游崩溃必须让 SubprocessAdapter 判为失败，而不是记为正常结束
     return proc.returncode
