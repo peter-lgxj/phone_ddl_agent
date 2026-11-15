@@ -14,6 +14,7 @@ def test_providers_have_required_fields():
         assert p["base_url"].startswith("http"), name
         assert p["model"], name
         assert "api_key" in p, name
+        assert isinstance(p.get("support_multi_image"), bool), f"{name} 缺少 support_multi_image"
 
 
 def test_api_key_env_covers_every_provider():

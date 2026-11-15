@@ -39,7 +39,7 @@ PROVIDERS = {
         "api_key": os.getenv("DASHSCOPE_API_KEY", ""),
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model": "qwen3.5-flash",          # 可选: qwen-vl-plus / qwen-vl-max
-        # "support_multi_image": True,
+        "support_multi_image": False,      # 纯文字模型，不能直接当视觉执行器
     },
     "deepseek": {
         "api_key": os.getenv("DEEPSEEK_API_KEY", ""),   # ← 填入 DeepSeek Key（规划器默认用这个）
@@ -72,7 +72,7 @@ API_KEY_ENV = {
 }
 
 # 纯文本 provider：把截图发给它们会直接报错或得到无意义结果，不能当执行模型
-TEXT_ONLY_PROVIDERS = {"deepseek", "minimax"}
+TEXT_ONLY_PROVIDERS = {"qwen3", "deepseek", "minimax"}
 
 INPUT_BOX_MODEL = "models/input_box.pt"
 
