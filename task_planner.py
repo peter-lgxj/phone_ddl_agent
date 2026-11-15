@@ -55,10 +55,12 @@ class TaskPlan:
                 and all(d in done_idx for d in t.depends_on)]
 
     def is_all_done(self):
-        return all(t.status in ("done", "failed") for t in self.subtasks)
+        # failed/timeout 不是 done，否则循环会提前退出并把失败当完成
+        return all(t.status in ("done", "skipped") for t in self.subtasks)
 
     def summary(self):
-        icons = {"pending": "⏳", "running": "🔄", "done": "✅", "failed": "❌"}
+        icons = {"pending": "⏳", "running": "🔄", "done": "✅",
+                 "failed": "❌", "timeout": "⏱", "skipped": "⏭"}
         lines = [f"任务：{self.raw_task}", ""]
         for t in self.subtasks:
             lines.append(f"  {icons.get(t.status,'?')} [{t.index}]({t.app}) {t.goal}")
@@ -249,6 +251,10 @@ class TaskPlanner:
         remaining = [t for t in plan.subtasks if t.status == "pending"]
 
         if not remaining:
+            bad = [t for t in plan.subtasks if t.status in ("failed", "timeout")]
+            if bad:
+                detail = "；".join(f"[{t.index}] {t.goal} -> {t.status}" for t in bad)
+                return False, f"{len(bad)} 个子任务失败或超时，不能视为完成：{detail}\n{plan.summary()}"
             return True, f"所有子任务已完成。\n{plan.summary()}"
 
         completed_text = "\n".join(

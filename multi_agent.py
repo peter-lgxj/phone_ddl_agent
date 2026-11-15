@@ -111,6 +111,7 @@ class MultiAppAgent:
         self.emit_fn    = emit_fn or (lambda e, d: None)
         self.log_path   = "multi_task_log.json"
         self.total_steps = 0   # 本次多应用任务累计执行的子任务步数
+        self.last_status = "idle"   # done / failed / timeout，供 runner 判负
 
     def _emit(self, event: str, data: dict):
         try:
@@ -198,7 +199,7 @@ class MultiAppAgent:
                 result = self.exec_agent.run(exec_goal)
                 current.result = result
                 # 只有真正完成才标 done；超步数为 timeout，异常为 failed
-                current.status = getattr(self.exec_agent, "last_status", "done")
+                current.status = getattr(self.exec_agent, "last_status", None) or "failed"
                 if current.status == "done":
                     print(f"\n{C.GREEN}  ✅  子任务 [{current.index}] 完成{C.RESET}")
                 else:
@@ -242,21 +243,24 @@ class MultiAppAgent:
                 print(f"  🎉  整体任务已完成！")
                 print(f"{'═'*56}{C.RESET}")
                 print(f"\n{summary}")
-                self._save_log(plan)
-                return
+                # 不直接 return：统一走下面的失败检查，避免最后一步超时/失败被记成完成
+                break
 
         # 结束
+        unfinished = [t for t in plan.subtasks if t.status in ("failed", "timeout")]
         print(f"\n{C.CYAN}{'═'*56}{C.RESET}")
-        if plan.is_all_done():
-            print(f"{C.GREEN}  ✅  所有子任务执行完毕{C.RESET}")
+        if not unfinished:
+            print(f"{C.GREEN}  ✅  所有子任务完成{C.RESET}")
+            self.last_status = "done"
         else:
-            print(f"{C.AMBER}  ⚠️  部分子任务未完成{C.RESET}")
+            print(f"{C.AMBER}  ⚠️  {len(unfinished)} 个子任务未完成{C.RESET}")
+            self.last_status = ("timeout" if all(t.status == "timeout" for t in unfinished)
+                                else "failed")
         print(f"{C.CYAN}{'═'*56}{C.RESET}")
         print(plan.summary())
         self._save_log(plan)
 
         # test.md：任一子任务失败/超步数即整体失败，不能让 runner 记成正常结束
-        unfinished = [t for t in plan.subtasks if t.status in ("failed", "timeout")]
         if unfinished:
             detail = "；".join(f"[{t.index}] {t.goal} -> {t.status}" for t in unfinished)
             raise RuntimeError(f"{len(unfinished)} 个子任务未完成：{detail}")
