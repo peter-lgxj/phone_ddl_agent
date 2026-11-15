@@ -73,7 +73,31 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
-输入框定位优先使用 uiautomator2 的控件树（`EditText` 等）；`models/input_box.pt` 是 YOLO 视觉兜底权重，未随代码提供，缺失时会跳过兜底并打印提示，不会中断任务。需要视觉定位时请自行准备权重放到 `models/` 下。
+输入框定位优先使用 uiautomator2 的控件树（`EditText` 等）；`models/input_box.pt` 是 YOLO 视觉兜底权重。
+
+### 输入框检测权重（可选）
+
+权重不随本仓库提供（`.gitignore` 忽略了 `models/` 与 `*.pt`，二进制不会进版本库）。需要视觉兜底时从组长的模型仓库获取：
+
+```bash
+mkdir -p models
+curl -L -o models/input_box.pt \
+  https://raw.githubusercontent.com/peter-lgxj/gui_yolo_model/main/runs/detect/runs/input_box5/weights/best.pt
+```
+
+- 来源：`peter-lgxj/gui_yolo_model` 的 `runs/detect/runs/input_box5/weights/best.pt`（5.4 MB）
+- 目标路径：`models/input_box.pt`，与 `config.INPUT_BOX_MODEL` 一致，不需要改代码
+- 可选校验（git blob sha1，与模型仓库一致）：
+
+  ```bash
+  git hash-object models/input_box.pt
+  # 期望 2f5adef8fe64be1898363e8d38b5098ff4c62c2a
+  ```
+
+- 该权重是单类别 `input_box` 的 v1 模型；模型仓库的 `dataset_v2`（`input_box` + `search_icon`）尚无对应权重
+- 模型仓库未附 LICENSE，公开分发或转存前请先与作者确认
+- 置信度差异：`input_detector.py` 默认 `conf=0.3`，模型仓库的 `test_detector.py` 用 `0.5`；真机误检多时可上调
+- 无权重或加载失败时自动降级到 uiautomator2 控件树（`EditText`）检测，不会中断任务
 
 ## 实验
 
