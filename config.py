@@ -13,9 +13,9 @@ load_dotenv(Path(__file__).with_name(".env"))
 # 可选：zhipu / qwen / deepseek / minimax / openai
 ACTIVE_PROVIDER = "qwen"
 
-# 当前使用的规划模型（纯文字大语言模型，用于任务分解）
-# 可选：deepseek / qwen / openai
-# deepseek-chat 推理强且便宜，强烈推荐
+# 当前使用的规划模型（纯文字大语言模型，用于任务分解与语义校正）
+# 必须是 TEXT_ONLY_PROVIDERS 里的纯文本 provider：qwen3（默认）/ deepseek / minimax
+# qwen3 走 DashScope 兼容接口，模型为 qwen3.5-flash；deepseek-chat 推理强且便宜，可作替代
 PLANNER_PROVIDER = "qwen3"
 
 # ============================================================
@@ -38,11 +38,11 @@ PROVIDERS = {
     "qwen3": {
         "api_key": os.getenv("DASHSCOPE_API_KEY", ""),
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model": "qwen3.5-flash",          # 可选: qwen-vl-plus / qwen-vl-max
+        "model": "qwen3.5-flash",          # 纯文本模型，可选: qwen3.5-flash / qwen-max / qwen-plus
         "support_multi_image": False,      # 纯文字模型，不能直接当视觉执行器
     },
     "deepseek": {
-        "api_key": os.getenv("DEEPSEEK_API_KEY", ""),   # ← 填入 DeepSeek Key（规划器默认用这个）
+        "api_key": os.getenv("DEEPSEEK_API_KEY", ""),   # ← 填入 DeepSeek Key（可作规划器：PLANNER_PROVIDER="deepseek"）
         "base_url": "https://api.deepseek.com/v1",
         "model": "deepseek-chat",         # DeepSeek 暂无视觉模型，纯文字
         "support_multi_image": False,
