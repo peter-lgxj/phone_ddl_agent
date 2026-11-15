@@ -33,14 +33,31 @@ def load_records(run_dir: Path):
 
 
 def resolve_success(records, judgement):
-    """把 success 解析成 True/False，未判定的保持 None"""
+    """把 success 解析成 True/False，未判定的保持 None。
+
+    judgement.json 支持两种粒度：
+      {"T01": true}                     任务级，只能算 TSR，不能算 CS
+      {"T01": [true, false, true]}      逐次判定，按 attempt 取对应值
+    """
     for r in records:
         if isinstance(r.get("success"), bool):
+            r["judgement_scope"] = "attempt"
             continue
-        if r["task_id"] in judgement:
-            r["success"] = bool(judgement[r["task_id"]])
+        value = judgement.get(r["task_id"])
+        if isinstance(value, list):
+            idx = int(r.get("attempt", 1)) - 1
+            if 0 <= idx < len(value) and isinstance(value[idx], bool):
+                r["success"] = value[idx]
+                r["judgement_scope"] = "attempt"
+            else:
+                r["success"] = None
+                r["judgement_scope"] = None
+        elif isinstance(value, bool):
+            r["success"] = value
+            r["judgement_scope"] = "task"   # 任务级：无法区分哪几次成功
         else:
             r["success"] = None
+            r["judgement_scope"] = None
     return records
 
 
@@ -64,8 +81,11 @@ def summarize(grouped, level=None):
     multi = {tid: a for tid, a in judged.items() if len(a[0].get("apps") or []) >= 2}
     multi_tsr = (sum(1 for a in multi.values() if any(x["success"] for x in a)) / len(multi) * 100) if multi else None
 
-    stable = sum(1 for a in judged.values() if all(x["success"] for x in a))
-    cs = stable / len(judged) * 100 if judged else None
+    # 只有逐次判定的任务才能算 CS；任务级布尔会把 CS 抬成 TSR
+    cs_tasks = {tid: a for tid, a in judged.items()
+                if all(x.get("judgement_scope") == "attempt" for x in a)}
+    stable = sum(1 for a in cs_tasks.values() if all(x["success"] for x in a))
+    cs = stable / len(cs_tasks) * 100 if cs_tasks else None
 
     se_values = []
     for a in judged.values():
@@ -118,6 +138,11 @@ def main() -> int:
     if pending:
         print(f"\n⚠️  以下任务尚未人工判定，未计入 TSR/CS/SE：{', '.join(pending)}")
         print("   可编辑 results.jsonl 的 success 字段，或在同目录写 judgement.json。")
+
+    overall = summarize(grouped)
+    if overall["judged"] and overall["CS"] is None:
+        print("\n⚠️  CS 未计算：judgement.json 用了任务级布尔，无法区分第几次成功。")
+        print('   需要逐次判定时写成 {"T01": [true, false, true]}（按 attempt 顺序）。')
     return 0
 
 
