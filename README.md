@@ -69,7 +69,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个 wrapper 骨架）
-- 测试与工程化：`tests/`（33 个用例，其中 22 个不依赖 torch/easyocr，CI 会执行；其余在装齐依赖的本地环境执行）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 测试与工程化：`tests/`（47 个用例，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
@@ -104,8 +104,8 @@ CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
 - 全部运行时行为（点击坐标、OCR 识别、模型决策、重试、跨 App 信息传递）只经过代码审查与导入冒烟，未在真机上跑通。
 - 依赖版本：`requirements-lock.txt` 是在 Windows + Python 3.12 的虚拟环境里实际解析得到的；换机器（尤其 GPU/系统不同）需重新 `pip freeze` 替换。
 - 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）只有 wrapper 骨架与协议，未在真实仓库上跑过。
-- 任务前重置只做「回桌面 + force-stop 已知包名」，**无法自动清除应用内草稿、聊天输入框、剪贴板与输入法状态**；重置是否成功以 `results.jsonl` 的 `reset` 字段为准（含 `failed` / `not_mapped`）。
-- runner 用 `runs/.device.lock` 做进程级互斥：与 Web 界面或另一个 runner 并发时，拿不到锁会跳过重置而不是打断对方任务。
+- 任务前重置只做「回桌面 + force-stop 已知包名」，**无法自动清除应用内草稿、聊天输入框、剪贴板与输入法状态**；`reset` 字段会区分 `stopped` / `failed` / `not_installed` / `not_mapped`。
+- `run.py`、`app.py`、`frontend.py`、实验 runner 共用 `runs/.device.lock`：锁覆盖「reset + 整个任务执行期」，拿不到锁的入口会直接报错/记为失败，不会在别人操作手机时 force-stop。锁文件记录 token + pid，释放时校验归属；僵尸锁只在持有进程已退出时回收。
 - 需要 Python 3.10+（使用了 `dict | None` 等注解，3.8/3.9 导入即报错）。
 
 ## 开发与测试
