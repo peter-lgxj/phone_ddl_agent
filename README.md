@@ -69,7 +69,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（74 个用例，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 测试与工程化：`tests/`（76 个用例，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
@@ -101,7 +101,7 @@ curl -L -o models/input_box.pt \
 
 ## 实验
 
-`experiments/tasks.json` 收录 `test.md` 的 20 个任务（含 App、理论步数、难度等级），runner 按等级自动决定重复次数（Level 1/2 为 3 次，Level 3 为 2 次，可用 `--repeat` 强制统一）：
+`experiments/tasks.json` 收录 `test.md` 的 20 个任务（含 App、理论步数、难度等级），runner 按等级自动决定重复次数（`repeat_by_level`，当前 L1/L2 为 3 次、L3 为 2 次；**L3 最终次数是 `test.md` 4.2 的待定项**，当前值只是实现默认，可用 `--repeat` 强制统一）：
 
 ```bash
 # 执行任务集（需要真机与密钥）
@@ -123,6 +123,10 @@ python experiments/run_experiment.py --tasks experiments/tasks.json --serial emu
 python experiments/run_experiment.py --tasks experiments/tasks.json \
   --only-failed experiments/results/<run_dir>/results.jsonl
 
+# 只跑指定等级 / 指定任务号（不影响按等级的重复次数规则）
+python experiments/run_experiment.py --tasks experiments/tasks.json --levels L1,L2
+python experiments/run_experiment.py --tasks experiments/tasks.json --task-ids T01,T05
+
 # AT 口径可切换：--at-mode 选样本（all/success/best），--at-aggregate 选跨任务聚合
 python experiments/metrics.py experiments/results/<run_dir> --at-mode success
 python experiments/metrics.py experiments/results/<run_dir> --at-aggregate total_per_task
@@ -135,7 +139,7 @@ AT 的两种跨任务聚合（`--at-aggregate`）：
 
 每任务尝试次数相同时两者相等；尝试次数不等（超时、失败重放、缺失判定）时会分叉。`--at-mode` 决定哪些 attempt 纳入统计，两者可组合。
 
-结果默认写到 `experiments/results/`（已在 `.gitignore` 中）。runner 会在每个任务前回桌面并 force-stop 本任务涉及的已知应用（`--no-reset` 可关闭），`manifest.json` 记录 git SHA、执行/规划模型全名、温度、任务集哈希与设备信息。
+结果默认写到 `experiments/results/`（已在 `.gitignore` 中）。筛选条件（`levels` / `task_ids` / `only_failed`）会写进 `manifest.json` 与每条 `results.jsonl` 的 `filters` 字段，事后能看出"只跑了某几个任务"。runner 会在每个任务前回桌面并 force-stop 本任务涉及的已知应用（`--no-reset` 可关闭），`manifest.json` 记录 git SHA、执行/规划模型全名、温度、任务集哈希与设备信息。
 
 baseline 接入：三个 wrapper 已按上游实际入口构造命令，也都可以用环境变量覆盖完整命令。协议是 stdin 一行 JSON（`task` 必填，`apps` 可选）→ stdout 一行 JSON（`summary/steps/elapsed/returncode/upstream_status`），退出码透传。
 
@@ -188,6 +192,8 @@ ruff check .       # 只启用能发现真实错误的规则（E9/F63/F7/F82）
 ```
 
 CI（`.github/workflows/ci.yml`）会做语法编译、任务集 JSON 校验、runner dry-run、ruff 与 pytest。uiautomator2/easyocr/ultralytics 已改为延迟导入，CI 不需要安装它们即可导入 `screen_agent` 并执行全部单元测试（错误导入会直接失败，而不是 skip）。
+
+另有一个 `locked-deps` job 在 **ubuntu + Python 3.12** 上按 `requirements-lock.txt` 完整安装一遍并做导入冒烟，避免锁文件长期没人验证。锁文件是在 Windows + Python 3.12 下 `pip freeze` 得到的**版本锁（未带 hash）**；Linux/Windows 的 wheel 集不同，若某版本在 Linux 缺 wheel，该 job 会直接失败。将来若用 `pip-compile --generate-hashes`（或 `uv pip compile --generate-hashes`）生成 hash 锁，替换文件后 job 会自动改用 `pip install --require-hashes`，无需改 workflow。
 
 ## 注意事项
 
