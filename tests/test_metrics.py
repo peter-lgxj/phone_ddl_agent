@@ -42,7 +42,7 @@ def test_metrics_aggregation(tmp_path):
         {"task_id": "T17", "level": 3, "apps": ["微信", "大众点评", "高德地图"], "theory_steps": 14,
          "attempt": 2, "success": True, "steps": 18, "elapsed": 85.0},
     ]
-    run_dir = write_run(tmp_path, records, judgement={"T09": True})
+    run_dir = write_run(tmp_path, records, judgement={"T09": [True, False, True]})
 
     got = metrics.load_records(run_dir)
     grouped = metrics.group_by_task(metrics.resolve_success(*got))

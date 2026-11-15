@@ -25,6 +25,17 @@ def test_missing_baseline_dir_fails_with_clear_message():
     assert "OPEN_AUTOGLM_DIR" in proc.stderr
 
 
+def test_wrapper_propagates_upstream_failure(tmp_path):
+    """上游崩溃时 wrapper 必须返回非 0，不能被记成正常结束"""
+    repo = tmp_path / "broken"
+    repo.mkdir()
+    (repo / "main.py").write_text(
+        "import sys\nprint('partial output')\nsys.exit(3)\n", encoding="utf-8")
+
+    proc = run_wrapper({"OPEN_AUTOGLM_DIR": str(repo)})
+    assert proc.returncode == 3
+
+
 def test_wrapper_reports_steps_and_summary(tmp_path):
     repo = tmp_path / "fake_autoglm"
     repo.mkdir()
