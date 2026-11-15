@@ -50,7 +50,8 @@ def run_and_report(name: str, cmd: list[str], cwd: str,
     except subprocess.TimeoutExpired:
         fail(f"{name} 执行超时（{timeout}s）")
 
-    output = (proc.stdout or proc.stderr or "").strip()
+    # 两个流都要保留，否则上游把错误写到 stderr 时会丢诊断信息
+    output = "\n".join(part.strip() for part in (proc.stdout, proc.stderr) if part and part.strip())
     steps = sum(1 for line in (proc.stdout or "").splitlines() if step_marker in line)
 
     print(json.dumps({
@@ -59,4 +60,5 @@ def run_and_report(name: str, cmd: list[str], cwd: str,
         "elapsed": round(time.time() - started, 1),
         "returncode": proc.returncode,
     }, ensure_ascii=False))
-    return 0
+    # 透传退出码：上游崩溃必须让 SubprocessAdapter 判为失败，而不是记为正常结束
+    return proc.returncode
