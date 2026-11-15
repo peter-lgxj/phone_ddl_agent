@@ -13,7 +13,7 @@ import json
 import time
 import subprocess
 
-from task_planner import TaskPlanner, TaskPlan, SubTask
+from task_planner import TaskPlanner, TaskPlan, SubTask, build_exec_goal
 from screen_agent import ScreenAgent
 from memory import TaskMemory
 import config
@@ -186,13 +186,8 @@ class MultiAppAgent:
 
             self._go_home()
 
-            exec_goal = current.goal
+            exec_goal = build_exec_goal(current)
             if current.context_needed:
-                # 把前序任务的关键信息显式注入子任务目标，避免执行层再从零推断
-                exec_goal = (
-                    f"{current.goal}\n\n"
-                    f"【前序任务提供的信息（可直接作为事实使用）】\n{current.context_needed}"
-                )
                 print(f"{C.DIM}  🔗  注入上下文：{current.context_needed}{C.RESET}")
 
             try:

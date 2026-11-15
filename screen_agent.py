@@ -98,6 +98,81 @@ class ScreenAgent:
     #  语义分析：在决策前，用文字大模型理解历史 observation
     # ══════════════════════════════════════════════════════════
 
+    def _build_prompt(self, memory, has_prev: bool, ocr_result: str, semantic_analysis: str) -> str:
+        """构建单步决策 prompt；关掉语义分析时不再出现任何【语义分析】引用"""
+        known_apps = "、".join(AppLauncher.KNOWN_APPS.keys())
+
+        semantic_section = ""
+        if semantic_analysis:
+            semantic_section = f"""
+    ## 语义分析（已由专业模型校正，请直接采用，不要自行重新解读）
+    {semantic_analysis}
+"""
+
+        if semantic_analysis:
+            progress_rule = "3. 根据【语义分析】判断进度，不重复已完成的操作"
+            duty_rule     = "8. 你的职责是：看截图确认界面状态和坐标，结合语义分析决定动作"
+            finish_rules  = """以【语义分析】中的「未完成」为准：
+    - 未完成为空 → action_type 填 finish，summary 填完成情况
+    - 未完成不为空 → 继续执行，做语义分析中「下一步」建议的操作"""
+        else:
+            progress_rule = "3. 根据历史观察判断进度，不重复已完成的操作"
+            duty_rule     = "8. 你的职责是：看截图确认界面状态和坐标，结合历史观察决定动作"
+            finish_rules  = """根据历史观察判断任务是否完成：
+    - 能确认目标已达成 → action_type 填 finish，summary 写出关键结果（名称/价格/地点等）
+    - 仍缺步骤 → 继续执行下一步操作"""
+
+        return f"""你是一个手机操作智能体，通过观察手机截图决定下一步操作。
+
+    ## 总体任务
+    {memory.task}
+
+    ## 已执行的历史步骤（VL 模型的原始观察，语义可能有偏差）
+    {memory.format_for_prompt()}
+{semantic_section}
+    ## 当前屏幕 OCR 识别结果
+    {ocr_result}
+
+    ## 图片说明
+    {'- 第一张：上一步执行后的屏幕' if has_prev else ''}
+    - {'第二张' if has_prev else '第一张'}：当前屏幕（本次需要决策）
+
+    ## 可用动作
+    {self.ACTIONS}
+
+    ## 操作规则
+    1. tap操作必须使用 OCR 结果里的坐标
+    2. 已打开的 App 不要重复 open_app
+    {progress_rule}
+    4. 每次只返回一个动作
+    5. 可直接打开的 App：{known_apps}
+    6. 需要输入文字固定两步：type → send
+    7. 历史中验证结果包含"输入成功"时，下一步必须 send
+    {duty_rule}
+
+    ## 何时调用 finish
+    {finish_rules}
+
+    ## 只返回 JSON：
+    {{
+    "thought": "当前截图显示...，下一步应该...",
+    "action_type": "open_app/tap/tap_input_box/type/send/press_enter/swipe/back/home/wait/finish",
+    "app_name": "（open_app时填）",
+    "x": 数字,
+    "y": 数字,
+    "x2": 数字,
+    "y2": 数字,
+    "text": "（type时填）",
+    "summary": "（finish时填）",
+    "description": "本步操作一句话描述"
+    }}
+
+    ## 只返回 JSON，注意：
+    - x/y 坐标必须是单个整数
+    - 所有标点必须是英文标点
+    - 禁止在最后一个字段后加逗号
+    """
+
     def _analyze_history(self, task: str, history_steps: list) -> str:
         """
         在 _think_and_act 决策前调用。
@@ -192,68 +267,7 @@ class ScreenAgent:
         if memory.steps and config.ENABLE_SEMANTIC_ANALYSIS:
             semantic_analysis = self._analyze_history(memory.task, memory.steps)
 
-        known_apps = "、".join(AppLauncher.KNOWN_APPS.keys())
-
-        # ── 把语义分析注入 prompt，VL 模型直接采用 ──────────────
-        semantic_section = ""
-        if semantic_analysis:
-            semantic_section = f"""
-    ## 语义分析（已由专业模型校正，请直接采用，不要自行重新解读）
-    {semantic_analysis}
-"""
-
-        prompt = f"""你是一个手机操作智能体，通过观察手机截图决定下一步操作。
-
-    ## 总体任务
-    {memory.task}
-
-    ## 已执行的历史步骤（VL 模型的原始观察，语义可能有偏差）
-    {memory.format_for_prompt()}
-{semantic_section}
-    ## 当前屏幕 OCR 识别结果
-    {ocr_result}
-
-    ## 图片说明
-    {'- 第一张：上一步执行后的屏幕' if has_prev else ''}
-    - {'第二张' if has_prev else '第一张'}：当前屏幕（本次需要决策）
-
-    ## 可用动作
-    {self.ACTIONS}
-
-    ## 操作规则
-    1. tap操作必须使用 OCR 结果里的坐标
-    2. 已打开的 App 不要重复 open_app
-    3. 根据【语义分析】判断进度，不重复已完成的操作
-    4. 每次只返回一个动作
-    5. 可直接打开的 App：{known_apps}
-    6. 需要输入文字固定两步：type → send
-    7. 历史中验证结果包含"输入成功"时，下一步必须 send
-    8. 你的职责是：看截图确认界面状态和坐标，结合语义分析决定动作
-
-    ## 何时调用 finish
-    以【语义分析】中的「未完成」为准：
-    - 未完成为空 → action_type 填 finish，summary 填完成情况
-    - 未完成不为空 → 继续执行，做语义分析中「下一步」建议的操作
-
-    ## 只返回 JSON：
-    {{
-    "thought": "语义分析显示...，当前截图显示...，下一步应该...",
-    "action_type": "open_app/tap/tap_input_box/type/send/press_enter/swipe/back/home/wait/finish",
-    "app_name": "（open_app时填）",
-    "x": 数字,
-    "y": 数字,
-    "x2": 数字,
-    "y2": 数字,
-    "text": "（type时填）",
-    "summary": "（finish时填）",
-    "description": "本步操作一句话描述"
-    }}
-
-    ## 只返回 JSON，注意：
-    - x/y 坐标必须是单个整数
-    - 所有标点必须是英文标点
-    - 禁止在最后一个字段后加逗号
-    """
+        prompt = self._build_prompt(memory, has_prev, ocr_result, semantic_analysis)
 
         content.append({"type": "text", "text": prompt})
 
@@ -489,10 +503,54 @@ class ScreenAgent:
 
     def _execute_step(self, step: int, memory: TaskMemory):
         """
-        执行一步（思考 → 动作 → 观察 → 记录），失败时按 config.STEP_RETRIES 重试。
+        执行一步：决策（可重试）→ 动作（只执行一次）→ 观察 → 记录。重试只覆盖无副作用的决策，动作执行后失败不再重放。
         返回 (finished, done, summary)：finished 表示模型主动 finish，
         done 表示完成检测判定已完成，summary 为结束说明。
         """
+        action = self._decide(step, memory)
+
+        # 动作只执行一次，不随观察/完成检测失败而重放
+        finished = self._execute(action)
+
+        if finished:
+            observation = "任务完成"
+        else:
+            try:
+                observation = self._observe(action, memory)
+            except Exception as e:
+                observation = f"观察失败（动作已执行，未重试）：{e}"
+                print(f"│  ⚠️  {observation}")
+        print(f"│  👁   {observation}")
+        ui_state.update_observation(observation)
+
+        memory.add_step(
+            thought=action.get("thought", ""),
+            action=action,
+            observation=observation
+        )
+        self._archive_step(step, action, observation)
+
+        done = False
+        if not finished and step >= 3:
+            try:
+                done = self._check_task_done(memory)
+            except Exception as e:
+                # 完成检测失败只是无法确认完成，不能因此中断或重放动作
+                print(f"│  ⚠️  完成检测失败，按未完成处理：{e}")
+
+        if action.get("summary"):
+            summary = action["summary"]
+        elif finished:
+            summary = f"任务完成：{observation}"
+        elif done:
+            # 保留最后观察，context_needed / 重规划要靠它传递跨 App 信息
+            summary = f"任务已完成：{memory.get_last_observation()}"
+        else:
+            summary = ""
+        return finished, done, summary
+
+    def _decide(self, step: int, memory: TaskMemory) -> dict:
+        """只对决策调用重试：此时还没有任何设备副作用"""
         last_error = None
         for attempt in range(1, config.STEP_RETRIES + 2):
             try:
@@ -502,29 +560,13 @@ class ScreenAgent:
                 # Streamlit 控制台读的就是这个状态文件，之前只在 init_state 写过一次，
                 # 导致页面永远停在「执行中」并无限自动刷新
                 ui_state.update_step(step, action.get("thought", ""), action)
-
-                finished = self._execute(action)
-                observation = "任务完成" if finished else self._observe(action, memory)
-                print(f"│  👁   {observation}")
-                ui_state.update_observation(observation)
-
-                memory.add_step(
-                    thought=action.get("thought", ""),
-                    action=action,
-                    observation=observation
-                )
-                self._archive_step(step, action, observation)
-
-                done = False if finished else (step >= 3 and self._check_task_done(memory))
-                summary = action.get("summary") or ("任务已完成" if done else "")
-                return finished, done, summary
+                return action
             except Exception as e:
                 last_error = e
-                print(f"│  ⚠️  第 {step} 步第 {attempt} 次尝试失败：{e}")
-                ui_state.update_observation(f"第 {step} 步尝试失败：{e}")
+                print(f"│  ⚠️  第 {step} 步第 {attempt} 次决策失败：{e}")
                 if attempt <= config.STEP_RETRIES:
                     time.sleep(min(2 ** attempt, 8))
-        raise RuntimeError(f"第 {step} 步重试 {config.STEP_RETRIES} 次后仍失败：{last_error}") from last_error
+        raise RuntimeError(f"第 {step} 步决策重试 {config.STEP_RETRIES} 次后仍失败：{last_error}") from last_error
 
     def _save_log(self, memory: TaskMemory):
         """保存任务日志，并复制一份到本次运行的证据目录"""

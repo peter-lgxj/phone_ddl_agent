@@ -72,6 +72,14 @@ class TaskPlan:
 #  规划器
 # ══════════════════════════════════════════════
 
+def build_exec_goal(subtask: "SubTask") -> str:
+    """把前序任务提供的信息显式拼进子任务目标，避免执行层再从零推断"""
+    if not subtask.context_needed:
+        return subtask.goal
+    return (f"{subtask.goal}\n\n"
+            f"【前序任务提供的信息（可直接作为事实使用）】\n{subtask.context_needed}")
+
+
 class TaskPlanner:
 
     # ── 初始规划 Prompt ───────────────────────
