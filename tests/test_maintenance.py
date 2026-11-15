@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import metrics
 import run_experiment as rwe
 
@@ -83,6 +85,26 @@ def test_baseline_command_falls_back_when_unset(monkeypatch):
     monkeypatch.delenv("OPEN_AUTOGLM_CMD", raising=False)
 
     assert command_from_env("OPEN_AUTOGLM_CMD", ["fallback"], "任务") == ["fallback"]
+
+
+def test_select_tasks_by_level_and_task_id():
+    tasks = [
+        {"id": "T01", "level": 1},
+        {"id": "T02", "level": 1},
+        {"id": "T09", "level": 2},
+        {"id": "T17", "level": 3},
+    ]
+
+    assert [t["id"] for t in rwe.select_tasks(tasks, "L1")] == ["T01", "T02"]
+    assert [t["id"] for t in rwe.select_tasks(tasks, "1,2")] == ["T01", "T02", "T09"]
+    assert [t["id"] for t in rwe.select_tasks(tasks, "", "T01,T17")] == ["T01", "T17"]
+    assert [t["id"] for t in rwe.select_tasks(tasks, "L3", "T01")] == []
+    assert rwe.select_tasks(tasks) == tasks
+
+
+def test_parse_levels_rejects_unknown_value():
+    with pytest.raises(SystemExit):
+        rwe.parse_levels("L1,Lx")
 
 
 def test_at_aggregate_switch_changes_cross_task_weighting():

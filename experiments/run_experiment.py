@@ -65,6 +65,35 @@ def filter_failed(tasks: list[dict], results_path: str) -> list[dict]:
     return [t for t in tasks if t["id"] in failed]
 
 
+def _split_csv(raw: str) -> list[str]:
+    return [p.strip() for p in (raw or "").split(",") if p.strip()]
+
+
+def parse_levels(raw: str) -> list[int]:
+    """--levels 支持 L1,L2 或 1,2；非法值直接退出，避免静默跑全量"""
+    levels = []
+    for part in _split_csv(raw):
+        token = part.lower().lstrip("l")
+        if not token.isdigit():
+            raise SystemExit(f"--levels 取值非法：{part}（示例：L1,L2 或 1,2）")
+        levels.append(int(token))
+    return levels
+
+
+def select_tasks(tasks: list[dict], levels_raw: str = "", ids_raw: str = "") -> list[dict]:
+    """按等级与任务号筛选，空条件表示不筛；保持 tasks.json 原顺序。
+
+    只影响“跑哪些任务”，不改变 each task 的重复次数规则。
+    """
+    levels = parse_levels(levels_raw)
+    ids = {p.upper() for p in _split_csv(ids_raw)}
+    return [
+        t for t in tasks
+        if (not levels or int(t.get("level", 0)) in levels)
+        and (not ids or str(t.get("id", "")).upper() in ids)
+    ]
+
+
 def adb(args: list[str], timeout: int = 15):
     """返回 (returncode, stdout)。adb 缺失/超时/异常时 returncode 为 None"""
     serial = os.getenv("ANDROID_SERIAL", "").strip()
@@ -229,6 +258,10 @@ def main() -> int:
                     help="多设备时指定 adb serial（等价于设置 ANDROID_SERIAL）")
     ap.add_argument("--only-failed", default="",
                     help="只重放该 results.jsonl 中失败/超时/崩溃的任务（失败重放）")
+    ap.add_argument("--levels", default="",
+                    help="只跑指定等级，逗号分隔：L1,L2（或 1,2）；不改变按等级的重复次数规则")
+    ap.add_argument("--task-ids", default="",
+                    help="只跑指定任务号，逗号分隔：T01,T05")
     ap.add_argument("--dry-run", action="store_true", help="只打印任务集，不导入执行器")
     args = ap.parse_args()
 
@@ -245,17 +278,34 @@ def main() -> int:
         if not tasks:
             print("没有需要重放的任务")
             return 0
+    if args.levels or args.task_ids:
+        before = len(tasks)
+        tasks = select_tasks(tasks, args.levels, args.task_ids)
+        print(f"筛选：levels={args.levels or '全部'} task_ids={args.task_ids or '全部'}"
+              f" → 从 {before} 个任务中选中 {len(tasks)} 个")
+        if not tasks:
+            print("筛选后没有任务，退出")
+            return 0
+
+    # 落盘筛选条件：只跑了某几个任务的事实必须能在数据里查到
+    filters = {
+        "levels": parse_levels(args.levels),
+        "task_ids": [p.upper() for p in _split_csv(args.task_ids)],
+        "only_failed": args.only_failed or "",
+    }
     repeat = args.repeat or (data.get("default_repeat", 3) if isinstance(data, dict) else 3)
     repeat_by_level = data.get("repeat_by_level", {}) if isinstance(data, dict) else {}
 
     def repeat_for(task):
-        """按任务等级覆盖重复次数（test.md 中 Level 3 为 2 次），--repeat 可强制统一"""
+        """按任务等级覆盖重复次数（Level 3 的最终次数见 test.md 4.2 待定项），--repeat 可强制统一"""
         if args.repeat:
             return args.repeat
         return int(repeat_by_level.get(str(task.get("level")), repeat))
 
     print(f"任务集：{task_file}（{len(tasks)} 个任务），重复 {repeat} 次"
           f"（按等级覆盖：{repeat_by_level or '无'}），模式 {args.mode}")
+    if any(filters.values()):
+        print(f"筛选条件：{json.dumps(filters, ensure_ascii=False)}")
     if args.dry_run:
         for t in tasks:
             print(f"  {t['id']} L{t.get('level', '?')} theory={t.get('theory_steps', '?')} "
@@ -306,6 +356,7 @@ def main() -> int:
         "python_version": sys.version.split()[0],
         "device": device_info(),
         "reset_before_task": not args.no_reset,
+        "filters": filters,
         "tag": args.tag,
     }
     (out_dir / "manifest.json").write_text(
@@ -330,8 +381,9 @@ def main() -> int:
                     "run_dir": "",
                     "run_dirs": [],          # 多应用模式下每个子任务一个证据目录
                     "reset": None,
+                    "filters": filters,      # 本次运行的筛选条件（levels/task_ids/only_failed）
                 }
-                print(f"\n=== {t['id']} 第 {attempt}/{repeat} 次：{t['task']}")
+                print(f"\n=== {t['id']} 第 {attempt}/{task_repeat} 次：{t['task']}")
                 started = time.time()
                 agent = None
                 # 锁覆盖 reset + 整个 attempt：避免另一个 runner/Web 任务在操作过程中 force-stop
