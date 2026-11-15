@@ -104,6 +104,8 @@ CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
 - 全部运行时行为（点击坐标、OCR 识别、模型决策、重试、跨 App 信息传递）只经过代码审查与导入冒烟，未在真机上跑通。
 - 依赖版本：`requirements-lock.txt` 是在 Windows + Python 3.12 的虚拟环境里实际解析得到的；换机器（尤其 GPU/系统不同）需重新 `pip freeze` 替换。
 - 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）只有 wrapper 骨架与协议，未在真实仓库上跑过。
+- 任务前重置只做「回桌面 + force-stop 已知包名」，**无法自动清除应用内草稿、聊天输入框、剪贴板与输入法状态**；重置是否成功以 `results.jsonl` 的 `reset` 字段为准（含 `failed` / `not_mapped`）。
+- runner 用 `runs/.device.lock` 做进程级互斥：与 Web 界面或另一个 runner 并发时，拿不到锁会跳过重置而不是打断对方任务。
 - 需要 Python 3.10+（使用了 `dict | None` 等注解，3.8/3.9 导入即报错）。
 
 ## 开发与测试
@@ -115,7 +117,7 @@ pytest -q          # 单元测试：动作容错、指标聚合、任务集校�
 ruff check .       # 只启用能发现真实错误的规则（E9/F63/F7/F82）
 ```
 
-CI（`.github/workflows/ci.yml`）会做语法编译、任务集 JSON 校验、runner dry-run、ruff 与 pytest。CI 不安装 easyocr/ultralytics，所以涉及 `screen_agent` 的用例会自动 skip，本地装全依赖后才会真正执行。
+CI（`.github/workflows/ci.yml`）会做语法编译、任务集 JSON 校验、runner dry-run、ruff 与 pytest。uiautomator2/easyocr/ultralytics 已改为延迟导入，CI 不需要安装它们即可导入 `screen_agent` 并执行全部单元测试（错误导入会直接失败，而不是 skip）。
 
 ## 注意事项
 
