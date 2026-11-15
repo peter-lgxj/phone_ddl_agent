@@ -68,8 +68,8 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 - 规划：`task_planner.py`（子任务拆解与重规划，含 `context_needed` 信息传递）、`multi_agent.py`（多应用编排）
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
-- 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个 wrapper 骨架）
-- 测试与工程化：`tests/`（68 个用例，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
+- 测试与工程化：`tests/`（74 个用例，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
@@ -123,22 +123,47 @@ python experiments/run_experiment.py --tasks experiments/tasks.json --serial emu
 python experiments/run_experiment.py --tasks experiments/tasks.json \
   --only-failed experiments/results/<run_dir>/results.jsonl
 
-# AT 口径可切换：all（默认）/ success（仅成功尝试）/ best（每任务最快一次）
+# AT 口径可切换：--at-mode 选样本（all/success/best），--at-aggregate 选跨任务聚合
 python experiments/metrics.py experiments/results/<run_dir> --at-mode success
+python experiments/metrics.py experiments/results/<run_dir> --at-aggregate total_per_task
 ```
+
+AT 的两种跨任务聚合（`--at-aggregate`）：
+
+- `task_mean`（默认）：先算每个任务的尝试平均耗时，再对任务等权平均；与旧结果一致
+- `total_per_task`：所有纳入统计的 attempt 总耗时 ÷ 任务数
+
+每任务尝试次数相同时两者相等；尝试次数不等（超时、失败重放、缺失判定）时会分叉。`--at-mode` 决定哪些 attempt 纳入统计，两者可组合。
 
 结果默认写到 `experiments/results/`（已在 `.gitignore` 中）。runner 会在每个任务前回桌面并 force-stop 本任务涉及的已知应用（`--no-reset` 可关闭），`manifest.json` 记录 git SHA、执行/规划模型全名、温度、任务集哈希与设备信息。
 
-baseline 接入：三个 wrapper 都支持用环境变量覆盖完整命令，无需改代码：
+baseline 接入：三个 wrapper 已按上游实际入口构造命令，也都可以用环境变量覆盖完整命令。协议是 stdin 一行 JSON（`task` 必填，`apps` 可选）→ stdout 一行 JSON（`summary/steps/elapsed/returncode/upstream_status`），退出码透传。
+
+**命令按上游文档构造，未实跑**：本机无真机，也没有安装这三套系统的依赖/密钥；下面的入口、参数与输出格式来自上游仓库代码核对，接入前请按上游 README 完成环境准备。
 
 ```bash
-export OPEN_AUTOGLM_DIR=/path/to/Open-AutoGLM
-export OPEN_AUTOGLM_CMD="python main.py --task {task}"   # 可选，按上游 README 填
 python experiments/run_experiment.py --baseline openautoglm \
   --baseline-command "python experiments/baselines/openautoglm_wrapper.py"
 ```
 
-Mobile-Agent-v2 用 `MOBILE_AGENT_V2_DIR` / `MOBILE_AGENT_V2_CMD`，AppAgent 用 `APPAGENT_DIR` / `APPAGENT_CMD`；上游输出格式不同可设 `BASELINE_STEP_MARKER`。协议（stdin JSON → stdout JSON + 退出码透传）已有离线假上游测试，但三个系统本身仍未安装验证。
+- **Open-AutoGLM**（`zai-org/Open-AutoGLM`）
+  - 环境变量：`OPEN_AUTOGLM_DIR`；可选 `OPEN_AUTOGLM_MAX_STEPS`
+  - 默认命令：`python main.py [--device-id $ANDROID_SERIAL] [--max-steps N] "<task>"`
+  - 任务位置参数是最后一个参数（不是 `--task`）；模型服务用上游的 `--base-url/--model/--apikey` 或 `PHONE_AGENT_*` 环境变量
+  - 输出：每步打印 `💭 思考：` / `🎯 动作：`，结束时打印 `Result: <message>`（超步数为 `Result: Max steps reached`）
+  - 步骤数按 `🎯` 行统计；`upstream_status` 只区分 `finished` / `max_steps`，不当作成功判定
+- **Mobile-Agent-v2**（`X-PLUG/MobileAgent` 的 `Mobile-Agent-v2/`）
+  - 环境变量：`MOBILE_AGENT_V2_DIR`；可选 `MOBILE_AGENT_V2_CMD`
+  - 默认命令：`python run.py`。上游没有命令行参数，任务与 API 配置写在 run.py 顶部（`instruction` / `adb_path` / `API_url` / `token` / `qwen_api`）；仍为空时 wrapper 会直接报错提示
+  - 输出：每步 `### Decision ###` 块（Thought/Action/Operation），截图在 `screenshot/`；动作 `Stop` 结束
+  - 步骤数按 ` Decision ` 标题行统计；`upstream_status=stopped` 仅表示出现 Stop
+- **AppAgent**（`TencentQQGYLab/AppAgent`，原 `mnotgod96/AppAgent` 已迁移）
+  - 环境变量：`APPAGENT_DIR`；应用名取 stdin JSON 的 `apps[0]` 或 `APPAGENT_APP`；可选 `APPAGENT_CMD` / `APPAGENT_STDIN`
+  - 默认命令：`python run.py --app <app>`；上游是交互式输入，默认把 `APPAGENT_STDIN`（缺省 `y\n<task>\n`）喂给子进程，对应「无文档库 + 单设备」的提示顺序；环境不同请自行设置
+  - 输出：每轮 `Round <n>`，日志在 `tasks/task_<app>_<时间戳>/log_*.txt`；结束文案为 `Task completed successfully` / `Task finished due to reaching max rounds` / `Task finished unexpectedly`
+  - 步骤数按 `Round ` 行统计；`upstream_status` 记录对应结束文案，仍不当作成功判定
+
+`BASELINE_STEP_MARKER` 可覆盖步骤标记（多个候选标记用默认值，无需设置）。`success` 仍由人工判定，baseline 的 `upstream_status` 只作为复盘线索写进 `baseline_raw`。协议层已有离线假上游测试。
 
 任务成功与否仍需人工判定：可写 `results.jsonl` 的 `success` 字段，或同目录 `judgement.json`。注意任务级布尔 `{"T01": true}` 只能算 TSR，要算 CS 必须逐次判定 `{"T01": [true, false, true]}`。每任务的原始执行证据在 `runs/<时间戳>/`。
 
@@ -148,7 +173,7 @@ CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
 
 - 全部运行时行为（点击坐标、OCR 识别、模型决策、重试、跨 App 信息传递）只经过代码审查与导入冒烟，未在真机上跑通。
 - 依赖版本：`requirements-lock.txt` 是在 Windows + Python 3.12 的虚拟环境里实际解析得到的；换机器（尤其 GPU/系统不同）需重新 `pip freeze` 替换。
-- 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）的接入代码与命令覆盖机制已就绪，协议用假上游测过；三个真实系统仍未安装、未联调。
+- 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）的命令、输出解析与配置要求已按上游代码写实，协议用假上游测过；但三个真实系统仍未在本机安装、未接真机联调，命令未实跑。
 - 任务前重置只做「回桌面 + force-stop 已知包名」，**无法自动清除应用内草稿、聊天输入框、剪贴板与输入法状态**；`reset` 字段会区分 `stopped` / `failed` / `not_installed` / `not_mapped`。
 - `run.py`、`app.py`、`frontend.py`、实验 runner 共用 `runs/.device.lock`：锁覆盖「reset + 整个任务执行期」，拿不到锁的入口会直接报错/记为失败，不会在别人操作手机时 force-stop。锁文件记录 token + pid，释放时校验归属；僵尸锁只在持有进程已退出时回收。
 - 需要 Python 3.10+（使用了 `dict | None` 等注解，3.8/3.9 导入即报错）。
