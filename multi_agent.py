@@ -143,6 +143,17 @@ class MultiAppAgent:
         # ── 规划 ─────────────────────────────────
         plan = self.planner.plan(task)
 
+        warned = 0
+
+        def flush_warnings():
+            """依赖被自动过滤/断环时在真机日志里可见"""
+            nonlocal warned
+            for w in plan.warnings[warned:]:
+                print(f"{C.AMBER}  ⚠️  依赖修正：{w}{C.RESET}")
+            warned = len(plan.warnings)
+
+        flush_warnings()
+
         if not plan.subtasks:
             print(f"{C.RED}  ❌  规划器未生成任何子任务{C.RESET}")
             return
@@ -227,6 +238,7 @@ class MultiAppAgent:
 
             # ── 重规划 ─────────────────────────
             task_done, summary = self.planner.replan(plan, current)
+            flush_warnings()
 
             # 收集重规划变化并推送
             pending_goals = {
