@@ -64,11 +64,12 @@ def _prop(name: str) -> str:
 
 
 def _installed(pkg: str):
-    """True/False；adb 不可用时返回 None（无法判断）"""
+    """True/False；adb 不可用或设备离线时返回 None（无法判断）"""
     rc, out = adb(["shell", "pm", "list", "packages", pkg])
-    if rc is None:
+    if rc is None or rc != 0:
         return None
-    return f"package:{pkg}" in out
+    # 精确匹配整行，避免 "com.foo" 命中 "com.foobar"
+    return any(line.strip() == f"package:{pkg}" for line in out.splitlines())
 
 
 def reset_device(apps: list[str]) -> dict:
@@ -77,6 +78,11 @@ def reset_device(apps: list[str]) -> dict:
     返回真实执行结果；无法自动清除应用内草稿/聊天记录。
     """
     result = {"home": False, "stopped": [], "failed": [], "not_mapped": [], "not_installed": []}
+    state_rc, state = adb(["get-state"])
+    if state_rc != 0 or state != "device":
+        result["failed"].append({"reason": f"device not ready: {state or 'adb unavailable'}"})
+        return result
+
     rc, _ = adb(["shell", "input", "keyevent", "3"])
     result["home"] = rc == 0
     for app in apps:
@@ -98,7 +104,7 @@ def reset_device(apps: list[str]) -> dict:
                 result["not_installed"].append(pkg)
 
         if unknown:
-            result["failed"].append({"app": app, "reason": "adb unavailable"})
+            result["failed"].append({"app": app, "reason": "device unavailable"})
             continue
         if not installed:
             result["failed"].append({"app": app, "reason": "no candidate installed",
