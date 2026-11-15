@@ -90,6 +90,7 @@ class ScreenAgent:
         self.launcher = AppLauncher(self.phone)
         self.max_steps = max_steps or config.MAX_STEPS
         self.run_dir   = None
+        self.last_status = "idle"   # done / timeout / failed / idle
 
         print(f"视觉模型：{provider_name} / {self.model}")
         print(f"语义模型：{planner_name} / {self.text_model}")
@@ -296,9 +297,17 @@ class ScreenAgent:
     #  观察（保持原样，不改动）
     # ══════════════════════════════════════════════════════════
 
+    def _clear_observe_shot(self):
+        """删除上一轮的观察截图，避免截图/模型失败后旧图被当作当前屏幕"""
+        try:
+            os.remove("screen_observe.png")
+        except FileNotFoundError:
+            pass
+
     def _observe(self, last_action: dict, memory: TaskMemory) -> str:
         """执行动作后截图，VL 模型描述结果（原始输出，不做额外处理）"""
         time.sleep(1)
+        self._clear_observe_shot()   # 先删旧图：截图失败时不会留下过期画面
         self.phone.screenshot("screen_observe.png")
         with open("screen_observe.png", "rb") as f:
             image_b64 = base64.b64encode(f.read()).decode("utf-8")
@@ -482,6 +491,7 @@ class ScreenAgent:
                 finished, done, summary = self._execute_step(step, memory)
             except Exception as e:
                 # 单步重试次数用尽：落状态后交给上层（Web 端会推 error 事件）
+                self.last_status = "failed"
                 ui_state.set_status("error", f"第 {step} 步失败：{e}")
                 raise
 
@@ -492,6 +502,7 @@ class ScreenAgent:
                 print(memory.summary())
                 self._save_log(memory)
                 ui_state.set_status("finished", summary)
+                self.last_status = "done"
                 return
 
             print(f"└{'─'*42}")
@@ -499,6 +510,8 @@ class ScreenAgent:
 
         print(f"\n⚠️  已达最大步数 {self.max_steps} 步")
         self._save_log(memory)
+        # 超步数不等于完成：实验统计必须能区分
+        self.last_status = "timeout"
         ui_state.set_status("finished", f"达到最大步数 {self.max_steps}")
 
     def _execute_step(self, step: int, memory: TaskMemory):
@@ -519,6 +532,8 @@ class ScreenAgent:
                 observation = self._observe(action, memory)
             except Exception as e:
                 observation = f"观察失败（动作已执行，未重试）：{e}"
+                # 旧截图必须作废，否则完成检测/下一步会把上一步画面当成当前屏幕
+                self._clear_observe_shot()
                 print(f"│  ⚠️  {observation}")
         print(f"│  👁   {observation}")
         ui_state.update_observation(observation)

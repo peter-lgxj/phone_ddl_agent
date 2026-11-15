@@ -69,12 +69,14 @@ class SubTaskScreenAgent(ScreenAgent):
                 finished, done, summary = self._execute_step(step, memory)
             except Exception as e:
                 self.last_summary = f"第 {step} 步失败：{e}"
+                self.last_status = "failed"
                 raise
             print(f"{C.DIM}  └{'─'*40}{C.RESET}")
 
             if finished or done:
                 summary = summary or "子任务完成"
                 self.last_summary = summary
+                self.last_status = "done"
                 memory.save(path=f"task_log_sub{len(memory.steps)}.json")
                 memory.save(path=str(self.run_dir / "task_log.json"))
                 return summary
@@ -83,6 +85,8 @@ class SubTaskScreenAgent(ScreenAgent):
 
         summary = f"达到最大步数，最后状态：{memory.get_last_observation()}"
         self.last_summary = summary
+        # 超步数不算完成，交给上层标记 failed/timeout
+        self.last_status = "timeout"
         memory.save(path=f"task_log_sub{len(memory.steps)}.json")
         memory.save(path=str(self.run_dir / "task_log.json"))
         return summary
@@ -193,8 +197,12 @@ class MultiAppAgent:
             try:
                 result = self.exec_agent.run(exec_goal)
                 current.result = result
-                current.status = "done"
-                print(f"\n{C.GREEN}  ✅  子任务 [{current.index}] 完成{C.RESET}")
+                # 只有真正完成才标 done；超步数为 timeout，异常为 failed
+                current.status = getattr(self.exec_agent, "last_status", "done")
+                if current.status == "done":
+                    print(f"\n{C.GREEN}  ✅  子任务 [{current.index}] 完成{C.RESET}")
+                else:
+                    print(f"\n{C.AMBER}  ⚠️  子任务 [{current.index}] 未完成（{current.status}）{C.RESET}")
                 print(f"{C.GREEN}     {result}{C.RESET}")
             except Exception as e:
                 current.result = f"执行出错：{e}"
@@ -246,6 +254,12 @@ class MultiAppAgent:
         print(f"{C.CYAN}{'═'*56}{C.RESET}")
         print(plan.summary())
         self._save_log(plan)
+
+        # test.md：任一子任务失败/超步数即整体失败，不能让 runner 记成正常结束
+        unfinished = [t for t in plan.subtasks if t.status in ("failed", "timeout")]
+        if unfinished:
+            detail = "；".join(f"[{t.index}] {t.goal} -> {t.status}" for t in unfinished)
+            raise RuntimeError(f"{len(unfinished)} 个子任务未完成：{detail}")
 
 
 # ══════════════════════════════════════════════
