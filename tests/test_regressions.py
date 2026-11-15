@@ -38,6 +38,17 @@ def make_agent(monkeypatch, tmp_path, decide, execute, observe):
     return agent
 
 
+def test_make_run_dir_does_not_overwrite_same_second_run(monkeypatch, tmp_path):
+    """同一秒内重复启动时，证据目录必须唯一，不能覆盖上一次的截图"""
+    monkeypatch.setattr(config, "ARTIFACT_DIR", str(tmp_path))
+
+    first = screen_agent.make_run_dir("20260101-000000")
+    second = screen_agent.make_run_dir("20260101-000000")
+
+    assert first != second
+    assert first.is_dir() and second.is_dir()
+
+
 def test_observe_failure_does_not_replay_action(monkeypatch, tmp_path):
     """动作执行后观察失败，不能重新执行动作（否则微信会重复发消息）"""
     state = {"execute": 0, "observe": 0}

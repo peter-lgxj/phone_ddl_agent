@@ -31,11 +31,13 @@ class SubTask:
         self.context_needed = context_needed   # 需要从前序任务带入的信息（由重规划填充）
         self.status         = "pending"
         self.result         = ""
+        self.run_dir        = ""   # 本次子任务的证据目录（由 MultiAppAgent 执行后回填）
 
     def to_dict(self):
         return {"index": self.index, "goal": self.goal, "app": self.app,
                 "context_needed": self.context_needed,
-                "status": self.status, "result": self.result}
+                "status": self.status, "result": self.result,
+                "run_dir": self.run_dir}
 
     def __repr__(self):
         return f"[{self.index}]({self.app}) {self.goal} <{self.status}>"

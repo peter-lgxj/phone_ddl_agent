@@ -3,6 +3,7 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import metrics
 import run_experiment as rwe
@@ -82,3 +83,15 @@ def test_baseline_command_falls_back_when_unset(monkeypatch):
     monkeypatch.delenv("OPEN_AUTOGLM_CMD", raising=False)
 
     assert command_from_env("OPEN_AUTOGLM_CMD", ["fallback"], "任务") == ["fallback"]
+
+
+def test_collect_run_dirs_keeps_every_subtask():
+    """多应用模式 results.jsonl 要能追到每个子任务的证据目录"""
+    agent = SimpleNamespace(sub_run_dirs=["runs/1_sub1", "runs/1_sub2"])
+
+    assert rwe.collect_run_dirs(agent) == ["runs/1_sub1", "runs/1_sub2"]
+
+
+def test_collect_run_dirs_single_task_falls_back_to_run_dir():
+    assert rwe.collect_run_dirs(SimpleNamespace(run_dir="runs/1")) == ["runs/1"]
+    assert rwe.collect_run_dirs(SimpleNamespace(run_dir=None)) == []

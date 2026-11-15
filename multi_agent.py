@@ -14,7 +14,8 @@ import time
 import subprocess
 
 from task_planner import TaskPlanner, TaskPlan, SubTask, build_exec_goal, unfinished_subtasks
-from screen_agent import ScreenAgent
+from screen_agent import ScreenAgent, make_run_dir
+from device_lock import device_lock
 from memory import TaskMemory
 import config
 
@@ -49,16 +50,13 @@ class SubTaskScreenAgent(ScreenAgent):
 
     def run(self, task: str) -> str:
         """执行单个子任务，返回结果摘要（共用基类的重试与证据归档）"""
-        from pathlib import Path
-
         memory = TaskMemory(task)
         self.last_memory = memory   # 供实验脚本统计实际步数
 
         # 每个子任务单独一个证据目录，避免多次执行互相覆盖
         self._sub_index += 1
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        self.run_dir = Path(config.ARTIFACT_DIR) / f"{stamp}_sub{self._sub_index}"
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.run_dir = make_run_dir(f"{stamp}_sub{self._sub_index}")
 
         import ui_state
         ui_state.init_state(task)
@@ -112,6 +110,7 @@ class MultiAppAgent:
         self.log_path   = "multi_task_log.json"
         self.total_steps = 0   # 本次多应用任务累计执行的子任务步数
         self.last_status = "idle"   # done / failed / timeout，供 runner 判负
+        self.sub_run_dirs: list[str] = []   # 每个子任务的证据目录，供实验 runner 落盘
 
     def _emit(self, event: str, data: dict):
         try:
@@ -135,6 +134,9 @@ class MultiAppAgent:
         print(f"{C.DIM}📄  多任务日志已保存：{self.log_path}{C.RESET}")
 
     def run(self, task: str):
+        # 每次任务重新收集子任务证据目录，避免同一 agent 复用时串到上一次
+        self.sub_run_dirs = []
+
         print(f"\n{C.CYAN}{C.BOLD}{'═'*56}{C.RESET}")
         print(f"{C.CYAN}{C.BOLD}  🚀  多应用任务启动{C.RESET}")
         print(f"{C.CYAN}  📝  {task}{C.RESET}")
@@ -228,6 +230,12 @@ class MultiAppAgent:
                 # 无论成功失败都累计步数，供实验统计
                 memory = getattr(self.exec_agent, "last_memory", None)
                 self.total_steps += len(memory.steps) if memory else 0
+                # 记录本子任务的证据目录：每个子任务都能在 runs/ 下定位到
+                sub_dir = getattr(self.exec_agent, "run_dir", None)
+                if sub_dir:
+                    current.run_dir = str(sub_dir)
+                    if str(sub_dir) not in self.sub_run_dirs:
+                        self.sub_run_dirs.append(str(sub_dir))
 
             # 推送子任务结果
             self._emit('subtask_done', {
@@ -293,5 +301,11 @@ if __name__ == "__main__":
     _sep()
     task = input(f"{C.BOLD}请输入任务：{C.RESET}").strip()
     if task:
-        agent = MultiAppAgent()
-        agent.run(task)
+        # 与 run.py / app.py / frontend.py / 实验 runner 共用 runs/.device.lock；
+        # with 退出时（含异常）由 device_lock 的 finally 释放，不会留下死锁
+        with device_lock(timeout=60) as locked:
+            if not locked:
+                print(f"{C.RED}设备正被其它任务占用（另一个 Web/CLI/实验任务在运行），请稍后重试{C.RESET}")
+                raise SystemExit(1)
+            agent = MultiAppAgent()
+            agent.run(task)

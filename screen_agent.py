@@ -39,6 +39,21 @@ def _require_api_key(provider_name: str, provider: dict, role: str):
     )
 
 
+def make_run_dir(name: str) -> Path:
+    """为一次执行创建唯一证据目录。
+
+    同一秒内启动多次（重跑 / 多子任务）时追加序号，避免已有证据被覆盖。
+    """
+    base = Path(config.ARTIFACT_DIR)
+    path = base / name
+    suffix = 1
+    while path.exists():
+        path = base / f"{name}_{suffix}"
+        suffix += 1
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 class ScreenAgent:
 
     ACTIONS = """
@@ -483,8 +498,7 @@ class ScreenAgent:
         # 每次运行一个独立目录，逐步截图 + 动作/观察 JSON 全量留证，
         # 便于事后定位失败步骤和论文里的典型案例分析
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        self.run_dir = Path(config.ARTIFACT_DIR) / stamp
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.run_dir = make_run_dir(stamp)
 
         print(f"\n{'='*52}")
         print(f"  🎯  任务：{task}")

@@ -193,12 +193,21 @@ def collect_steps(agent) -> int | None:
 
 
 def collect_run_dir(agent) -> str:
-    """单任务取 agent.run_dir，多应用取最后一次子任务的目录"""
+    """单任务取 agent.run_dir，多应用取最后一次子任务的目录（完整列表见 collect_run_dirs）"""
     path = getattr(agent, "run_dir", None)
     if path is None:
         exec_agent = getattr(agent, "exec_agent", None)
         path = getattr(exec_agent, "run_dir", None)
     return str(path) if path else ""
+
+
+def collect_run_dirs(agent) -> list[str]:
+    """逐子任务证据目录：多应用返回每个子任务的目录，单任务返回唯一目录"""
+    dirs = getattr(agent, "sub_run_dirs", None)
+    if dirs:
+        return list(dirs)
+    path = collect_run_dir(agent)
+    return [path] if path else []
 
 
 def main() -> int:
@@ -319,6 +328,7 @@ def main() -> int:
                     "steps": None,
                     "elapsed": None,
                     "run_dir": "",
+                    "run_dirs": [],          # 多应用模式下每个子任务一个证据目录
                     "reset": None,
                 }
                 print(f"\n=== {t['id']} 第 {attempt}/{repeat} 次：{t['task']}")
@@ -369,6 +379,7 @@ def main() -> int:
                             record["elapsed"] = round(time.time() - started, 1)
                         record["steps"] = collect_steps(agent) if agent else record.get("steps")
                         record["run_dir"] = collect_run_dir(agent) if agent else ""
+                        record["run_dirs"] = collect_run_dirs(agent) if agent else []
                         record["agent_status"] = getattr(agent, "last_status", None) if agent else None
                         if record["agent_status"] == "timeout":
                             record["success"] = False

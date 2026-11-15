@@ -69,3 +69,47 @@ def test_done_subtask_completes_normally(monkeypatch, tmp_path):
     assert agent.last_status == "done"
     log = json.loads((tmp_path / "multi_log.json").read_text(encoding="utf-8"))
     assert log["subtasks"][0]["status"] == "done"
+
+
+class FakeExecWithDirs(FakeExec):
+    """每次执行产出自己的证据目录，模拟 SubTaskScreenAgent"""
+
+    def __init__(self, status, base):
+        super().__init__(status)
+        self.base = base
+        self.run_dir = None
+        self.calls = 0
+
+    def run(self, goal):
+        self.calls += 1
+        self.run_dir = self.base / f"20260101-000000_sub{self.calls}"
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        return super().run(goal)
+
+
+class TwoTaskPlanner:
+    def plan(self, task):
+        return task_planner.TaskPlan(task, [
+            task_planner.SubTask(1, "打开设置", app="设置"),
+            task_planner.SubTask(2, "打开微信", app="微信"),
+        ])
+
+    def replan(self, plan, current):
+        return all(t.status == "done" for t in plan.subtasks), "完成"
+
+
+def test_every_subtask_has_traceable_run_dir(monkeypatch, tmp_path):
+    """多应用模式下每个子任务都要留下可定位的证据目录，而不是只有最后一个"""
+    monkeypatch.chdir(tmp_path)
+    agent = make_agent(tmp_path, "done")
+    agent.exec_agent = FakeExecWithDirs("done", tmp_path)
+    agent.planner = TwoTaskPlanner()
+
+    agent.run("打开设置再看微信")
+
+    assert agent.last_status == "done"
+    assert len(agent.sub_run_dirs) == 2
+    assert agent.sub_run_dirs == [str(tmp_path / "20260101-000000_sub1"),
+                                  str(tmp_path / "20260101-000000_sub2")]
+    log = json.loads((tmp_path / "multi_log.json").read_text(encoding="utf-8"))
+    assert [st["run_dir"] for st in log["subtasks"]] == agent.sub_run_dirs
