@@ -70,7 +70,12 @@ def group_by_task(records):
     return grouped
 
 
-def summarize(grouped, level=None):
+def summarize(grouped, level=None, at_mode="all"):
+    """at_mode 控制 AT 口径：
+      all     各任务全部 attempt 的平均耗时（默认，与旧结果兼容）
+      success 只用判定为成功的 attempt
+      best    每个任务取最快一次
+    """
     tasks = {tid: a for tid, a in grouped.items() if level is None or a[0].get("level") == level}
     judged = {tid: a for tid, a in tasks.items() if all(isinstance(x.get("success"), bool) for x in a)}
     unjudged = sorted(set(tasks) - set(judged))
@@ -101,10 +106,21 @@ def summarize(grouped, level=None):
             se_values.append(theory / (sum(steps) / len(steps)))
     se = sum(se_values) / len(se_values) if se_values else None
 
-    task_means = [
-        sum(x["elapsed"] for x in a if x.get("elapsed") is not None) / len([x for x in a if x.get("elapsed") is not None])
-        for a in tasks.values() if any(x.get("elapsed") is not None for x in a)
-    ]
+    if at_mode == "success":
+        task_means = [
+            sum(x["elapsed"] for x in a if x.get("success") is True and x.get("elapsed") is not None)
+            / len([x for x in a if x.get("success") is True and x.get("elapsed") is not None])
+            for a in tasks.values()
+            if any(x.get("success") is True and x.get("elapsed") is not None for x in a)
+        ]
+    elif at_mode == "best":
+        task_means = [min(x["elapsed"] for x in a if x.get("elapsed") is not None)
+                      for a in tasks.values() if any(x.get("elapsed") is not None for x in a)]
+    else:
+        task_means = [
+            sum(x["elapsed"] for x in a if x.get("elapsed") is not None) / len([x for x in a if x.get("elapsed") is not None])
+            for a in tasks.values() if any(x.get("elapsed") is not None for x in a)
+        ]
     at = sum(task_means) / len(task_means) if task_means else None
 
     timed = [x for a in tasks.values() for x in a if x.get("elapsed") is not None and x.get("steps")]
@@ -123,16 +139,21 @@ def fmt(value, unit="%"):
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        raise SystemExit("用法：python experiments/metrics.py experiments/results/<run_dir>")
-    run_dir = Path(sys.argv[1])
+    import argparse
+
+    ap = argparse.ArgumentParser(description="聚合 results.jsonl 的实验指标")
+    ap.add_argument("run_dir")
+    ap.add_argument("--at-mode", choices=["all", "success", "best"], default="all",
+                    help="AT 口径：all=全部尝试均值，success=仅成功尝试，best=每任务最快一次")
+    args = ap.parse_args()
+    run_dir = Path(args.run_dir)
     records, judgement = load_records(run_dir)
     grouped = group_by_task(resolve_success(records, judgement))
 
-    print(f"结果目录：{run_dir}")
+    print(f"结果目录：{run_dir}（AT 口径：{args.at_mode}）")
     print(f"{'范围':<10}{'任务数':>6}{'已判定':>8}{'TSR':>9}{'多AppTSR':>10}{'SE':>8}{'AT(s)':>9}{'ST(s/步)':>10}{'CS':>8}")
     for label, level in [("总体", None), ("Level1", 1), ("Level2", 2), ("Level3", 3)]:
-        s = summarize(grouped, level)
+        s = summarize(grouped, level, args.at_mode)
         if not s["tasks"]:
             continue
         print(f"{label:<10}{s['tasks']:>6}{s['judged']:>8}"
@@ -144,7 +165,7 @@ def main() -> int:
         print(f"\n⚠️  以下任务尚未人工判定，未计入 TSR/CS/SE：{', '.join(pending)}")
         print("   可编辑 results.jsonl 的 success 字段，或在同目录写 judgement.json。")
 
-    overall = summarize(grouped)
+    overall = summarize(grouped, None, args.at_mode)
     if overall["judged"] and overall["CS"] is None:
         print(f"\n⚠️  CS 未计算：{len(overall['CS_pending'])}/{overall['judged']} 个已判定任务是任务级布尔，"
               f"CS 覆盖率仅 {overall['CS_coverage'] * 100:.0f}%。")

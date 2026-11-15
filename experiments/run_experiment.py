@@ -23,6 +23,7 @@ manifest.json 记录 git SHA、模型全名、温度、任务集哈希与设备�
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -49,10 +50,27 @@ PACKAGE_BY_APP = {
 }
 
 
+def filter_failed(tasks: list[dict], results_path: str) -> list[dict]:
+    """从已有 results.jsonl 中挑出失败/超时/崩溃的任务，用于失败重放"""
+    failed = set()
+    path = Path(results_path)
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if (record.get("success") is False
+                or record.get("status") == "error"
+                or record.get("agent_status") == "timeout"):
+            failed.add(record.get("task_id"))
+    return [t for t in tasks if t["id"] in failed]
+
+
 def adb(args: list[str], timeout: int = 15):
     """返回 (returncode, stdout)。adb 缺失/超时/异常时 returncode 为 None"""
+    serial = os.getenv("ANDROID_SERIAL", "").strip()
+    cmd = ["adb"] + (["-s", serial] if serial else []) + args
     try:
-        proc = subprocess.run(["adb", *args], capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return proc.returncode, (proc.stdout or "").strip()
     except Exception:
         return None, ""
@@ -198,12 +216,26 @@ def main() -> int:
                     help="不在每个任务前 force-stop 应用（默认会尽力还原初始状态）")
     ap.add_argument("--lock-timeout", type=int, default=60,
                     help="等待设备锁的秒数；超时则本次 attempt 记为失败")
+    ap.add_argument("--serial", default="",
+                    help="多设备时指定 adb serial（等价于设置 ANDROID_SERIAL）")
+    ap.add_argument("--only-failed", default="",
+                    help="只重放该 results.jsonl 中失败/超时/崩溃的任务（失败重放）")
     ap.add_argument("--dry-run", action="store_true", help="只打印任务集，不导入执行器")
     args = ap.parse_args()
 
     task_file = Path(args.tasks)
     data = json.loads(task_file.read_text(encoding="utf-8"))
     tasks = load_tasks(task_file)
+    if args.serial:
+        os.environ["ANDROID_SERIAL"] = args.serial
+        print(f"设备：{args.serial}（ANDROID_SERIAL 已设置）")
+    if args.only_failed:
+        before = len(tasks)
+        tasks = filter_failed(tasks, args.only_failed)
+        print(f"失败重放：{args.only_failed} → 从 {before} 个任务中挑出 {len(tasks)} 个")
+        if not tasks:
+            print("没有需要重放的任务")
+            return 0
     repeat = args.repeat or (data.get("default_repeat", 3) if isinstance(data, dict) else 3)
     repeat_by_level = data.get("repeat_by_level", {}) if isinstance(data, dict) else {}
 
