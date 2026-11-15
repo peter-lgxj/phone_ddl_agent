@@ -4,9 +4,14 @@ from __future__ import annotations
 run_experiment.py — 按任务集重复执行并落盘 results.jsonl
 
 需要连接手机并配置模型密钥；本脚本只负责采集，不判定任务成功与否。
+每个任务前默认回桌面并 force-stop 本任务涉及的已知应用（--no-reset 关闭）。
+manifest.json 记录 git SHA、模型全名、温度、任务集哈希与设备信息。
+
 人工判定方式（二选一）：
   1. 执行后编辑 results.jsonl 的 "success" 字段（true/false）
-  2. 在同目录写 judgement.json：{"T01": true, "T09": false}
+  2. 在同目录写 judgement.json：
+     {"T01": true}                    任务级，只能算 TSR
+     {"T01": [true, false, true]}     逐次判定，才能算 CS
 
 用法：
   python experiments/run_experiment.py --tasks experiments/tasks.json --repeat 3 --mode single
@@ -16,7 +21,9 @@ run_experiment.py — 按任务集重复执行并落盘 results.jsonl
 """
 
 import argparse
+import hashlib
 import json
+import subprocess
 import sys
 import time
 import traceback
@@ -24,6 +31,58 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+# 已知 App 的包名，用于每个任务前 force-stop 还原初始状态
+PACKAGE_BY_APP = {
+    "微信": "com.tencent.mm",
+    "设置": "com.android.settings",
+    "高德地图": "com.autonavi.minimap",
+    "淘宝": "com.taobao.taobao",
+    "美团": "com.sankuai.meituan",
+    "网易云音乐": "com.netease.cloudmusic",
+    "京东": "com.jingdong.app.mall",
+    "大众点评": "com.dianping.v1",
+}
+
+
+def adb(args: list[str], timeout: int = 15) -> str:
+    """调用 adb，失败返回空串（不影响实验流程，但会在 manifest 里留下空值）"""
+    try:
+        return subprocess.run(["adb", *args], capture_output=True, text=True,
+                              timeout=timeout).stdout.strip()
+    except Exception:
+        return ""
+
+
+def reset_device(apps: list[str]) -> list[str]:
+    """按 test.md 还原初始状态：回桌面 + force-stop 本任务涉及的应用。
+
+    只做尽力而为的重置（不清理草稿/历史），失败不阻塞实验。
+    """
+    adb(["shell", "input", "keyevent", "3"])
+    stopped = []
+    for app in apps:
+        pkg = PACKAGE_BY_APP.get(app)
+        if pkg:
+            adb(["shell", "am", "force-stop", pkg])
+            stopped.append(pkg)
+    return stopped
+
+
+def device_info() -> dict:
+    return {
+        "model": adb(["shell", "getprop", "ro.product.model"]),
+        "android": adb(["shell", "getprop", "ro.build.version.release"]),
+        "resolution": adb(["shell", "wm", "size"]),
+    }
+
+
+def git_sha() -> str:
+    try:
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ROOT),
+                              capture_output=True, text=True, timeout=15).stdout.strip()
+    except Exception:
+        return ""
 
 
 def load_tasks(path: Path):
@@ -65,6 +124,8 @@ def main() -> int:
     ap.add_argument("--baseline", default="", help="baseline 名称；提供时忽略 --mode，走子进程适配器")
     ap.add_argument("--baseline-command", default="", help="baseline 执行命令，从 stdin 读任务 JSON")
     ap.add_argument("--out", default=str(ROOT / "experiments" / "results"))
+    ap.add_argument("--no-reset", action="store_true",
+                    help="不在每个任务前 force-stop 应用（默认会尽力还原初始状态）")
     ap.add_argument("--dry-run", action="store_true", help="只打印任务集，不导入执行器")
     args = ap.parse_args()
 
@@ -118,10 +179,18 @@ def main() -> int:
         "repeat": repeat,
         "repeat_by_level": repeat_by_level,
         "max_steps": config.MAX_STEPS,
+        "step_retries": config.STEP_RETRIES,
+        "temperature": config.LLM_TEMPERATURE,
         "semantic_analysis": config.ENABLE_SEMANTIC_ANALYSIS,
         "active_provider": config.ACTIVE_PROVIDER,
+        "exec_model": config.PROVIDERS[config.ACTIVE_PROVIDER]["model"],
         "planner_provider": config.PLANNER_PROVIDER,
+        "planner_model": config.PROVIDERS[config.PLANNER_PROVIDER]["model"],
         "task_file": str(task_file),
+        "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
+        "git_sha": git_sha(),
+        "device": device_info(),
+        "reset_before_task": not args.no_reset,
         "tag": args.tag,
     }
     (out_dir / "manifest.json").write_text(
@@ -144,8 +213,11 @@ def main() -> int:
                     "steps": None,
                     "elapsed": None,
                     "run_dir": "",
+                    "reset_apps": [],
                 }
                 print(f"\n=== {t['id']} 第 {attempt}/{repeat} 次：{t['task']}")
+                if not args.no_reset:
+                    record["reset_apps"] = reset_device(t.get("apps", []))
                 started = time.time()
                 agent = None
                 try:
