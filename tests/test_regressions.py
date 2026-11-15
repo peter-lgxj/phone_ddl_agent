@@ -79,6 +79,29 @@ def test_observe_failure_invalidates_stale_screenshot(monkeypatch, tmp_path):
     assert not stale.exists()
 
 
+def test_completion_check_skipped_without_valid_observe(monkeypatch, tmp_path):
+    """删旧图失败或观察失败时，_observe_valid=False，不能拿旧图判定完成"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "screen_observe.png").write_bytes(b"stale")
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent._observe_valid = False
+
+    assert agent._check_task_done(TaskMemory("测试")) is False
+
+
+def test_finish_without_summary_does_not_duplicate_wording(monkeypatch, tmp_path):
+    agent = make_agent(
+        monkeypatch, tmp_path,
+        lambda m: {"action_type": "finish", "description": "结束"},
+        lambda a: True,
+        lambda a, m: "不应被调用",
+    )
+
+    _, _, summary = agent._execute_step(1, TaskMemory("测试"))
+
+    assert summary == "模型未提供 finish 摘要"
+
+
 def test_decision_retry_still_happens_before_action(monkeypatch, tmp_path):
     """决策阶段（无副作用）仍应重试，重试成功后动作只执行一次"""
     state = {"decide": 0, "execute": 0}

@@ -91,6 +91,7 @@ class ScreenAgent:
         self.max_steps = max_steps or config.MAX_STEPS
         self.run_dir   = None
         self.last_status = "idle"   # done / timeout / failed / idle
+        self._observe_valid = False  # 当前 screen_observe.png 是否是本步真实截图
 
         print(f"视觉模型：{provider_name} / {self.model}")
         print(f"语义模型：{planner_name} / {self.text_model}")
@@ -244,7 +245,7 @@ class ScreenAgent:
             current_b64 = base64.b64encode(f.read()).decode("utf-8")
 
         # 上一轮 observe 截图（provider 支持多图时才一起发送）
-        has_prev = self.support_multi_image and len(memory.steps) > 0
+        has_prev = self.support_multi_image and len(memory.steps) > 0 and self._observe_valid
         content = []
         if has_prev:
             try:
@@ -423,6 +424,9 @@ class ScreenAgent:
     # ══════════════════════════════════════════════════════════
 
     def _check_task_done(self, memory: TaskMemory) -> bool:
+        # 没有本步有效截图时不判定完成（旧图/删图失败都会导致误判）
+        if not self._observe_valid:
+            return False
         with open("screen_observe.png", "rb") as f:
             image_b64 = base64.b64encode(f.read()).decode("utf-8")
 
@@ -526,6 +530,8 @@ class ScreenAgent:
         action = self._decide(step, memory)
 
         # 动作只执行一次，不随观察/完成检测失败而重放
+        # 动作执行后旧截图作废，观察成功才重新有效
+        self._observe_valid = False
         finished = self._execute(action)
 
         if finished:
@@ -533,6 +539,7 @@ class ScreenAgent:
         else:
             try:
                 observation = self._observe(action, memory)
+                self._observe_valid = True
             except Exception as e:
                 observation = f"观察失败（动作已执行，未重试）：{e}"
                 # 旧截图必须作废，否则完成检测/下一步会把上一步画面当成当前屏幕
@@ -559,7 +566,8 @@ class ScreenAgent:
         if action.get("summary"):
             summary = action["summary"]
         elif finished:
-            summary = f"任务完成：{observation}"
+            # finish 动作没有观察，别把"任务完成"再拼一遍
+            summary = "模型未提供 finish 摘要"
         elif done:
             # 保留最后观察，context_needed / 重规划要靠它传递跨 App 信息
             summary = f"任务已完成：{memory.get_last_observation()}"
