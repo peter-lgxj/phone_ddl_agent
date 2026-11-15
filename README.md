@@ -93,7 +93,9 @@ python experiments/run_experiment.py --tasks experiments/tasks.json --no-semanti
 python experiments/run_experiment.py --tasks experiments/tasks.json --repeat 3
 ```
 
-结果默认写到 `experiments/results/`（已在 `.gitignore` 中）；判定为"成功/失败"仍需人工复核，脚本只负责采集和聚合。每任务的原始执行证据在 `runs/<时间戳>/`。
+结果默认写到 `experiments/results/`（已在 `.gitignore` 中）。runner 会在每个任务前回桌面并 force-stop 本任务涉及的已知应用（`--no-reset` 可关闭），`manifest.json` 记录 git SHA、执行/规划模型全名、温度、任务集哈希与设备信息。
+
+任务成功与否仍需人工判定：可写 `results.jsonl` 的 `success` 字段，或同目录 `judgement.json`。注意任务级布尔 `{"T01": true}` 只能算 TSR，要算 CS 必须逐次判定 `{"T01": [true, false, true]}`。每任务的原始执行证据在 `runs/<时间戳>/`。
 
 CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
 
