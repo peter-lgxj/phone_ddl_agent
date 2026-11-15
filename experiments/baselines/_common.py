@@ -31,16 +31,24 @@ def command_from_env(env_name: str, default: list[str], task: str) -> list[str]:
     return shlex.split(raw, posix=(os.name != "nt"))
 
 
-def read_task() -> str:
+def read_request() -> dict:
+    """读 stdin 的一行 JSON，返回完整请求（task 必填，apps 可选）"""
     line = sys.stdin.readline()
     try:
         payload = json.loads(line) if line.strip() else {}
     except json.JSONDecodeError as e:
         fail(f"stdin 不是合法 JSON：{e}")
+    if not isinstance(payload, dict):
+        fail("stdin JSON 必须是对象")
     task = str(payload.get("task", "")).strip()
     if not task:
         fail("stdin 缺少 task 字段")
-    return task
+    payload["task"] = task
+    return payload
+
+
+def read_task() -> str:
+    return str(read_request()["task"]).strip()
 
 
 def baseline_dir(env_name: str) -> str:
@@ -53,11 +61,18 @@ def baseline_dir(env_name: str) -> str:
 
 
 def run_and_report(name: str, cmd: list[str], cwd: str,
-                   step_marker: str = "[step]", timeout: int = 900) -> int:
+                   step_marker: str | list[str] = "[step]", timeout: int = 900,
+                   stdin_text: str | None = None, status_fn=None) -> int:
+    """执行上游命令并按协议输出 JSON。
+
+    step_marker 可以是多个候选（不同上游的步骤日志格式不同）。
+    stdin_text 用于需要交互式输入的上游（如 AppAgent 的文档选择 + 任务描述）。
+    status_fn(output) 返回额外字段（如 upstream_status），不参与 success 判定。
+    """
     started = time.time()
     try:
         proc = subprocess.run(
-            cmd, cwd=cwd, capture_output=True, text=True,
+            cmd, cwd=cwd, input=stdin_text, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout,
         )
     except FileNotFoundError as e:
@@ -67,14 +82,19 @@ def run_and_report(name: str, cmd: list[str], cwd: str,
 
     # 两个流都要保留，否则上游把错误写到 stderr 时会丢诊断信息
     output = "\n".join(part.strip() for part in (proc.stdout, proc.stderr) if part and part.strip())
-    steps = sum(1 for line in (proc.stdout or "").splitlines() if step_marker in line)
+    markers = [step_marker] if isinstance(step_marker, str) else list(step_marker)
+    steps = sum(1 for line in (proc.stdout or "").splitlines()
+                if any(m and m in line for m in markers))
 
-    print(json.dumps({
+    payload = {
         "summary": output[-500:],
         "steps": steps or None,
         "elapsed": round(time.time() - started, 1),
         "returncode": proc.returncode,
         "command": cmd,
-    }, ensure_ascii=False))
+    }
+    if status_fn is not None:
+        payload.update(status_fn(output) or {})
+    print(json.dumps(payload, ensure_ascii=False))
     # 透传退出码：上游崩溃必须让 SubprocessAdapter 判为失败，而不是记为正常结束
     return proc.returncode

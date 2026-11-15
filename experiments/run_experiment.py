@@ -352,7 +352,7 @@ def main() -> int:
                                 print(f"⚠️  重置未完全成功：home={res['home']} failed={res['failed']} "
                                       f"not_mapped={res['not_mapped']} not_installed={len(res['not_installed'])}")
                         if adapter is not None:
-                            result = adapter.run(t["task"])
+                            result = adapter.run(t["task"], t.get("apps", []))
                             record.update({
                                 "status": "finished",
                                 "mode": f"baseline:{args.baseline}",

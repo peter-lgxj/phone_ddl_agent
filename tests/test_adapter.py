@@ -1,5 +1,6 @@
 """baseline 子进程适配协议的单元测试（不依赖任何真实 baseline）。"""
 
+import json
 import sys
 
 import pytest
@@ -14,6 +15,13 @@ def test_adapter_parses_last_json_line():
     assert result.summary == "ok"
     assert result.steps == 7
     assert result.elapsed == 1.5
+
+
+def test_adapter_passes_apps_to_upstream():
+    cmd = [sys.executable, "-c",
+           "import json,sys; d=json.load(sys.stdin); print(json.dumps({'summary': json.dumps(d, ensure_ascii=False)}))"]
+    result = SubprocessAdapter("fake", cmd).run("打开微信", ["微信"])
+    assert json.loads(result.summary)["apps"] == ["微信"]
 
 
 def test_adapter_raises_on_non_zero_exit():

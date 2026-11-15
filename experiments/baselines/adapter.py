@@ -54,11 +54,11 @@ class SubprocessAdapter(BaselineAdapter):
         self.timeout = timeout
         self.env = env
 
-    def run(self, task: str) -> BaselineResult:
+    def run(self, task: str, apps: list[str] | None = None) -> BaselineResult:
         started = time.time()
         proc = subprocess.run(
             self.command,
-            input=json.dumps({"task": task}, ensure_ascii=False),
+            input=json.dumps({"task": task, "apps": apps or []}, ensure_ascii=False),
             capture_output=True,
             text=True,
             encoding="utf-8",
