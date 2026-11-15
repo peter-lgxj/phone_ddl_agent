@@ -81,11 +81,15 @@ def summarize(grouped, level=None):
     multi = {tid: a for tid, a in judged.items() if len(a[0].get("apps") or []) >= 2}
     multi_tsr = (sum(1 for a in multi.values() if any(x["success"] for x in a)) / len(multi) * 100) if multi else None
 
-    # 只有逐次判定的任务才能算 CS；任务级布尔会把 CS 抬成 TSR
-    cs_tasks = {tid: a for tid, a in judged.items()
-                if all(x.get("judgement_scope") == "attempt" for x in a)}
-    stable = sum(1 for a in cs_tasks.values() if all(x["success"] for x in a))
-    cs = stable / len(cs_tasks) * 100 if cs_tasks else None
+    # CS 必须覆盖全部已判定任务；只要有任务用了任务级布尔，分母就会缩水，直接拒绝计算
+    cs_pending = sorted(tid for tid, a in judged.items()
+                        if any(x.get("judgement_scope") != "attempt" for x in a))
+    cs_coverage = (len(judged) - len(cs_pending)) / len(judged) if judged else None
+    if judged and not cs_pending:
+        stable = sum(1 for a in judged.values() if all(x["success"] for x in a))
+        cs = stable / len(judged) * 100
+    else:
+        cs = None
 
     se_values = []
     for a in judged.values():
@@ -110,6 +114,7 @@ def summarize(grouped, level=None):
         "tasks": len(tasks), "judged": len(judged), "unjudged": unjudged,
         "TSR": tsr_rate, "MultiAppTSR": multi_tsr, "SE": se,
         "AT": at, "ST": st, "CS": cs,
+        "CS_coverage": cs_coverage, "CS_pending": cs_pending,
     }
 
 
@@ -141,8 +146,10 @@ def main() -> int:
 
     overall = summarize(grouped)
     if overall["judged"] and overall["CS"] is None:
-        print("\n⚠️  CS 未计算：judgement.json 用了任务级布尔，无法区分第几次成功。")
-        print('   需要逐次判定时写成 {"T01": [true, false, true]}（按 attempt 顺序）。')
+        print(f"\n⚠️  CS 未计算：{len(overall['CS_pending'])}/{overall['judged']} 个已判定任务是任务级布尔，"
+              f"CS 覆盖率仅 {overall['CS_coverage'] * 100:.0f}%。")
+        print(f"   需要逐次判定的任务：{', '.join(overall['CS_pending'])}")
+        print('   写成 {"T01": [true, false, true]}（按 attempt 顺序）才能计算 CS。')
     return 0
 
 
