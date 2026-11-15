@@ -1,12 +1,8 @@
-"""动作解析与字段容错测试。
-
-只构造对象、不连接设备：用假 phone 记录调用，验证非法动作被安全跳过。
-缺少 torch/easyocr 的环境会跳过本文件。
-"""
+"""动作解析与字段容错测试（无设备、无重依赖）。"""
 
 import pytest
 
-screen_agent = pytest.importorskip("screen_agent")
+import screen_agent
 
 
 class DummyPhone:

@@ -3,12 +3,10 @@
 import pytest
 
 import config
+import screen_agent
 import task_planner
 import ui_state
 from memory import TaskMemory
-
-# CI 不安装 easyocr/ultralytics，缺少这些依赖时跳过 agent 相关用例
-screen_agent = pytest.importorskip("screen_agent")
 
 
 class DummyPhone:
@@ -64,6 +62,21 @@ def test_observe_failure_does_not_replay_action(monkeypatch, tmp_path):
     assert state["observe"] == 1, "观察不应重试"
     assert "观察失败" in memory.steps[0]["observation"]
     assert summary == ""
+
+
+def test_observe_failure_invalidates_stale_screenshot(monkeypatch, tmp_path):
+    """observe 失败后必须删掉旧截图，否则完成检测/下一步会误用上一步画面"""
+    stale = tmp_path / "screen_observe.png"
+    stale.write_bytes(b"old screenshot")
+
+    def observe(action, memory):
+        raise RuntimeError("截图失败")
+
+    agent = make_agent(monkeypatch, tmp_path, lambda m: {"action_type": "wait", "description": "等待"},
+                       lambda a: False, observe)
+    agent._execute_step(1, TaskMemory("等待页面"))
+
+    assert not stale.exists()
 
 
 def test_decision_retry_still_happens_before_action(monkeypatch, tmp_path):

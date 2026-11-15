@@ -1,10 +1,12 @@
-from ultralytics import YOLO
 from PIL import Image
 import config
 
 
 class InputDetector:
     def __init__(self):
+        # 延迟导入：ultralytics/torch 只在真正加载 YOLO 时才需要
+        from ultralytics import YOLO
+
         self.model = YOLO(config.INPUT_BOX_MODEL)
         print(f"InputDetector 加载：{config.INPUT_BOX_MODEL}")
 

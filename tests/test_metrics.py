@@ -102,3 +102,23 @@ def test_attempt_level_judgement_computes_cs(tmp_path):
 
     assert result["TSR"] == 100.0
     assert result["CS"] == 0.0
+    assert result["CS_coverage"] == 1.0
+
+
+def test_mixed_judgement_refuses_cs(tmp_path):
+    """混合粒度时 CS 分母会缩水，必须拒绝计算而不是给出 100%"""
+    records = [
+        {"task_id": "T01", "level": 1, "apps": ["微信"], "theory_steps": 5,
+         "attempt": i, "success": None, "steps": 5, "elapsed": 10.0} for i in (1, 2, 3)
+    ] + [
+        {"task_id": "T02", "level": 1, "apps": ["设置"], "theory_steps": 4,
+         "attempt": i, "success": None, "steps": 4, "elapsed": 8.0} for i in (1, 2, 3)
+    ]
+    run_dir = write_run(tmp_path, records, judgement={"T01": [True, True, True], "T02": True})
+    records, judgement = metrics.load_records(run_dir)
+    result = metrics.summarize(metrics.group_by_task(metrics.resolve_success(records, judgement)))
+
+    assert result["TSR"] == 100.0
+    assert result["CS"] is None
+    assert result["CS_pending"] == ["T02"]
+    assert result["CS_coverage"] == pytest.approx(0.5)

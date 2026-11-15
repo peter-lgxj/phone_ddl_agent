@@ -5,8 +5,6 @@ import re
 import warnings
 warnings.filterwarnings("ignore")
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-import easyocr
-import uiautomator2 as u2  # 新增导入
 
 class OCRLocator:
     """
@@ -17,6 +15,10 @@ class OCRLocator:
     """
 
     def __init__(self):
+        # 延迟导入：easyocr/torch 体积大，导入本模块时不应强制加载（CI 单测需要）
+        import easyocr
+        import uiautomator2 as u2
+
         self.reader = easyocr.Reader(['ch_sim', 'en'], verbose=False)
         # 初始化 u2 设备连接，默认连接第一个 USB 设备或模拟器
         # 如果需要指定设备，可以使用 u2.connect('serial_number')

@@ -1,4 +1,3 @@
-import uiautomator2 as u2
 import subprocess
 import time
 from PIL import Image
@@ -10,6 +9,9 @@ class PhoneController:
     """手机控制器：基于 uiautomator2，支持中文输入"""
 
     def __init__(self,locator):
+        # 延迟导入：没有 uiautomator2 时本模块仍可被导入（CI 单测需要）
+        import uiautomator2 as u2
+
         # 自动连接 USB 设备
         try:
             self.device = u2.connect()

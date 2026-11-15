@@ -23,7 +23,7 @@ jobs:
         run: python experiments/run_experiment.py --tasks experiments/tasks.json --dry-run
 
       - name: Install test dependencies
-        run: pip install python-dotenv openai "pytest>=8" "ruff>=0.6"
+        run: pip install python-dotenv openai Pillow "pytest>=8" "ruff>=0.6"
 
       - name: Lint (error-level rules only)
         run: ruff check .
