@@ -10,6 +10,7 @@
 ```bash
 python -m ddl_agent.monitor.cli add "监控微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次，最近7天"
 python -m ddl_agent.monitor.cli list
+python -m ddl_agent.monitor.cli edit wechat-21级课程群 --target "22级课程群" --lookback-days 7
 ```
 
 - 支持 `微信` / `QQ` / `Outlook`；Outlook 默认监控收件箱。

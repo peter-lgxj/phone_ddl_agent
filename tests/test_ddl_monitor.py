@@ -26,6 +26,7 @@ from ddl_agent.monitor.config import (
     remove_source,
     save_config,
     set_enabled,
+    update_source,
 )
 from ddl_agent.monitor.cursor import CandidateStore, CursorStore, MessageStore
 from ddl_agent.monitor import launcher
@@ -99,6 +100,22 @@ def test_schedule_parsing_and_rejection():
 # --------------------------------------------------------------------------- #
 # YAML 持久化 / 增删改查
 # --------------------------------------------------------------------------- #
+def test_edit_source_keeps_id_and_updates_kind():
+    config = MonitorConfig(sources=[
+        MonitorSource(id="wechat-a", app="wechat", kind="group", target="A群",
+                      source_type="student_chat"),
+    ])
+    source = update_source(config, "wechat-a", target="B群", app="qq", lookback_days=3)
+    assert source.id == "wechat-a"  # 保留 id，游标不丢
+    assert (source.app, source.target, source.kind, source.lookback_days) == ("qq", "B群", "group", 3)
+    assert "手动编辑" in source.parse_note
+
+    with pytest.raises(ConfigError, match="没有找到"):
+        update_source(config, "missing", target="X")
+    with pytest.raises(ConfigError, match="不支持的 App"):
+        update_source(config, "wechat-a", app="feishu")
+
+
 def test_yaml_roundtrip_and_mutations(tmp_path: Path):
     config = MonitorConfig(sources=[
         MonitorSource(id="wechat-a", app="wechat", kind="group", target="A群",

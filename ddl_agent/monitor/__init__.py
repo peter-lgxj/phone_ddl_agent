@@ -11,6 +11,7 @@ from .config import (
     remove_source,
     save_config,
     set_enabled,
+    update_source,
 )
 from .cursor import CandidateStore, Cursor, CursorStore, MessageStore
 from .runner import CycleResult, run_cycle
@@ -36,4 +37,5 @@ __all__ = [
     "run_cycle",
     "save_config",
     "set_enabled",
+    "update_source",
 ]

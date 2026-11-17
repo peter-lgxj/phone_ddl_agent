@@ -203,6 +203,36 @@ def remove_source(config: MonitorConfig, source_id: str) -> bool:
     return len(config.sources) != before
 
 
+def update_source(config: MonitorConfig, source_id: str, *, target: str | None = None,
+                  app: str | None = None, lookback_days: int | None = None) -> MonitorSource:
+    """修改已有来源；保留 id，避免增量游标丢失。"""
+    source = next((item for item in config.sources if item.id == source_id), None)
+    if source is None:
+        raise ConfigError(f"没有找到来源：{source_id}")
+    if app is not None:
+        if app not in APP_LABELS:
+            raise ConfigError(f"不支持的 App：{app}（只支持 wechat / qq / outlook）")
+        source.app = app
+    if target is not None:
+        stripped = target.strip()
+        if not stripped:
+            raise ConfigError("目标名称不能为空")
+        source.target = stripped
+    if lookback_days is not None:
+        source.lookback_days = max(1, int(lookback_days))
+
+    source.kind = "inbox" if source.app == "outlook" else (
+        "group" if "群" in source.target else "private"
+    )
+    source.source_type = "official_email" if source.app == "outlook" else "student_chat"
+    changes = [f"{key}={value}" for key, value in (
+        ("app", app), ("target", target), ("lookback", lookback_days)
+    ) if value is not None]
+    note = "手动编辑 " + ", ".join(changes)
+    source.parse_note = f"{source.parse_note}; {note}" if source.parse_note else note
+    return source
+
+
 def set_enabled(config: MonitorConfig, source_id: str, enabled: bool) -> bool:
     for source in config.sources:
         if source.id == source_id:

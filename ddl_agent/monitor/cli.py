@@ -28,6 +28,7 @@ from .config import (
     remove_source,
     save_config,
     set_enabled,
+    update_source,
 )
 from .cursor import CursorStore
 from .runner import run_cycle
@@ -47,6 +48,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     remove = sub.add_parser("remove", help="删除一个监控来源")
     remove.add_argument("source_id")
+
+    edit = sub.add_parser("edit", help="修改已有来源的目标、App 或时间范围")
+    edit.add_argument("source_id")
+    edit.add_argument("--target", default=None, help="新的群名/联系人/收件箱")
+    edit.add_argument("--app", default=None, choices=["wechat", "qq", "outlook"])
+    edit.add_argument("--lookback-days", type=int, default=None)
 
     for name, text in (("enable", "启用"), ("disable", "停用")):
         cmd = sub.add_parser(name, help=f"{text}一个监控来源")
@@ -90,6 +97,21 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             save_config(config, config_path)
             print(f"已删除 {args.source_id}")
+            return 0
+
+        if args.command == "edit":
+            if args.target is None and args.app is None and args.lookback_days is None:
+                print("请至少提供 --target、--app 或 --lookback-days 之一", file=sys.stderr)
+                return 1
+            source = update_source(
+                config, args.source_id, target=args.target, app=args.app,
+                lookback_days=args.lookback_days,
+            )
+            save_config(config, config_path)
+            print(
+                f"已更新 {source.id}：{APP_LABELS[source.app]} / {source.target} / "
+                f"最近 {source.lookback_days} 天"
+            )
             return 0
 
         if args.command in ("enable", "disable"):

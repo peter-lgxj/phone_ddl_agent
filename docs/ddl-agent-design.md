@@ -409,7 +409,7 @@ Agent-LLM 共 179 次调用、75108 token、约 $0.0349。
 - 新增 `monitor/config.py`，配置持久化为 `sources.yaml`，每条来源保存：
   `id / app / kind / target / source_type / enabled / lookback_days / nl_text / parse_note`。
 - `nl_text` 保存原始自然语言，`parse_note` 记录解析出的关键字段，满足“这条配置从哪句话来”的可追溯要求。
-- 支持 `add / list / remove / enable / disable`；`add` 解析失败时显式拒绝并给出原因
+- 支持 `add / list / edit / remove / enable / disable`；`add` 解析失败时显式拒绝并给出原因
   （例如未指明 App、未给出目标名称、同时出现多个互相冲突的目标），**不猜测**。
 - 调度周期也由自然语言解析（如“每 6 小时”“每天一次”），解析失败直接报错，不套默认值。
 
