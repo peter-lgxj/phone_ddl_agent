@@ -10,6 +10,7 @@ from app_launcher import AppLauncher
 from memory import TaskMemory, format_steps_compact
 from ocr_locator import OCRLocator
 import config
+import image_preprocess
 from openai import OpenAI
 import ui_state
 
@@ -85,6 +86,8 @@ class ScreenAgent:
 
         self.model               = provider["model"]
         self.support_multi_image = provider.get("support_multi_image", False)
+        # provider 级别的额外请求参数（如 deepseek 的 thinking 开关），None 时 SDK 不发送
+        self.extra_body          = provider.get("extra_body")
 
         # VL 模型：负责看截图、决定下一步操作
         self.client = OpenAI(
@@ -101,6 +104,7 @@ class ScreenAgent:
             base_url=planner_cfg["base_url"],
         )
         self.text_model = planner_cfg["model"]
+        self.text_extra_body = planner_cfg.get("extra_body")
 
         self.ocr      = OCRLocator()
         self.phone    = PhoneController(self.ocr)
@@ -109,6 +113,8 @@ class ScreenAgent:
         self.run_dir   = None
         self.last_status = "idle"   # done / timeout / failed / idle
         self._observe_valid = False  # 当前 screen_observe.png 是否是本步真实截图
+        self._last_image_meta = None     # 本步发送图的规格与缩放比例
+        self._last_model_action = None   # 缩放时模型返回的原始坐标（未反算）
 
         print(f"视觉模型：{provider_name} / {self.model}")
         print(f"语义模型：{planner_name} / {self.text_model}")
@@ -120,7 +126,7 @@ class ScreenAgent:
     def _collect_history_images(self, memory: TaskMemory) -> list[dict]:
         """按 HISTORY_IMAGE_WINDOW 收集最近的历史原图（当前屏幕另行加入）。
 
-        返回 [{"step": n, "label": "...", "b64": "..."}]，数量不超过窗口值。
+        返回 [{"step": n, "label": "...", "b64": "...", "mime": "..."}]，数量不超过窗口值。
         优先用证据目录里归档的 step_NNN_observe.png；没有归档时退回 screen_observe.png。
         """
         window = max(0, int(getattr(config, "HISTORY_IMAGE_WINDOW", 1)))
@@ -141,10 +147,12 @@ class ScreenAgent:
         images = []
         for step_no, path in candidates[-window:]:
             try:
+                data, meta = image_preprocess.prepare_image_bytes(str(path))
                 images.append({
                     "step": step_no,
                     "label": f"第{step_no}步执行后的屏幕",
-                    "b64": base64.b64encode(path.read_bytes()).decode("utf-8"),
+                    "b64": base64.b64encode(data).decode("utf-8"),
+                    "mime": meta["mime"],
                 })
             except OSError as e:
                 print(f"  ⚠️  历史截图读取失败（{path}）：{e}")
@@ -296,6 +304,7 @@ class ScreenAgent:
                 model=self.text_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
+                extra_body=getattr(self, "text_extra_body", None),
             )
             analysis = resp.choices[0].message.content.strip()
             print(f"\n  🧠 [语义分析]\n{chr(10).join('     ' + l for l in analysis.splitlines())}")
@@ -312,19 +321,25 @@ class ScreenAgent:
         self.phone.screenshot("screen_current.png")
         ocr_result = self.ocr.format_for_prompt("screen_current.png")
 
-        with open("screen_current.png", "rb") as f:
-            current_b64 = base64.b64encode(f.read()).decode("utf-8")
+        # 截图后先预处理：JPEG 编码 / 可选等比缩放；缩放比例用于把模型坐标反算回设备坐标
+        current_bytes, image_meta = image_preprocess.prepare_image_bytes("screen_current.png")
+        self._last_image_meta = image_meta
+        self._last_model_action = None
+        print(f"  🖼  发送图：{image_preprocess.describe(image_meta)}")
+        with open(image_preprocess.sent_filename("screen_current.png", image_meta), "wb") as f:
+            f.write(current_bytes)
+        current_b64 = base64.b64encode(current_bytes).decode("utf-8")
 
         # 历史原图按窗口裁剪；当前屏幕无论如何都要带图
         history_images = self._collect_history_images(memory)
         content = [
             {"type": "image_url",
-             "image_url": {"url": f"data:image/png;base64,{img['b64']}"}}
+             "image_url": {"url": f"data:{img['mime']};base64,{img['b64']}"}}
             for img in history_images
         ]
         content.append({
             "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{current_b64}"}
+            "image_url": {"url": f"data:{image_meta['mime']};base64,{current_b64}"}
         })
 
         # 没带原图的早期步骤压成文字摘要
@@ -351,16 +366,24 @@ class ScreenAgent:
         raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
 
         try:
-            return json.loads(raw)
+            action = json.loads(raw)
         except json.JSONDecodeError:
             fixed = _fix_json(raw)
             try:
                 action = json.loads(fixed)
                 print(f"  ⚠️  JSON 修复成功")
-                return action
             except json.JSONDecodeError:
                 print(f"  ⚠️  解析失败：{raw}")
-                return {"action_type": "wait", "description": "解析异常，等待重试"}
+                action = {"action_type": "wait", "description": "解析异常，等待重试"}
+
+        # 缩放过才反算；未缩放时 map_action_coords 原样返回，不引入偏移
+        mapped = image_preprocess.map_action_coords(action, image_meta)
+        keys = ("x", "y", "x2", "y2")
+        if image_meta.get("resized") and any(k in action for k in keys):
+            self._last_model_action = action
+            print(f"  🧭 坐标反算：{ {k: action[k] for k in keys if k in action} } -> "
+                  f"{ {k: mapped[k] for k in keys if k in mapped} }")
+        return mapped
 
     # ══════════════════════════════════════════════════════════
     #  观察（保持原样，不改动）
@@ -381,8 +404,8 @@ class ScreenAgent:
         time.sleep(1)
         self._clear_observe_shot()   # 先删旧图：截图失败时不会留下过期画面
         self.phone.screenshot("screen_observe.png")
-        with open("screen_observe.png", "rb") as f:
-            image_b64 = base64.b64encode(f.read()).decode("utf-8")
+        observe_bytes, observe_meta = image_preprocess.prepare_image_bytes("screen_observe.png")
+        image_b64 = base64.b64encode(observe_bytes).decode("utf-8")
 
         action_type = last_action.get("action_type", "")
         action_desc = last_action.get("description", "")
@@ -425,7 +448,7 @@ class ScreenAgent:
                     "content": [
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{image_b64}"}
+                            "image_url": {"url": f"data:{observe_meta['mime']};base64,{image_b64}"}
                         },
                         {
                             "type": "text",
@@ -495,8 +518,8 @@ class ScreenAgent:
         # 没有本步有效截图时不判定完成（旧图/删图失败都会导致误判）
         if not self._observe_valid:
             return False
-        with open("screen_observe.png", "rb") as f:
-            image_b64 = base64.b64encode(f.read()).decode("utf-8")
+        done_bytes, done_meta = image_preprocess.prepare_image_bytes("screen_observe.png")
+        image_b64 = base64.b64encode(done_bytes).decode("utf-8")
 
         history_text = memory.format_for_prompt()
 
@@ -509,7 +532,7 @@ class ScreenAgent:
                     "content": [
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{image_b64}"}
+                            "image_url": {"url": f"data:{done_meta['mime']};base64,{image_b64}"}
                         },
                         {
                             "type": "text",
@@ -673,8 +696,17 @@ class ScreenAgent:
             return
         try:
             record = {"step": step, "action": action, "observation": observation}
+            if getattr(self, "_last_image_meta", None):
+                # 记录本次发送图的规格与缩放比例，便于事后核对坐标
+                record["image"] = self._last_image_meta
+            if getattr(self, "_last_model_action", None):
+                record["model_action"] = self._last_model_action
             with open(self.run_dir / f"step_{step:03d}.json", "w", encoding="utf-8") as f:
                 json.dump(record, f, ensure_ascii=False, indent=2)
+            sent_path = image_preprocess.sent_filename("screen_current.png", self._last_image_meta)
+            if os.path.exists(sent_path):
+                ext = os.path.splitext(sent_path)[1]
+                shutil.copy(sent_path, self.run_dir / f"step_{step:03d}_sent{ext}")
             for src, suffix in (("screen_current.png", "current"),
                                 ("screen_observe.png", "observe")):
                 # finish 没有执行动作，screen_observe.png 是上一步的，归档会造成证据错位

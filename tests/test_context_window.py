@@ -29,8 +29,11 @@ def _agent(tmp_path):
 
 
 def _write_shots(tmp_path, n):
+    from PIL import Image
+
     for i in range(1, n + 1):
-        (tmp_path / f"step_{i:03d}_observe.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes([i]))
+        # 真实 PNG：预处理会解码图片，假字节会被当作损坏文件跳过
+        Image.new("RGB", (120, 200), (10 * i, 40, 80)).save(tmp_path / f"step_{i:03d}_observe.png")
 
 
 def test_history_image_window_limits_images(tmp_path, monkeypatch):

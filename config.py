@@ -10,13 +10,14 @@ load_dotenv(Path(__file__).with_name(".env"))
 # ============================================================
 
 # 当前使用的执行模型（视觉模型，用于屏幕理解和操作）
-# 可选：zhipu / qwen / deepseek / minimax / openai / local
-# local 指向本机 llama-server（Qwen3-VL-8B GGUF），默认 http://127.0.0.1:8080/v1
-# 可用环境变量 ACTIVE_PROVIDER 临时切换（如 ACTIVE_PROVIDER=local python run.py），不用改代码
-ACTIVE_PROVIDER = os.getenv("ACTIVE_PROVIDER", "qwen")
+# 可选：deepseek（默认）/ zhipu / qwen / openai / local
+# deepseek 经实测能读图（见 README「DeepSeek 视觉能力」），单请求 3 张图均被正确理解
+# local 指向本机 llama-server（Qwen3-VL-8B GGUF），当前「暂缓」，需要时先启动 8080 服务
+# 可用环境变量 ACTIVE_PROVIDER 临时切换（如 ACTIVE_PROVIDER=qwen python run.py），不用改代码
+ACTIVE_PROVIDER = os.getenv("ACTIVE_PROVIDER", "deepseek")
 
-# 当前使用的规划模型（纯文字大语言模型，用于任务分解与语义校正）
-# 必须是 TEXT_ONLY_PROVIDERS 里的纯文本 provider：deepseek（默认）/ qwen3 / minimax
+# 当前使用的规划模型（用于任务分解与语义校正，只发文字不发截图）
+# 可选：deepseek（默认）/ qwen3 / minimax；deepseek 同时具备视觉能力，但规划阶段不使用
 # deepseek 走 https://api.deepseek.com（OpenAI 兼容，不要加 /v1），模型 deepseek-flash
 # 也可切回 qwen3（DashScope 兼容接口，模型 qwen3.5-flash）
 PLANNER_PROVIDER = "deepseek"
@@ -48,8 +49,12 @@ PROVIDERS = {
         "api_key": os.getenv("DEEPSEEK_API_KEY", ""),
         # 官方 OpenAI 兼容地址不要带 /v1：SDK 会自行拼 /chat/completions
         "base_url": "https://api.deepseek.com",
-        "model": "deepseek-flash",        # 纯文本推理模型（当前在线版 DeepSeek-V4.1-Flash-1017）
-        "support_multi_image": False,
+        "model": "deepseek-flash",        # DeepSeek-V4.1-Flash-1017，实测支持图像输入
+        # 实测：单请求 3 张图全部被正确理解（各图唯一编号逐张答对）
+        "support_multi_image": True,
+        # 关闭 thinking：实测同一张截图动作一致（均为 home、JSON 合法），
+        # 但耗时 1.4s vs 3.5s、reasoning_tokens 从 363 降到 0
+        "extra_body": {"thinking": {"type": "disabled"}},
     },
     "minimax": {
         "api_key": os.getenv("MINIMAX_API_KEY", ""),
@@ -85,7 +90,8 @@ API_KEY_ENV = {
 }
 
 # 纯文本 provider：把截图发给它们会直接报错或得到无意义结果，不能当执行模型
-TEXT_ONLY_PROVIDERS = {"qwen3", "deepseek", "minimax"}
+# deepseek 已实测支持图像输入，不在此列
+TEXT_ONLY_PROVIDERS = {"qwen3", "minimax"}
 
 INPUT_BOX_MODEL = "models/input_box.pt"
 
@@ -108,3 +114,18 @@ ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "runs")  # 每步截图与动作记录�
 HISTORY_IMAGE_WINDOW = int(os.getenv("HISTORY_IMAGE_WINDOW", "1"))
 # 没有原图可带的历史步骤，最多列多少条文字摘要（含动作类型、关键参数与观察结论）
 HISTORY_TEXT_STEPS = int(os.getenv("HISTORY_TEXT_STEPS", "8"))
+
+# ============================================================
+#  截图预处理（截图之后、发请求之前）
+#  注意：服务端每张图最多 1024 token 并自动缩放到约 1300x1300 等效，
+#  因此这里缩放只省上传带宽，不省 token；缩放过必须做坐标反向映射。
+# ============================================================
+
+# 总开关，置 0 时原样发送 PNG（不缩放、不转码、不增强）
+IMAGE_PREPROCESS = os.getenv("IMAGE_PREPROCESS", "1") not in ("0", "", "false", "False")
+# JPEG 质量；置 0 保留 PNG
+IMAGE_JPEG_QUALITY = int(os.getenv("IMAGE_JPEG_QUALITY", "85"))
+# 等比缩放的长边上限；0 表示不缩放
+IMAGE_MAX_SIDE = int(os.getenv("IMAGE_MAX_SIDE", "0"))
+# 轻量增强（对比度 + 锐化），不改变几何尺寸；默认关闭
+IMAGE_ENHANCE = os.getenv("IMAGE_ENHANCE", "0") not in ("0", "", "false", "False")

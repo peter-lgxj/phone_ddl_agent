@@ -19,7 +19,7 @@ pip install -r requirements.txt
 
 `requirements-lock.txt` 是本项目在 Windows + Python 3.12 下实际解析出的完整版本清单（含传递依赖），仅作为参考基线；实验室机器或 GPU 环境请重新 `pip freeze`。
 
-用 `adb devices` 确认手机已连接并完成授权。将 `.env.example` 复制为 `.env`，填写所使用服务的密钥。默认执行模型为 `qwen`，规划模型为 `qwen3`（单任务与多应用模式都从 `config.PLANNER_PROVIDER` 读取），均读取 `DASHSCOPE_API_KEY`。其他模型与接口配置见 `config.py`。
+用 `adb devices` 确认手机已连接并完成授权。将 `.env.example` 复制为 `.env`，填写所使用服务的密钥。默认执行模型与规划模型都是 `deepseek`（`deepseek-flash`，读 `DEEPSEEK_API_KEY`）；执行模型可切回 `qwen`（`qwen-vl-max`，读 `DASHSCOPE_API_KEY`）。其他模型与接口配置见 `config.py`。
 
 首次运行会通过 EasyOCR 下载中文识别模型（需要联网，体积较大）；截图定位还依赖 uiautomator2 在手机上安装的自动化组件。
 
@@ -51,18 +51,70 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 
 | 配置项 | 说明 |
 |---|---|
-| `ACTIVE_PROVIDER` | 执行模型（视觉），默认 `qwen` → `qwen-vl-max`，需要 `DASHSCOPE_API_KEY` |
+| `ACTIVE_PROVIDER` | 执行模型（视觉），默认 `deepseek` → `deepseek-flash`，需要 `DEEPSEEK_API_KEY`；可设 `qwen` / `zhipu` / `openai` / `local` |
 | `PLANNER_PROVIDER` | 规划/语义模型，默认 `deepseek`（`deepseek-flash`），单任务与多应用模式都读这一项；可切回 `qwen3` |
 | `MAX_STEPS` / `STEP_RETRIES` | 最大步数（默认 30，可用同名环境变量覆盖）与单步失败重试次数 |
 | `LLM_TEMPERATURE` | 决策与观察调用温度，默认 0.0，保证重复实验可比 |
 | `ENABLE_SEMANTIC_ANALYSIS` | 消融开关：关闭后跳过文字模型的语义校正 |
 | `HISTORY_IMAGE_WINDOW` / `HISTORY_TEXT_STEPS` | 历史上下文窗口：带最近几张原图（默认 1，当前屏幕始终带图）、更早步骤最多列几条文字摘要（默认 8）；均可用同名环境变量覆盖 |
+| `IMAGE_PREPROCESS` | 截图预处理总开关（默认开）；置 0 时原样发送 PNG |
+| `IMAGE_JPEG_QUALITY` | JPEG 质量，默认 85；置 0 保留 PNG |
+| `IMAGE_MAX_SIDE` | 等比缩放的边长上限，默认 0（不缩放）。**缩放会破坏坐标一致性，见下节** |
+| `IMAGE_ENHANCE` | 对比度/锐化增强，默认关；不改变几何尺寸 |
 | `ARTIFACT_DIR` | 每步截图与动作记录目录，默认 `runs/` |
 | `WECHAT_INPUT_RESOURCE_ID` | 微信输入框 resource-id，随版本变化，置空即跳过该分支 |
 
-可切换的 provider 见 `config.PROVIDERS`；`deepseek` / `qwen3` / `minimax` 没有视觉能力，不能用作 `ACTIVE_PROVIDER`。
+可切换的 provider 见 `config.PROVIDERS`；`qwen3` / `minimax` 是纯文本 provider，不能用作 `ACTIVE_PROVIDER`。
 
 规划器默认用 DeepSeek：`base_url=https://api.deepseek.com`（不要加 `/v1`）、模型 `deepseek-flash`、密钥读 `.env` 的 `DEEPSEEK_API_KEY`。规划器只发文字，不接收截图；实测简单任务约 2 秒、三应用任务约 3.5 秒返回可解析 JSON。若开启 `thinking`（通过 `extra_body` 传 `{"thinking": {"type": "enabled"}}`）会返回 `reasoning_content` 并产生 reasoning token，当前默认关闭以降低延迟；实测开关两种模式返回的 `content` 都是合法 JSON。
+
+## DeepSeek 视觉能力（实测）
+
+官方文档写的是 `deepseek-v4-flash-vision-exp` 已下线、旧名请求由 DeepSeek-V4.1-Flash-1017（即 `deepseek-flash`）承接，字面读起来像是纯文本模型。**实测与该表述不一致：`deepseek-flash` 能正常接收并理解 `image_url`。**
+
+- 控制图法：现场生成含随机编号的图片（`ORDER NO: ZX-739146`、`CNY 4287.35` 等），模型逐字读对，可排除「不报错但忽略图片」。
+- 真实桌面截图（1707×1067）：10.4s，`prompt_tokens=1012`，准确描述图标、窗口与正文段落。
+- 多图：单请求 3 张图（各有唯一编号），三张全部按顺序答对，因此 `support_multi_image=True`。
+- 端到端：走 `ScreenAgent._think_and_act` 的真实调用路径，5.9s 返回 `{"action_type": "tap", "x": 540, "y": 1441, ...}`，字段完整、坐标与真值差 1px。
+
+结论：`deepseek-flash` 可作为执行（视觉）模型；本文档保留「官方文档表述与实测不一致」这条记录，后续如服务端行为变化需重新验证。
+
+### 图片限制与 thinking
+
+- **每张图最多 1024 token**：服务端会把图片缩放到约 1300×1300 等效后再计费，实测 1707×1067 的截图 `prompt_tokens=1012`，已贴近上限。**客户端缩图省不到 token**。
+- **`detail` 语义**：`low` 会压到 512×512（手机界面小字会糊，不要用于执行模型）；`high` / `original` / `auto` 保留原图。实测控制图 `detail=low` 的 `prompt_tokens=240` vs `detail=high` 的 `631`，代价是细节丢失。
+- 图片可放在 user / system / tool 消息；assistant 消息带图会 400；单请求最多 600 张。本项目一次只发 1–3 张，不涉及上限。
+- **thinking 开关**（`extra_body`）：同一张截图四种设置的动作完全一致（都是 `home`，JSON 均合法），但耗时与 reasoning token 差异明显：
+
+  | 设置 | 耗时 | completion_tokens | reasoning_tokens |
+  |---|---|---|---|
+  | `thinking` disabled | 1.42s | 60 | 0 |
+  | `reasoning_effort=low` | 2.01s | 139 | 102 |
+  | 默认（不传） | 3.51s | 404 | 363 |
+  | `thinking` enabled | 3.19s | 296 | 258 |
+
+  质量无差异，因此 provider 默认 `{"thinking": {"type": "disabled"}}`，省时间也省费用。
+
+## 截图预处理与坐标一致性
+
+截图后、发请求前会依次做：编码优化（PNG→JPEG）→ 可选等比缩放 → 可选轻量增强。实现见 `image_preprocess.py`，全部由 `config.py` 的 `IMAGE_*` 开关控制。
+
+**为什么默认不缩放**：实测客户端缩图不会减少 token（服务端本来就封顶 1024/图），但会让模型返回的坐标脱离发送图坐标系，反算后误差远超可接受范围：
+
+| 档位 | 上传字节 | 发送尺寸 | prompt_tokens | 订单号识别 | 坐标误差 |
+|---|---|---|---|---|---|
+| 原图 PNG | 78,302 | 1080×1920 | 1075 | 正确 | 0 px |
+| JPEG q85 | 82,052 | 1080×1920 | 1075 | 正确 | 10 px |
+| JPEG q85 + 长边 1300 | 48,165 | 731×1300 | 680 | 正确 | **375 px** |
+| JPEG q85 + 长边 1000 | 34,052 | 562×1000 | 451 | 正确 | **691 px** |
+
+（测试图为模拟手机结算页，红按钮真值中心 `(540, 1440)`。缩放档的原始坐标既不是发送图坐标系也不是原图坐标系，反算后偏差数百像素。）
+
+坐标本身有抖动：同一原图重复 3 次，PNG 误差 210/0/5 px，JPEG q85 为 10/146/38 px；格式不是主因，缩放才是。因此默认 `IMAGE_MAX_SIDE=0`，只做 JPEG 转码。
+
+**体积收益**：真实桌面截图 PNG 730 KB → JPEG q85 224 KB（30.7%），token 不变（1044）。上传省流量、减少超时，但不省推理成本。
+
+若确需缩放，`image_preprocess.map_action_coords` 会把 `x/y`、`x1/y1`、`x2/y2` 按 `scale_x/scale_y` 反算、四舍五入并裁到屏幕范围；每步的 `step_NNN.json` 会记录 `image`（原始/发送尺寸与比例）和 `model_action`（模型原始坐标），可事后核对。未缩放时该函数原样返回，不引入偏移。
 
 ## 本地视觉模型（Qwen3-VL-8B-Instruct GGUF）
 
@@ -143,7 +195,7 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（80 个用例，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 测试与工程化：`tests/`（95 个用例，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
