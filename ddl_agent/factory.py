@@ -51,7 +51,7 @@ def build_components(engine: str | None = None,
 def build_agent(sources: list, writer=None, now=None, engine: str | None = None,
                 tracker: UsageTracker | None = None,
                 dedupe_enabled: bool = True, verify_enabled: bool = True,
-                fixed_sources: bool = False) -> tuple[DdlAgent, str]:
+                fixed_sources: bool = False, deduplicator=None) -> tuple[DdlAgent, str]:
     """返回 ``(agent, engine_name)``；engine 为 llm 或 rules。"""
     components = build_components(engine, tracker, fixed_sources=fixed_sources)
     agent = DdlAgent(
@@ -59,6 +59,7 @@ def build_agent(sources: list, writer=None, now=None, engine: str | None = None,
         extractor=components["extractor"],
         resolver=components["resolver"],
         planner=components["planner"],
+        deduplicator=deduplicator,
         writer=writer,
         now=now,
         usage=components["tracker"],

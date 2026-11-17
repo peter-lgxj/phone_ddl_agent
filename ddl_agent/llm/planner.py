@@ -30,7 +30,9 @@ _PROMPT = """当前时间：{now}
   "allow_supplementary": true,
   "reason": "一句话说明为什么查这些源"
 }}
-注意：date_from/date_to 指用户关心的截止时间范围；查询没提时间就返回 null。"""
+注意：date_from/date_to 指用户关心的截止时间范围；查询没提时间就返回 null。
+只选择与查询课程/项目相关的来源；实习内推群、家人群、社团群等无关社交来源，
+以及其他课程的群，不要选择。"""
 
 
 class LLMQueryPlanner:

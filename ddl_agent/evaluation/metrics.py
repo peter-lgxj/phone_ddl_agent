@@ -24,9 +24,13 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
-def _names_match(left: str, right: str) -> bool:
+def _names_match(left: str, right: str, matcher=None) -> bool:
     a, b = normalize_task_name(left), normalize_task_name(right)
-    return a == b or task_similarity(a, b) >= _NAME_SIMILARITY
+    if a == b:
+        return True
+    if matcher is not None:
+        return matcher.similarity(left, right) >= getattr(matcher, "threshold", _NAME_SIMILARITY)
+    return task_similarity(a, b) >= _NAME_SIMILARITY
 
 
 def _courses_match(left: str | None, right: str | None) -> bool:
@@ -35,7 +39,8 @@ def _courses_match(left: str | None, right: str | None) -> bool:
     return True
 
 
-def evaluate_sample(records: list[ResolvedRecord], ground_truth: list[dict]) -> dict:
+def evaluate_sample(records: list[ResolvedRecord], ground_truth: list[dict],
+                    matcher=None) -> dict:
     used: set[int] = set()
     exact = fuzzy = 0
     conflict_total = conflict_correct = 0
@@ -44,7 +49,7 @@ def evaluate_sample(records: list[ResolvedRecord], ground_truth: list[dict]) -> 
 
     for truth in ground_truth:
         truth_deadline = _parse_iso(truth.get("deadline_iso"))
-        match_index = _best_match(records, used, truth, truth_deadline)
+        match_index = _best_match(records, used, truth, truth_deadline, matcher)
         if match_index is None:
             missed.append(truth["task_name"])
             if truth.get("conflict_expected"):
@@ -71,7 +76,7 @@ def evaluate_sample(records: list[ResolvedRecord], ground_truth: list[dict]) -> 
     for index, record in enumerate(records):
         if index in used:
             continue
-        if any(_names_match(record.task_name, truth["task_name"]) and
+        if any(_names_match(record.task_name, truth["task_name"], matcher) and
                _courses_match(record.course, truth.get("course")) for truth in ground_truth):
             duplicate_rows += 1
         else:
@@ -96,11 +101,11 @@ def evaluate_sample(records: list[ResolvedRecord], ground_truth: list[dict]) -> 
 
 
 def _best_match(records: list[ResolvedRecord], used: set[int], truth: dict,
-                truth_deadline: datetime | None) -> int | None:
+                truth_deadline: datetime | None, matcher=None) -> int | None:
     candidates = [
         index for index, record in enumerate(records)
         if index not in used
-        and _names_match(record.task_name, truth["task_name"])
+        and _names_match(record.task_name, truth["task_name"], matcher)
         and _courses_match(record.course, truth.get("course"))
     ]
     if not candidates:
@@ -145,6 +150,7 @@ def evaluate_dataset(results: list[dict]) -> dict:
         # 召回：ground truth 任务中最终出现在文档里的比例（不看时间是否正确）
         "recall": round(matched / gt, 4) if gt else 0.0,
         "duplicate_rate": round(duplicate_rows / predicted, 4) if predicted else 0.0,
+        "precision": round(matched / predicted, 4) if predicted else 0.0,
         "conflict_accuracy": (
             round(conflict_correct / conflict_total, 4) if conflict_total else None
         ),

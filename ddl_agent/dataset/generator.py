@@ -121,10 +121,10 @@ def _email(message_id: str, course: str, published_at: datetime, subject: str,
 
 
 def _chat(message_id: str, course: str, published_at: datetime, sender: str,
-          role: str, text: str) -> dict:
+          role: str, text: str, source_name: str | None = None) -> dict:
     return {
         "message_id": message_id,
-        "source_name": f"{course} 课程群",
+        "source_name": source_name or f"{course} 课程群",
         "source_type": "instructor_chat" if role in ("instructor", "ta") else "student_chat",
         "sender": sender,
         "role": role,
@@ -132,6 +132,41 @@ def _chat(message_id: str, course: str, published_at: datetime, sender: str,
         "subject": "",
         "text": text,
     }
+
+
+def _distractors(sample_id: str, course: str) -> list[dict]:
+    """与查询无关、但可能被“固定查全部来源”误读的干扰消息。
+
+    这些消息不进入 ground truth，也不改写任何事实；它们只在固定源序列的消融中
+    制造额外的无关行，用来检验动态选源是否真的排除了无关来源。
+    """
+    other_course = next(item for item in COURSES if item != course)
+    return [
+        _chat(
+            f"{sample_id}-d1", course, BASE_NOW - timedelta(hours=6),
+            "内推小助手", "student",
+            "【内推】某互联网公司 2026 暑期实习网申截止 12月15日 23:59，专业不限，欢迎投递。",
+            source_name="实习内推群",
+        ),
+        _chat(
+            f"{sample_id}-d2", course, BASE_NOW - timedelta(hours=5),
+            "妈妈", "student",
+            "这周日晚上 7 点回家吃饭，别迟到；顺便把上次的快递带回来。",
+            source_name="家人群",
+        ),
+        _chat(
+            f"{sample_id}-d3", course, BASE_NOW - timedelta(hours=4),
+            "社团干事", "student",
+            "本周三 18:00 社团例会，地点 CPD-3.04；报名截止周二中午 12:00。",
+            source_name="社团活动群",
+        ),
+        _chat(
+            f"{sample_id}-d4", course, BASE_NOW - timedelta(hours=3),
+            "助教", "ta",
+            f"{other_course} Assignment 9 截止 12月3日 23:59，请按时提交。",
+            source_name=f"{other_course} 课程群",
+        ),
+    ]
 
 
 def _ground_truth(task: str, course: str, deadline: datetime | None, *,
@@ -409,6 +444,13 @@ _BUILDERS = {
 }
 
 
+def _source_config(messages: list[dict]) -> str:
+    names = list(dict.fromkeys(
+        message["source_name"] for message in messages if message.get("source_name")
+    ))
+    return "跟踪 " + "、".join(names)
+
+
 def _sample(sample_id: str, course: str, query: str, messages: list[dict],
             ground_truth: list[dict]) -> dict:
     return {
@@ -416,7 +458,7 @@ def _sample(sample_id: str, course: str, query: str, messages: list[dict],
         "course": course,
         "now": _iso(BASE_NOW),
         "query": query,
-        "source_config": "跟踪课程邮件、课程群聊和同学消息",
+        "source_config": _source_config(messages),
         "messages": messages,
         "ground_truth": ground_truth,
     }
@@ -443,6 +485,7 @@ def generate_samples(per_tier: int = 24, seed: int = 42) -> list[dict]:
             sample_id = f"{tier}-{index + 1:03d}"
             messages, ground_truth = builders[index % len(builders)](sample_id, index, rng)
             course = ground_truth[0]["course"]
+            messages = [*messages, *_distractors(sample_id, course)]
             tasks = "、".join(item["task_name"] for item in ground_truth)
             query = f"帮我查一下 {course} 的 {tasks} 截止时间"
             sample = _sample(sample_id, course, query, messages, ground_truth)

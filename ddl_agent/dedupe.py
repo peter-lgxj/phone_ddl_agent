@@ -84,9 +84,12 @@ def _courses_compatible(left: str | None, right: str | None) -> bool:
 
 class Deduplicator:
     def __init__(self, threshold: float = DEDUPE_THRESHOLD,
-                 similarity: Callable[[str, str], float] | None = None):
+                 similarity: Callable[[str, str], float] | None = None,
+                 raw_inputs: bool = False):
         self.threshold = threshold
         self.similarity = similarity or task_similarity
+        # 语义模型需要原始文本（归一化会把中文任务名混成中英混合），词法默认用归一化文本
+        self.raw_inputs = raw_inputs
 
     def cluster(self, candidates: list[DeadlineCandidate]) -> list[TaskCluster]:
         ordered = sorted(
@@ -106,7 +109,11 @@ class Deduplicator:
             for index, cluster in enumerate(clusters):
                 if not _courses_compatible(cluster.course, candidate.course):
                     continue
-                score = self.similarity(normalized, normalize_task_name(cluster.task_name))
+                left = candidate.task_name_raw if self.raw_inputs else normalized
+                right = cluster.task_name if self.raw_inputs else normalize_task_name(
+                    cluster.task_name
+                )
+                score = self.similarity(left, right)
                 if score > best_score:
                     best_index, best_score = index, score
 

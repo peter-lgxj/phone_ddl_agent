@@ -3,7 +3,7 @@
   "course": "STAT7001",
   "now": "2026-11-16T09:00:00+08:00",
   "query": "帮我查一下 STAT7001 的 Project 2 截止时间",
-  "source_config": "跟踪课程邮件、课程群聊和同学消息",
+  "source_config": "跟踪 outlook、实习内推群、家人群、社团活动群、COMP7608 课程群",
   "messages": [
     {
       "message_id": "medium-012-m1",
@@ -13,6 +13,46 @@
       "published_at": "2026-11-14T09:00:00+08:00",
       "subject": "Re: [STAT7001] Project 2",
       "body": "Adding the course office's note below so everyone has the same date.\n\nOn Nov 04, 2026, course office wrote:\n> Hi,\n> Project 2 for STAT7001 is due Dec 03, 2026 23:59.\n> Please upload a single PDF.\n\nThis email is intended only for enrolled students of the course.\nCheers,\nWei\nCourse coordinator"
+    },
+    {
+      "message_id": "medium-012-d1",
+      "source_name": "实习内推群",
+      "source_type": "student_chat",
+      "sender": "内推小助手",
+      "role": "student",
+      "published_at": "2026-11-16T03:00:00+08:00",
+      "subject": "",
+      "text": "【内推】某互联网公司 2026 暑期实习网申截止 12月15日 23:59，专业不限，欢迎投递。"
+    },
+    {
+      "message_id": "medium-012-d2",
+      "source_name": "家人群",
+      "source_type": "student_chat",
+      "sender": "妈妈",
+      "role": "student",
+      "published_at": "2026-11-16T04:00:00+08:00",
+      "subject": "",
+      "text": "这周日晚上 7 点回家吃饭，别迟到；顺便把上次的快递带回来。"
+    },
+    {
+      "message_id": "medium-012-d3",
+      "source_name": "社团活动群",
+      "source_type": "student_chat",
+      "sender": "社团干事",
+      "role": "student",
+      "published_at": "2026-11-16T05:00:00+08:00",
+      "subject": "",
+      "text": "本周三 18:00 社团例会，地点 CPD-3.04；报名截止周二中午 12:00。"
+    },
+    {
+      "message_id": "medium-012-d4",
+      "source_name": "COMP7608 课程群",
+      "source_type": "instructor_chat",
+      "sender": "助教",
+      "role": "ta",
+      "published_at": "2026-11-16T06:00:00+08:00",
+      "subject": "",
+      "text": "COMP7608 Assignment 9 截止 12月3日 23:59，请按时提交。"
     }
   ],
   "ground_truth": [

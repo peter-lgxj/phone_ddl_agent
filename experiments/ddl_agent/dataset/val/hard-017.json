@@ -3,7 +3,7 @@
   "course": "FITE7410",
   "now": "2026-11-16T09:00:00+08:00",
   "query": "帮我查一下 FITE7410 的 Lab 5 截止时间",
-  "source_config": "跟踪课程邮件、课程群聊和同学消息",
+  "source_config": "跟踪 outlook、实习内推群、家人群、社团活动群、COMP7608 课程群",
   "messages": [
     {
       "message_id": "hard-017-m1",
@@ -13,6 +13,46 @@
       "published_at": "2026-11-11T09:00:00+08:00",
       "subject": "[FITE7410] Lab 5 (external)",
       "body": "The external host set the cut-off in their local time zone.\nLab 5 must be uploaded before 2026-12-03 23:59 PST.\nConvert to your local time before submitting.\n\n"
+    },
+    {
+      "message_id": "hard-017-d1",
+      "source_name": "实习内推群",
+      "source_type": "student_chat",
+      "sender": "内推小助手",
+      "role": "student",
+      "published_at": "2026-11-16T03:00:00+08:00",
+      "subject": "",
+      "text": "【内推】某互联网公司 2026 暑期实习网申截止 12月15日 23:59，专业不限，欢迎投递。"
+    },
+    {
+      "message_id": "hard-017-d2",
+      "source_name": "家人群",
+      "source_type": "student_chat",
+      "sender": "妈妈",
+      "role": "student",
+      "published_at": "2026-11-16T04:00:00+08:00",
+      "subject": "",
+      "text": "这周日晚上 7 点回家吃饭，别迟到；顺便把上次的快递带回来。"
+    },
+    {
+      "message_id": "hard-017-d3",
+      "source_name": "社团活动群",
+      "source_type": "student_chat",
+      "sender": "社团干事",
+      "role": "student",
+      "published_at": "2026-11-16T05:00:00+08:00",
+      "subject": "",
+      "text": "本周三 18:00 社团例会，地点 CPD-3.04；报名截止周二中午 12:00。"
+    },
+    {
+      "message_id": "hard-017-d4",
+      "source_name": "COMP7608 课程群",
+      "source_type": "instructor_chat",
+      "sender": "助教",
+      "role": "ta",
+      "published_at": "2026-11-16T06:00:00+08:00",
+      "subject": "",
+      "text": "COMP7608 Assignment 9 截止 12月3日 23:59，请按时提交。"
     }
   ],
   "ground_truth": [

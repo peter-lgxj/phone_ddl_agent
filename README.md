@@ -14,6 +14,9 @@
 
 > 当前手机优先方向（微信/QQ/Outlook App 读屏、目标定位、手机系统日历写入）**未经真实数据验证**；
 > 离线测试使用本地 `.eml` 与聊天归档替身。
+>
+> Outlook **只走手机 App 读屏**，不接 Microsoft Graph；Graph 相关代码只是保留的未启用骨架，
+> 不是可切换的第二条读取路径。
 
 ## 一键启动（Windows）
 
@@ -40,10 +43,34 @@ python -m ddl_agent.evaluation.run_eval --split test
 
 # RQ4 单模块消融：全开 / 关去重 / 关冲突验证 / 固定来源
 python -m ddl_agent.evaluation.run_eval --ablation --split test \
-  --out experiments/ddl_agent/results/ablation_test
+  --out experiments/ddl_agent/results/ablation_distractors2
+
+# 语义匹配三策略对比：词法 / 本地 embedding / 组合
+python -m ddl_agent.evaluation.run_eval --similarity-ablation --split test \
+  --out experiments/ddl_agent/results/similarity_test4
 ```
 
-逐条 proposal 符合度与消融结果见 [docs/proposal-compliance.md](docs/proposal-compliance.md)。
+数据集里每个样本都带有与查询无关的干扰来源（实习内推群、家人群、社团活动群、其他课程群），
+用于检验动态选源；这些消息不进入 ground truth。
+
+embedding 是**可选**能力：默认不装、不联网也能跑评测。
+
+```bash
+# 安装可选依赖（不进入主 requirements / CI）
+pip install -r requirements-embedding.txt
+
+# 模型与框架缓存默认写到 F 盘；可显式指定
+set DDL_EMBEDDING_CACHE=F:\models\sentence-transformers
+set DDL_EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
+```
+
+首次运行会下载多语种小模型；**离线环境**把整个缓存目录拷到目标机器，或让 `DDL_EMBEDDING_CACHE`
+指向已有目录即可。模型缺失、下载失败或加载异常时，评测自动退回纯词法，报告的
+`similarity.available` 为 `false` 并给出 `fallback_reason`，不会中断流程。
+真实模型用例默认跳过，设置 `RUN_EMBEDDING_TESTS=1` 才执行。
+
+逐条 proposal 符合度、RQ4 消融与三种相似度的前后对比数字见
+[docs/proposal-compliance.md](docs/proposal-compliance.md)。
 所有数字来自合成数据；真实设备、真实账号与用户研究尚未验证。
 
 ## 环境与安装

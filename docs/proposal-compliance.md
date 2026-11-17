@@ -21,7 +21,7 @@
 | --- | --- | --- | --- |
 | 异构、分散、非结构化的邮件/聊天中抽取结构化字段 | ✅ | `extract/rules.py`、`extract/llm_extractor.py`、`extract/normalizer.py` | 规则与 LLM 双实现；相对时间按注入的 `now` 归一化，无法解析标 `unresolved`。 |
 | 处理重复记录与跨来源冲突 | ✅ | `dedupe.py`、`conflict.py` | 任务名归一化 + 相似度聚类；按可信度、发布时间裁决；最多两轮追加检索；仍冲突标 `uncertain`。 |
-| 动态规划与工具选择，用户不会总说清要查哪个 App | ◐ | `llm/planner.py`、`planner.py: SourceConfigParser` | LLM 规划器会在已配置来源中选子集；但“已配置来源”仍由用户事先给出，且没有通用工具调用循环。离线消融中该模块没有体现出任务质量收益。 |
+| 动态规划与工具选择，用户不会总说清要查哪个 App | ◐ | `llm/planner.py`、`planner.py: SourceConfigParser` | LLM 规划器会在已配置来源中选子集；但“已配置来源”仍由用户事先给出，且没有通用工具调用循环。加入干扰源后，动态选源仍未改变任务质量，但显著减少了无关消息的抽取调用（见第 8 节）。 |
 | 可靠地修改结构化文档，保留已有有效内容 | ✅ | `writer/base.py`、`writer/xlsx_writer.py`、`writer/audit.py` | 按 `(课程, 归一化任务名)` 插行/改行；写前备份，失败重试一次后回滚；审计 CSV + xlsx sheet。 |
 
 ## 3. 解决方案逐节
@@ -33,7 +33,7 @@
 | 围绕单一共享 DDL 文档工作 | ✅ | `writer/xlsx_writer.py` | 默认 `deadlines.xlsx`，含 Deadlines 与 Audit Log。 |
 | 从用户定义的来源配置出发 | ✅ | `monitor/config.py` | 手机路径用 `sources.yaml`；评测路径用样本里的 `source_config`。 |
 | 自然语言 → 规划 → 取数 → 解析 → 去重/冲突 → 写回 | ✅ | `pipeline.py: DdlAgent.run` | 阶段清晰，trace 记录各阶段耗时、轮数、token/成本。 |
-| Outlook 走 Microsoft Graph API | ◐ | `connectors/graph_mail.py` | **设计决策**：主路径改为手机 Outlook App GUI 读屏；Graph 连接器保留为将来可选实现与离线替身。原因见 3.1.1。 |
+| Outlook 走 Microsoft Graph API | ◐ | `monitor/sources.py: MobileAppSource` | **设计决策**：Outlook 只走手机 App GUI 读屏，这是唯一主路径。Microsoft Graph **不在当前实现路径上**，代码骨架仅作为“将来可选实现”保留，不承诺支持，也不与手机读屏并列。原因见 3.1.1。 |
 | 微信/QQ 无公开接口，走手机 GUI 自动化 | ✅（代码）/ 未验证（真机） | `monitor/sources.py: MobileAppSource`、`screen_agent` | 按名称搜索/滚动定位，找不到显式报“未找到”；真机路径未经真实数据验证。 |
 | 早期用人工构造消息集合开发与单测 | ✅ | `dataset/generator.py`、`connectors/local_*.py` | 评测仍然跑在本地 `.eml`/聊天归档上，不依赖手机。 |
 | 核心稳定后用真实聊天记录做有限测试 | ✗ | — | 未做，需要真机、真实账号与参与用户同意，需组内安排。 |
@@ -41,12 +41,15 @@
 #### 3.1.1 Outlook 的设计决策（明确偏差）
 
 - Proposal 写的是 “connect to Outlook through the official Microsoft Graph API”。
-- 当前实现把它改成 **手机 Outlook App GUI 读屏**，Graph 仅作为将来可选的第二实现。
+- **当前唯一主路径是手机 Outlook App GUI 读屏**，与微信、QQ 走同一套手机层。
+- Microsoft Graph **已从主路径移除**：配置、规划、检索、评测都不使用 Graph，也不存在“Graph / 手机读屏二选一”的开关。
+  `connectors/graph_mail.py` 只是保留的代码骨架，标注为“将来可选实现”，当前不启用、不测试、不作为交付能力。
 - 理由：
   1. 课题组长明确要求所有来源统一走手机 GUI，复用手机智能体；
   2. Graph 需要租户/应用注册与用户授权，真实凭据无法在课程环境中稳定提供；
   3. 微信、QQ 只能走 GUI，把 Outlook 也放在同一层可以复用定位、截图、留证与设备锁，减少两套读取路径的维护成本。
-- 代价：Outlook 的读取速度、结构化和稳定性不如 Graph；邮件正文/附件解析能力受屏幕可见内容限制。这一点在文档与代码中均标注“未经真实数据验证”。
+- 代价：Outlook 的读取速度、结构化程度和稳定性不如 Graph API；邮件正文/附件解析能力受屏幕可见内容限制。这一点在文档与代码中均标注“未经真实数据验证”。
+- 口径：论文/报告中应写“Outlook 使用手机 App 屏幕读取”，不要写“支持 Graph 与手机两种接入”。
 
 ### 3.2 Task Planning and Tool Selection
 
@@ -65,7 +68,7 @@
 | 时间统一转 ISO-8601 | ✅ | `extract/normalizer.py` | 固定 `+08:00`；相对时间基于注入的 `now`，保证可复现。 |
 | 相对时间（next Friday 等）换算成绝对时间 | ✅ | `extract/normalizer.py` | 中英文相对日期、周几、`N 天后`、`EOD` 等。 |
 | 无法可靠解析时标记供人工检查 | ✅ | `models.py`、`conflict.py` | `unresolved_time` / `needs_review` → `uncertain`，不猜日期。 |
-| 关键词 + 语义匹配 `HW1` vs `Assignment 1` | ◐ | `dedupe.py` | **语义匹配目前是字符级相似度**（token Jaccard + difflib），不是 embedding。接口可替换，但当前离线口径应如实描述为“词法 + 字符相似度”。 |
+| 关键词 + 语义匹配 `HW1` vs `Assignment 1` | ✅ | `dedupe.py`、`semantic.py` | 词法归一化（Jaccard + 字符序列）与本地 embedding 余弦可组合使用；`combined` 取两者较高分，阈值可配。模型缺失/离线自动退回词法。三策略同数据对比见 8.1。 |
 | 合并同一任务并保留每个原始来源 | ✅ | `dedupe.py`、`conflict.py`、`writer/xlsx_writer.py` | 本轮新增 `ResolvedRecord.sources` 与 xlsx `All Sources` 列。 |
 
 ### 3.4 Verification and Conflict Resolution
@@ -102,6 +105,7 @@
 | 每个样本配人工准备 ground truth | ◐ | `dataset/generator.py` | **偏差**：ground truth 由生成器按事实直接导出，不是两名组员独立标注。等效性见 4.1。 |
 | 每档 20–30 条 | ✅ | `dataset/generator.py: generate_samples(per_tier=24)` | 3 档 × 24 = 72 条。 |
 | 覆盖直接抽取、重复、字段缺失、冲突、旧值被新值取代 | ✅ | `dataset/generator.py` | 另有转发链、签名/闲聊噪声、跨年/时区、姓名变体、旧 DDL 干扰等。 |
+| 与查询无关的干扰来源（用于检验动态选源） | ✅ | `dataset/generator.py: _distractors` | 每个样本额外挂 4 个无关来源：实习内推群、家人群、社团活动群、其他课程群。消息带“看起来像 DDL”的诱饵（网申截止、例会报名截止、其他课程作业截止），但**不进入 ground truth，也不改写任何事实**，truth 仍只由事实导出。 |
 | 两名组员独立标注并讨论分歧 | ✗ | — | 未做；用生成器事实替代。 |
 | 真实聊天记录上的有限测试（需同意） | ✗ | — | 未做，需组内安排与参与用户同意。 |
 | train / val / test 划分，防止泄漏 | ✅ | `dataset/generator.py`、`write_dataset` | 60/20/20 确定性划分；test 15 条。 |
@@ -146,7 +150,7 @@
 | RQ1：Agent 是否优于单次直出 | ✅ | `experiments/ddl_agent/results/report.md`（test 集）与 `ablation_test/ablation.md` | test 集 Agent-LLM 精确 0.8125 / 召回 1.0；baseline 精确 0.500 / 召回 0.562。均为合成数据。 |
 | RQ2：迭代验证是否改善重复/缺失/冲突 | ◐ | `conflict.py`、`tests/test_ddl_llm.py`、`ablation_test` | 两轮机制与测试存在；离线追加检索不产生新证据，真实收益未验证。消融显示关闭验证后冲突正确率 1.0 → 0.667。 |
 | RQ3：性能收益与多步开销的权衡 | ✅ | `run_eval.py` 报告 | 同时给出质量、耗时、调用数、token、成本。 |
-| RQ4：各模块贡献（消融） | ✅ | 本轮新增 `--ablation` / `--no-dedup` / `--no-verify` / `--fixed-sources`，结果见第 8 节 | 去重主要降低重复率；验证主要提升精确匹配与冲突正确率；动态来源选择在当前离线 test 集上没有质量收益，但关闭后少 15 次规划调用。 |
+| RQ4：各模块贡献（消融） | ✅ | 本轮新增 `--ablation` / `--no-dedup` / `--no-verify` / `--fixed-sources`，结果见第 8 节 | 去重主要降低重复率；验证主要提升精确匹配与冲突正确率；动态来源选择在加干扰源后仍不改变任务质量，但关闭后 LLM 调用从 37 升到 67——即动态选源省的是无关消息的抽取成本。 |
 | RQ5：小规模用户研究 | ✗ | — | 人工环节，未做，需组内安排问卷/访谈与对照展示。 |
 
 ## 8. RQ4 消融结果
@@ -155,25 +159,83 @@
 
 ```bash
 python -m ddl_agent.evaluation.run_eval --ablation --split test \
-  --out experiments/ddl_agent/results/ablation_test
+  --out experiments/ddl_agent/results/ablation_distractors2
 ```
 
-同一批 test 样本（15 条），同一套原始消息，实际引擎为 `llm`。完整结果见
-`experiments/ddl_agent/results/ablation_test/ablation.md` 与 `ablation.json`。
+同一批 test 样本（15 条、16 条 ground truth），同一套原始消息，实际引擎为 `llm`。
+本轮数据集已为每个样本加入 4 个无关来源（实习内推群、家人群、社团活动群、其他课程群），
+干扰消息含“网申截止 / 例会报名截止 / 其他课程作业截止”等诱饵，但**不进入 ground truth**。
+完整结果见 `experiments/ddl_agent/results/ablation_distractors2/ablation.md` 与 `ablation.json`。
 
-| 变体 | 精确 | ±1天模糊 | 召回 | 重复率 | 冲突正确率 | 文档通过率 | LLM 调用 | token | 成本 USD | 平均耗时 s |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| full（全开） | 0.812 | 0.812 | 1.000 | 0.000 | 1.000 | 1.000 | 38 | 15968 | 0.007399 | 2.500 |
-| no_dedup（关去重） | 0.812 | 0.812 | 1.000 | **0.158** | 1.000 | 1.000 | 36 | 15217 | 0.007097 | 2.368 |
-| no_verify（关冲突验证） | **0.750** | **0.750** | 1.000 | 0.000 | **0.667** | 1.000 | 36 | 15150 | 0.007023 | 2.254 |
-| fixed_sources（固定来源） | 0.812 | 0.812 | 1.000 | 0.000 | 1.000 | 1.000 | **23** | **11220** | **0.004784** | **1.454** |
+| 变体 | 精确 | ±1天模糊 | 召回 | 精度 | 无关行 | 重复率 | 冲突正确率 | 文档通过率 | LLM 调用 | token | 成本 USD | 平均耗时 s |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| full（全开） | 0.812 | 0.812 | 1.000 | 1.000 | 0 | 0.000 | 1.000 | 1.000 | 37 | 16647 | 0.007454 | 2.604 |
+| no_dedup（关去重） | 0.812 | 0.812 | 1.000 | **0.889** | 0 | **0.111** | 1.000 | 1.000 | 36 | 16291 | 0.007324 | 2.500 |
+| no_verify（关冲突验证） | **0.750** | **0.750** | 1.000 | 1.000 | 0 | 0.000 | **0.667** | 1.000 | 36 | 16313 | 0.007349 | 2.417 |
+| fixed_sources（固定来源） | 0.812 | 0.812 | 1.000 | 1.000 | 0 | 0.000 | 1.000 | 1.000 | **67** | **27843** | **0.009177** | **3.635** |
+
+**加入干扰源前后**
+
+| 变体 | 加入前 LLM 调用 | 加入后 LLM 调用 | 加入前 token | 加入后 token | 质量变化 |
+| --- | --- | --- | --- | --- | --- |
+| full | 38 | 37 | 15968 | 16647 | 无 |
+| fixed_sources | 23 | 67 | 11220 | 27843 | 无 |
 
 **如实解读**
 
-- 任务质量贡献最大的是**冲突验证/裁决**：关闭后精确匹配 −0.062，冲突正确率 −0.333。
-- **去重**的可测贡献集中在重复率：关闭后 0 → 0.158；精确匹配不变，因为当前精确指标按 ground-truth 匹配计，额外重复行由重复率单独惩罚。
-- **动态工具选择**在当前 test 集上没有质量差异；关闭后 LLM 调用从 38 降到 23、token 从 15968 降到 11220。原因是这些样本的 `source_config` 基本覆盖全部相关来源，规划器没有“排除了干扰源”的空间。这不能证明该模块无用，只说明当前数据集没有覆盖“该查 A、不该查 B”的场景。
-- 所有数字来自合成数据；`full` 与历史三方对比中的 Agent-LLM 数字一致（0.8125 / 1.0 / 0 / 1.0）。
+- 任务质量贡献最大的仍是**冲突验证/裁决**：关闭后精确匹配 −0.062，冲突正确率 −0.333。
+- **去重**的可测贡献集中在重复率：关闭后 0 → 0.111，精度 1.000 → 0.889；精确匹配不变，因为精确指标按 ground-truth 匹配计，额外重复行由重复率/精度单独惩罚。
+- **动态来源选择**：加入干扰源后，全开 37 次调用，`fixed_sources` 升到 67 次（+30，+81%），token 16647 → 27843（+67%），成本约 +23.1%，平均耗时 2.60s → 3.64s。质量指标完全不变。
+  - 原因 1：`fixed_sources` 会跳过 LLM 规划（省下约 15 次规划调用），但把 4 个干扰来源的消息全部送进抽取器；多出的抽取/裁决调用超过省下的规划调用，净增 30 次。
+  - 原因 2：LLM 抽取器能按课程与“是否像课程 DDL”过滤实习内推、家人群、社团群消息，其他课程作业也被课程过滤丢弃，因此额外消息没有变成输出行。
+  - 结论：**在本数据集上，动态选源的收益是成本与延迟，不是任务质量**。这不能证明“质量上无用”，但也**不能**写成“动态选源提升了准确率”。数据集没有“选源正确率”这一 ground truth，是当前评测的明确局限。
+- 所有数字来自合成数据；`full` 的精确/召回/冲突正确率与历史三方对比一致（0.8125 / 1.0 / 1.0）。
+
+### 8.1 语义匹配：词法 / embedding / 组合
+
+命令：
+
+```bash
+python -m ddl_agent.evaluation.run_eval --similarity-ablation --split test \
+  --out experiments/ddl_agent/results/similarity_test4
+```
+
+同一批 test 样本、同一套原始消息、其余模块全开，只替换去重相似度。
+模型为本地 `sentence-transformers` 的 `paraphrase-multilingual-MiniLM-L12-v2`，
+缓存目录 `F:/models/sentence-transformers`（未写入 C 盘）。
+
+| 策略 | 精确 | 召回 | 重复率 | 精度 | 无关行 | 文档通过率 | embedding 可用 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 词法（lexical） | 0.812 | 1.000 | 0.000 | 1.000 | 0 | 1.000 | — |
+| 纯 embedding | 0.812 | 1.000 | **0.059** | **0.941** | 0 | 1.000 | True |
+| 组合（combined） | 0.812 | 1.000 | 0.000 | 1.000 | 0 | 1.000 | True |
+
+**结论：在当前 test 集上，embedding 没有带来质量提升。**
+
+- 精确匹配、召回、冲突正确率三条策略完全相同（0.812 / 1.000 / 1.000），词法已经达到该数据集的上限。
+- 纯 embedding 反而多出 1 行重复：`Assignment 2` 与 `HW2` 的余弦只有 0.342（< 0.6），
+  而词法归一化后两者完全相同。所以纯 embedding 的重复率 0 → 0.059、精度 1.000 → 0.941。
+- 组合策略取 `max(词法, embedding)`，用词法的 1.0 兜住了这个错误，结果与纯词法一致。
+  这说明**组合的价值是互补与保底，不是提高本轮指标**。
+- 数字口径：三条策略的 LLM 调用均为 37 次；embedding 只影响去重，不影响抽取与裁决调用。
+
+**改写能力：有，但要如实限定**
+
+- 单元级验证：`Midterm Report` / `期中报告` 余弦 0.652（可过 0.6），`term paper` / `期中报告` 余弦 0.476（不过阈值）。
+- 曾试过在 test 集加入一条“同一任务中英改写”样本，embedding 能把精确从 0.750 抬到 0.875；
+  但那等于**针对方法调整测试集**，已撤销，不进入本轮数据与结论。
+- 因此当前口径是：**embedding 在真正的跨语言改写上有能力，但在现有以短代号（HW1/Assignment 1）为主的
+  test 集上测不出收益，单独使用甚至会因缩写而下降**。不把 embedding 写成“已解决语义匹配”。
+
+**离线与降级**
+
+- `sentence-transformers` 是可选依赖，放在 `requirements-embedding.txt`，不进入主 `requirements.txt`/CI，
+  避免 CI 为评测去装 torch。
+- 模型默认下载到 `F:/models/sentence-transformers`；代码在加载前设置 `HF_HOME`、`SENTENCE_TRANSFORMERS_HOME`、
+  `TORCH_HOME`，避免写到 C 盘用户目录。
+- 离线环境：先把模型目录整体拷贝到目标机器，或设置 `DDL_EMBEDDING_CACHE` 指向已有缓存，并保持模型名一致；
+  加载失败的异常会写入报告的 `fallback_reason`，评测继续用词法跑完，不中断。
+- 真实模型用例默认跳过；设置 `RUN_EMBEDDING_TESTS=1` 才执行。CI 与离线测试不依赖模型文件。
 
 ## 9. 仍未完成 / 需要组内安排
 
@@ -182,5 +244,6 @@ python -m ddl_agent.evaluation.run_eval --ablation --split test \
 3. **真实聊天/邮件测试**：需要真实账号、参与用户同意与数据脱敏。
 4. **人工文档抽查**：当前只有自动结构检查，缺少 proposal 要求的人工检查环节。
 5. **独立双人标注**：当前 ground truth 由生成器事实导出，需补一次独立标注或抽样复核来验证生成器事实。
-6. **真正的语义匹配**：当前是词法 + 字符相似度；如需 embedding，需要新增依赖与离线缓存。
+6. **语义匹配的剩余缺口**：embedding 已接入，但在当前 test 集上没有带来提升；纯 embedding 对 `Assignment 2` / `HW2` 这类缩写反而下降。跨语言改写只在单元级验证过（`Midterm Report` / `期中报告` 0.652，`term paper` / `期中报告` 0.476 仍不过阈值）。
 7. **通用工具编排**：当前“工具选择”仅限来源子集与冲突追加检索，尚未实现通用工具注册表/任意工具序列。
+8. **选源指标缺失**：数据集没有“应该选哪些来源”的 ground truth，因此动态选源只能报告成本/延迟收益，无法量化选源正确率。

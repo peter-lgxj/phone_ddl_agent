@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -19,10 +20,12 @@ from pathlib import Path
 from ..connectors.local_chat import LocalChatConnector
 from ..connectors.local_eml import LocalEmlConnector
 from ..dataset.generator import load_samples, write_dataset
+from ..dedupe import Deduplicator
 from ..factory import build_agent, llm_enabled
 from ..llm.client import LLMClient
 from ..planner import QueryPlanner
 from ..retrieval import RetrievalOrchestrator
+from ..settings import EMBEDDING_CACHE_DIR, EMBEDDING_MODEL
 from ..writer.xlsx_writer import XlsxWriter
 from .baseline import LLMSinglePassBaseline, SinglePassBaseline
 from .metrics import evaluate_dataset, evaluate_sample, validate_document
@@ -58,18 +61,38 @@ ABLATIONS = [
 ]
 
 
+@dataclass(frozen=True)
+class SimilarityConfig:
+    """去重相似度策略；embedding 不可用时自动退回词法。"""
+
+    strategy: str = "lexical"
+    model: str = EMBEDDING_MODEL
+    cache_dir: str = EMBEDDING_CACHE_DIR
+
+    def build(self):
+        from ..semantic import SemanticMatcher
+
+        return SemanticMatcher(
+            strategy=self.strategy, model_name=self.model,
+            cache_dir=self.cache_dir,
+        )
+
+
+SIMILARITIES = ("lexical", "embedding", "combined")
+
+
 def materialize_sources(sample: dict, root: Path) -> list:
-    """把样本里的消息写成真实连接器能读的 .eml 目录 + 聊天归档。"""
+    """把样本里的消息写成真实连接器能读的 .eml 目录 + 每个群独立的聊天归档。"""
     root.mkdir(parents=True, exist_ok=True)
     mail_dir = root / "mail"
     mail_dir.mkdir(exist_ok=True)
-    chat_items: list[dict] = []
+    chats: dict[str, list[dict]] = {}
 
     for message in sample["messages"]:
         if message["source_type"] == "official_email":
             _write_eml(message, mail_dir)
         else:
-            chat_items.append({
+            chats.setdefault(message["source_name"], []).append({
                 "message_id": message["message_id"],
                 "sender": message.get("sender", "unknown"),
                 "role": message.get("role", "student"),
@@ -82,11 +105,12 @@ def materialize_sources(sample: dict, root: Path) -> list:
     sources: list = []
     if mail_dir.glob("*.eml"):
         sources.append(LocalEmlConnector("outlook", mail_dir, "official_email"))
-    if chat_items:
-        chat_path = root / "chat.json"
-        chat_path.write_text(json.dumps({"messages": chat_items}, ensure_ascii=False, indent=2),
+    for index, (name, items) in enumerate(chats.items(), start=1):
+        chat_path = root / f"chat-{index}.json"
+        chat_path.write_text(json.dumps({"messages": items}, ensure_ascii=False, indent=2),
                              encoding="utf-8")
-        sources.append(LocalChatConnector("course-chat", chat_path, "student_chat"))
+        source_type = items[0].get("source_type") or "student_chat"
+        sources.append(LocalChatConnector(name, chat_path, source_type))
     return sources
 
 
@@ -104,7 +128,8 @@ def _write_eml(message: dict, directory: Path) -> None:
 def run_one(sample: dict, work_root: Path, client: LLMClient | None = None,
             ablation: Ablation | None = None,
             include_baseline: bool = True,
-            systems: tuple[str, ...] = ("agent_llm", "agent_rules")) -> dict:
+            systems: tuple[str, ...] = ("agent_llm", "agent_rules"),
+            matcher=None, threshold: float | None = None) -> dict:
     now = datetime.fromisoformat(sample["now"])
     ablation = ablation or Ablation()
     sample_dir = work_root / sample["sample_id"]
@@ -117,6 +142,7 @@ def run_one(sample: dict, work_root: Path, client: LLMClient | None = None,
         "query": sample["query"],
         "ablation": asdict(ablation),
         "ablation_label": ablation.label,
+        "similarity": matcher.info() if matcher is not None else {"strategy": "lexical"},
     }
 
     for key, engine in (("agent_llm", "llm"), ("agent_rules", "rules")):
@@ -125,19 +151,30 @@ def run_one(sample: dict, work_root: Path, client: LLMClient | None = None,
         # 没有可用 LLM 客户端时不发网络请求，两个 Agent 都走规则实现
         effective_engine = engine if (engine == "rules" or client is not None) else "rules"
         document = sample_dir / f"{key}_{ablation.label}.xlsx"
+        dedupe_kwargs = {}
+        if matcher is not None:
+            dedupe_kwargs["similarity"] = matcher.similarity
+            dedupe_kwargs["raw_inputs"] = True
+            dedupe_kwargs["threshold"] = (
+                threshold if threshold is not None else matcher.threshold
+            )
+        elif threshold is not None:
+            dedupe_kwargs["threshold"] = threshold
         agent, engine_name = build_agent(
             sources, writer=XlsxWriter(document), now=now, engine=effective_engine,
             dedupe_enabled=ablation.dedupe, verify_enabled=ablation.verify,
             fixed_sources=ablation.fixed_sources,
+            deduplicator=Deduplicator(**dedupe_kwargs) if dedupe_kwargs else None,
         )
         result = agent.run(sample["query"], sample.get("source_config", ""))
         entry[key] = {
-            **evaluate_sample(result.records, sample["ground_truth"]),
+            **evaluate_sample(result.records, sample["ground_truth"], matcher),
             "engine": engine_name,
             "trace": result.trace,
             "write_ok": bool(result.write_result and result.write_result.ok),
             "document": validate_document(document),
             "warnings": result.warnings,
+            "plan": result.plan,
             "records": [
                 {"task_name": r.task_name, "course": r.course, "deadline_iso": r.deadline_iso,
                  "status": r.status, "confidence": r.confidence, "source": r.source,
@@ -149,13 +186,16 @@ def run_one(sample: dict, work_root: Path, client: LLMClient | None = None,
     if not include_baseline:
         return entry
 
-    plan = QueryPlanner().plan(sample["query"], sources, now)
-    orchestrator = RetrievalOrchestrator(sources, now=now)
+    # baseline 使用与 Agent-LLM 相同的选源计划，保证“同一套原始材料”公平可比
+    plan = entry.get("agent_llm", {}).get("plan")
+    if plan is None:
+        plan = QueryPlanner().plan(sample["query"], sources, now)
+    orchestrator = RetrievalOrchestrator(plan.sources or sources, now=now)
     raw_messages = orchestrator.fetch(plan)
     baseline = LLMSinglePassBaseline(client) if client is not None else SinglePassBaseline()
     base_records, base_trace = baseline.run(raw_messages, now=now)
     entry["baseline"] = {
-        **evaluate_sample(base_records, sample["ground_truth"]),
+        **evaluate_sample(base_records, sample["ground_truth"], matcher),
         "engine": "llm_single_pass" if client is not None else "rule_single_pass",
         "trace": base_trace,
         "records": [
@@ -216,6 +256,8 @@ def _render_report(summary: dict, dataset: str, split: str) -> str:
         f"- 消融设置：去重={'开' if summary.get('ablation', {}).get('dedupe', True) else '关'}，"
         f"冲突验证={'开' if summary.get('ablation', {}).get('verify', True) else '关'}，"
         f"动态工具选择={'关（固定源）' if summary.get('ablation', {}).get('fixed_sources') else '开'}。",
+        f"- 相似度策略：{summary.get('similarity', {}).get('strategy', 'lexical')}"
+        f"（embedding 可用={summary.get('similarity', {}).get('available', 'N/A')}）。",
         "",
         "## 总体指标",
         "",
@@ -289,13 +331,15 @@ def summarize_ablation(entries: list[dict], ablation: Ablation) -> dict:
     return block
 
 
-def run_ablation(samples: list[dict], work_root: Path, client: LLMClient | None) -> list[dict]:
+def run_ablation(samples: list[dict], work_root: Path, client: LLMClient | None,
+                 matcher=None) -> list[dict]:
     rows: list[dict] = []
     for ablation in ABLATIONS:
         entries = [
             run_one(
                 sample, work_root / "ablation" / ablation.label, client=client,
                 ablation=ablation, include_baseline=False, systems=("agent_llm",),
+                matcher=matcher,
             )
             for sample in samples
         ]
@@ -304,6 +348,100 @@ def run_ablation(samples: list[dict], work_root: Path, client: LLMClient | None)
               f"exact={rows[-1]['exact_match']:.3f} recall={rows[-1]['recall']:.3f} "
               f"dup={rows[-1]['duplicate_rate']:.3f}")
     return rows
+
+
+def summarize_similarity(entries: list[dict], strategy: str, matcher) -> dict:
+    block = evaluate_dataset([entry["agent_llm"] for entry in entries])
+    valid_docs = sum(1 for entry in entries if entry["agent_llm"]["document"]["ok"])
+    block.update({
+        "strategy": strategy,
+        "similarity": matcher.info(),
+        "document_valid_rate": round(valid_docs / len(entries), 4) if entries else 0.0,
+        "efficiency": _efficiency(entries, "agent_llm"),
+    })
+    return block
+
+
+def run_similarity_ablation(samples: list[dict], work_root: Path,
+                            client: LLMClient | None,
+                            config: SimilarityConfig) -> list[dict]:
+    rows: list[dict] = []
+    for strategy in SIMILARITIES:
+        matcher = SimilarityConfig(
+            strategy=strategy, model=config.model,
+            cache_dir=config.cache_dir,
+        ).build()
+        entries = [
+            run_one(
+                sample, work_root / "similarity" / strategy, client=client,
+                include_baseline=False, systems=("agent_llm",), matcher=matcher,
+            )
+            for sample in samples
+        ]
+        rows.append(summarize_similarity(entries, strategy, matcher))
+        print(f"相似度 {strategy}: exact={rows[-1]['exact_match']:.3f} "
+              f"dup={rows[-1]['duplicate_rate']:.3f} "
+              f"available={rows[-1]['similarity']['available']}")
+    return rows
+
+
+def _render_similarity(rows: list[dict], dataset: str, split: str) -> str:
+    lines = [
+        "# 相似度策略对比（词法 / embedding / 组合）",
+        "",
+        f"- 数据集：`{dataset}`；划分：`{split}`；样本数：{rows[0]['samples'] if rows else 0}",
+        "- 同一批样本、同一套原始消息、其余模块全开；只替换去重相似度。",
+        "- 精确匹配、召回、重复率、精度、无关行口径与消融实验一致。",
+        "",
+        "| 策略 | 精确 | 召回 | 重复率 | 精度 | 无关行 | 文档通过率 | embedding 可用 | 说明 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        info = row["similarity"]
+        note = "正常" if info["available"] else f"退回词法：{info['fallback_reason']}"
+        lines.append(
+            f"| {row['strategy']} | {row['exact_match']:.3f} | {row['recall']:.3f} | "
+            f"{row['duplicate_rate']:.3f} | {row['precision']:.3f} | {row['unknown_rows']} | "
+            f"{row['document_valid_rate']:.3f} | {info['available']} | {note} |"
+        )
+
+    by_strategy = {row["strategy"]: row for row in rows}
+    lexical = by_strategy.get("lexical")
+    combined = by_strategy.get("combined")
+    embedding = by_strategy.get("embedding")
+    lines += ["", "## 解读", ""]
+    if lexical and combined:
+        lines.append(
+            f"- 组合策略相对纯词法：精确 {combined['exact_match'] - lexical['exact_match']:+.3f}，"
+            f"重复率 {combined['duplicate_rate'] - lexical['duplicate_rate']:+.3f}。"
+        )
+    if lexical and embedding:
+        lines.append(
+            f"- 纯 embedding 相对纯词法：精确 "
+            f"{embedding['exact_match'] - lexical['exact_match']:+.3f}，"
+            f"重复率 {embedding['duplicate_rate'] - lexical['duplicate_rate']:+.3f}。"
+        )
+    unavailable = [row["strategy"] for row in rows if not row["similarity"]["available"]]
+    if unavailable:
+        lines.append(
+            f"- 以下策略实际退回了词法路径：{', '.join(unavailable)}；"
+            "上面的差异不能归因于 embedding。"
+        )
+    lines += [
+        "",
+        "## 口径与限制",
+        "",
+        "- 数字来自合成数据；大部分任务名是 `HW1` / `Assignment 1` 这类短文本，"
+        "embedding 的优势可能只在真正的跨语言改写上体现，本轮不保证出现提升。",
+        "- 组合策略取词法与 embedding 的较高分（`max`），不是加权平均："
+        "两条路径各自过阈值即可合并，避免任一路径分数偏低时把另一路径的证据拉没。",
+        "- 阈值：词法 0.78、embedding 余弦 0.6，可用 `--dedupe-threshold` 调整；"
+        "embedding 模型默认 `paraphrase-multilingual-MiniLM-L12-v2`，缓存目录默认 "
+        "`F:/models/sentence-transformers`（可用 `--embedding-model` / `--embedding-cache` 覆盖）。",
+        "- 模型缺失、下载失败或离线时不会中断流程，会退回词法并在表中标注"
+        "（`embedding 可用=False`）；此时各策略差异不能归因于 embedding。",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def _render_ablation(rows: list[dict], dataset: str, split: str) -> str:
@@ -316,15 +454,16 @@ def _render_ablation(rows: list[dict], dataset: str, split: str) -> str:
         "- 同一批样本、同一套原始消息；每行只改变一个开关，其余保持全开。",
         "- 指标口径与三方对比一致；冲突正确率只在含冲突 ground truth 的样本上统计。",
         "",
-        "| 变体 | 精确 | ±1天模糊 | 召回 | 重复率 | 冲突正确率 | 文档通过率 | "
+        "| 变体 | 精确 | ±1天模糊 | 召回 | 精度 | 无关行 | 重复率 | 冲突正确率 | 文档通过率 | "
         "LLM 调用 | token | 成本 USD | 平均耗时 s |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in rows:
         efficiency = row["efficiency"]
         lines.append(
             f"| {row['variant']} | {row['exact_match']:.3f} | {row['fuzzy_match']:.3f} | "
-            f"{row['recall']:.3f} | {row['duplicate_rate']:.3f} | "
+            f"{row['recall']:.3f} | {row['precision']:.3f} | {row['unknown_rows']} | "
+            f"{row['duplicate_rate']:.3f} | "
             f"{_fmt(row['conflict_accuracy'])} | {row['document_valid_rate']:.3f} | "
             f"{efficiency['llm_calls']} | {efficiency['tokens_estimate']} | "
             f"{efficiency['cost_usd']:.6f} | {efficiency['avg_seconds']:.3f} |"
@@ -338,6 +477,8 @@ def _render_ablation(rows: list[dict], dataset: str, split: str) -> str:
                 continue
             delta_exact = row["exact_match"] - full["exact_match"]
             delta_recall = row["recall"] - full["recall"]
+            delta_precision = row["precision"] - full["precision"]
+            delta_unknown = row["unknown_rows"] - full["unknown_rows"]
             delta_dup = row["duplicate_rate"] - full["duplicate_rate"]
             delta_conflict = (
                 None if row["conflict_accuracy"] is None or full["conflict_accuracy"] is None
@@ -345,6 +486,7 @@ def _render_ablation(rows: list[dict], dataset: str, split: str) -> str:
             )
             lines.append(
                 f"- **{row['variant']}**：精确 {delta_exact:+.3f}，召回 {delta_recall:+.3f}，"
+                f"精度 {delta_precision:+.3f}，无关行 {delta_unknown:+d}，"
                 f"重复率 {delta_dup:+.3f}，冲突正确率 "
                 f"{'N/A' if delta_conflict is None else f'{delta_conflict:+.3f}'}"
             )
@@ -364,7 +506,8 @@ def _render_ablation(rows: list[dict], dataset: str, split: str) -> str:
         "",
         "- 以上数字来自合成数据，只反映本生成器覆盖的场景。",
         "- `fixed_sources` 关闭的是 LLM 规划器的来源子集选择，改为固定使用全部已配置来源；"
-        "规则版本身就没有 LLM 规划，因此该开关对规则版影响很小。",
+        "它会跳过 LLM 规划，但把干扰来源的消息也送进抽取器，因此调用与 token 反而上升。"
+        "质量指标是否变化取决于抽取器能否过滤无关消息，本数据集上质量不变、成本上升。",
         "- `no_verify` 仍保留去重，只跳过冲突比对、追加检索与裁决模型调用。",
         "- `no_dedup` 让每条候选单独成行，会直接抬高重复率、降低文档质量。",
     ]
@@ -386,6 +529,14 @@ def main() -> None:
     parser.add_argument("--no-verify", action="store_true", help="消融：关闭冲突验证与裁决")
     parser.add_argument("--fixed-sources", action="store_true",
                         help="消融：关闭动态工具选择，固定使用全部已配置来源")
+    parser.add_argument("--similarity", choices=list(SIMILARITIES), default="lexical",
+                        help="去重相似度：lexical / embedding / combined")
+    parser.add_argument("--similarity-ablation", action="store_true",
+                        help="对比词法 / embedding / 组合三种相似度")
+    parser.add_argument("--embedding-model", default=EMBEDDING_MODEL)
+    parser.add_argument("--embedding-cache", default=EMBEDDING_CACHE_DIR)
+    parser.add_argument("--dedupe-threshold", type=float, default=None,
+                        help="去重相似度阈值（默认 0.78）")
     args = parser.parse_args()
 
     dataset_dir = Path(args.dataset)
@@ -408,8 +559,39 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     work_root = out_dir / "work"
 
+    similarity_config = SimilarityConfig(
+        strategy=args.similarity, model=args.embedding_model,
+        cache_dir=args.embedding_cache,
+    )
+
+    if args.similarity_ablation:
+        rows = run_similarity_ablation(samples, work_root, client, similarity_config)
+        payload = {
+            "dataset": args.dataset,
+            "split": args.split,
+            "samples": len(samples),
+            "config": asdict(similarity_config),
+            "strategies": rows,
+        }
+        (out_dir / "similarity.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (out_dir / "similarity.md").write_text(
+            _render_similarity(rows, args.dataset, args.split), encoding="utf-8"
+        )
+        print(f"\n相似度对比已写入：{out_dir / 'similarity.md'}")
+        return
+
+    matcher = similarity_config.build()
+    if similarity_config.strategy != "lexical" and not matcher.available:
+        print(
+            f"警告：{similarity_config.strategy} 相似度不可用，已退回词法路径："
+            f"{matcher.info()['fallback_reason']}",
+            file=sys.stderr,
+        )
+
     if args.ablation:
-        rows = run_ablation(samples, work_root, client)
+        rows = run_ablation(samples, work_root, client, matcher=matcher)
         payload = {
             "dataset": args.dataset,
             "split": args.split,
@@ -437,11 +619,13 @@ def main() -> None:
         verify=not args.no_verify,
         fixed_sources=args.fixed_sources,
     )
-    entries = [run_one(sample, work_root, client=client, ablation=ablation)
+    entries = [run_one(sample, work_root, client=client, ablation=ablation,
+                       matcher=matcher, threshold=args.dedupe_threshold)
                for sample in samples]
 
     overall = summarize(entries)
     overall["ablation"] = asdict(ablation)
+    overall["similarity"] = matcher.info()
     by_tier: dict[str, list[dict]] = defaultdict(list)
     for entry in entries:
         by_tier[entry["tier"]].append(entry)

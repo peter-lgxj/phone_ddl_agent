@@ -3,7 +3,7 @@
   "course": "COMP7608",
   "now": "2026-11-16T09:00:00+08:00",
   "query": "帮我查一下 COMP7608 的 Assignment 2 截止时间",
-  "source_config": "跟踪课程邮件、课程群聊和同学消息",
+  "source_config": "跟踪 outlook、COMP7608 课程群、实习内推群、家人群、社团活动群、COMP7404 课程群",
   "messages": [
     {
       "message_id": "medium-016-m1",
@@ -23,6 +23,46 @@
       "published_at": "2026-11-15T09:00:00+08:00",
       "subject": "",
       "text": "提醒一下，HW2 的截止时间是 12月10日 23:59，别和上周那个弄混。\nMy laptop fan is dying, any repair shop recommendations?"
+    },
+    {
+      "message_id": "medium-016-d1",
+      "source_name": "实习内推群",
+      "source_type": "student_chat",
+      "sender": "内推小助手",
+      "role": "student",
+      "published_at": "2026-11-16T03:00:00+08:00",
+      "subject": "",
+      "text": "【内推】某互联网公司 2026 暑期实习网申截止 12月15日 23:59，专业不限，欢迎投递。"
+    },
+    {
+      "message_id": "medium-016-d2",
+      "source_name": "家人群",
+      "source_type": "student_chat",
+      "sender": "妈妈",
+      "role": "student",
+      "published_at": "2026-11-16T04:00:00+08:00",
+      "subject": "",
+      "text": "这周日晚上 7 点回家吃饭，别迟到；顺便把上次的快递带回来。"
+    },
+    {
+      "message_id": "medium-016-d3",
+      "source_name": "社团活动群",
+      "source_type": "student_chat",
+      "sender": "社团干事",
+      "role": "student",
+      "published_at": "2026-11-16T05:00:00+08:00",
+      "subject": "",
+      "text": "本周三 18:00 社团例会，地点 CPD-3.04；报名截止周二中午 12:00。"
+    },
+    {
+      "message_id": "medium-016-d4",
+      "source_name": "COMP7404 课程群",
+      "source_type": "instructor_chat",
+      "sender": "助教",
+      "role": "ta",
+      "published_at": "2026-11-16T06:00:00+08:00",
+      "subject": "",
+      "text": "COMP7404 Assignment 9 截止 12月3日 23:59，请按时提交。"
     }
   ],
   "ground_truth": [

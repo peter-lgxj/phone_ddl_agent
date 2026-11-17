@@ -93,7 +93,7 @@ def test_pipeline_dedupes_and_writes_document(tmp_path):
     assert result.write_result.ok
     assert validate_document(document)["ok"]
     assert result.trace["llm_calls"] == 0
-    assert result.trace["message_count"] == 2
+    assert result.trace["message_count"] == len(sample["messages"]) - 1  # 其他课程的诱饵被课程软过滤
 
 
 def test_rule_pipeline_does_not_invent_missing_deadline(tmp_path):

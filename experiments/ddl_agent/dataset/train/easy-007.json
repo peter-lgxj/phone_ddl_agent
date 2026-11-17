@@ -3,7 +3,7 @@
   "course": "COMP7404",
   "now": "2026-11-16T09:00:00+08:00",
   "query": "帮我查一下 COMP7404 的 Homework 3 截止时间",
-  "source_config": "跟踪课程邮件、课程群聊和同学消息",
+  "source_config": "跟踪 outlook、实习内推群、家人群、社团活动群、COMP7608 课程群",
   "messages": [
     {
       "message_id": "easy-007-m1",
@@ -13,6 +13,46 @@
       "published_at": "2026-11-12T09:00:00+08:00",
       "subject": "[COMP7404] Homework 3",
       "body": "Dear students,\n\nHomework 3 for COMP7404 is due on Dec 04, 2026 23:59.\nThe final exam timetable will be announced separately.\n\nIf you received this message in error, please ignore it.\nThanks,\nAlice"
+    },
+    {
+      "message_id": "easy-007-d1",
+      "source_name": "实习内推群",
+      "source_type": "student_chat",
+      "sender": "内推小助手",
+      "role": "student",
+      "published_at": "2026-11-16T03:00:00+08:00",
+      "subject": "",
+      "text": "【内推】某互联网公司 2026 暑期实习网申截止 12月15日 23:59，专业不限，欢迎投递。"
+    },
+    {
+      "message_id": "easy-007-d2",
+      "source_name": "家人群",
+      "source_type": "student_chat",
+      "sender": "妈妈",
+      "role": "student",
+      "published_at": "2026-11-16T04:00:00+08:00",
+      "subject": "",
+      "text": "这周日晚上 7 点回家吃饭，别迟到；顺便把上次的快递带回来。"
+    },
+    {
+      "message_id": "easy-007-d3",
+      "source_name": "社团活动群",
+      "source_type": "student_chat",
+      "sender": "社团干事",
+      "role": "student",
+      "published_at": "2026-11-16T05:00:00+08:00",
+      "subject": "",
+      "text": "本周三 18:00 社团例会，地点 CPD-3.04；报名截止周二中午 12:00。"
+    },
+    {
+      "message_id": "easy-007-d4",
+      "source_name": "COMP7608 课程群",
+      "source_type": "instructor_chat",
+      "sender": "助教",
+      "role": "ta",
+      "published_at": "2026-11-16T06:00:00+08:00",
+      "subject": "",
+      "text": "COMP7608 Assignment 9 截止 12月3日 23:59，请按时提交。"
     }
   ],
   "ground_truth": [

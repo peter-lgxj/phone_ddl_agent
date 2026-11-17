@@ -36,7 +36,7 @@ Windows 用户双击仓库根目录的 `run_ddl_monitor.bat` 即可：脚本先�
 | 事项 | 本阶段处理方式 |
 |---|---|
 | 三个真实数据源 | 微信（群聊/私聊）、QQ（群聊）、Outlook App 收件箱，**全部通过手机 GUI 屏幕内容读取**。真机路径**未经真实数据验证**。 |
-| Outlook 接入方式 | 主路径是手机 Outlook App；Microsoft Graph 保留为**将来可选的第二实现**，不再是主路径。 |
+| Outlook 接入方式 | **只走手机 Outlook App GUI 读屏**，与微信、QQ 共用同一套手机层。Microsoft Graph 不在当前实现路径上，代码骨架仅作为“将来可选实现”保留，当前不启用。 |
 | 本地 `.eml` / 聊天归档 | 降级为**离线测试替身**，保留用于无手机、无账号时跑通全链路与测试。 |
 | LLM 依赖 | 规划/抽取/裁决走 DeepSeek；断网或无 key 自动降级规则实现。 |
 | 现有手机层 | **不改动任何公开行为**，只作为读取工具被调用。 |
@@ -156,7 +156,7 @@ class MessageSource(Protocol):
 | `MobileAppSource`（微信 / QQ / Outlook） | **主路径，未经真机验证** | 通过 ScreenAgent 在 App 内搜索/滚动定位目标会话，读取屏幕消息 |
 | `LocalEmlConnector` | 离线测试替身 | 读取 `*.eml` 目录；无手机时跑通全链路 |
 | `LocalChatConnector` | 离线测试替身 | 读取聊天归档 JSON；无手机时跑通全链路 |
-| `GraphMailConnector` | 将来可选 | 通过 Microsoft Graph `/me/messages`；无凭据时抛 `SourceNotConfigured` |
+| `GraphMailConnector` | 不在主路径 | 将来可选实现的代码骨架；当前不启用、不测试、不作为交付能力 |
 
 同一 `fetch(plan)` 契约，评测可任意替换而不改上层。
 
@@ -280,6 +280,7 @@ ddl_agent/
   planner.py
   pipeline.py
   connectors/{base,local_eml,local_chat,graph_mail,mobile_chat}.py
+  semantic.py                 # 词法 + 本地 embedding 相似度（离线可降级）
   extract/{rules,normalizer,llm_extractor}.py
   llm/{client,planner,arbiter}.py
   factory.py                  # LLM_ENABLED 开关与规则降级
@@ -307,6 +308,9 @@ experiments/ddl_agent/results/   # 评测输出（.gitignore 已忽略）
   已过期旧 DDL、他人课程任务、考试/上课时间、`27 Nov 2026` 与中文日期等规则不覆盖的写法、
   `the Friday after next` / `月底前` / `考完试那周` / `PST` 时区等。
 - 每个样本：`sample_id`、`tier`、`query`、`source_config`、`messages[]`（email/chat 混合）、`ground_truth[]`。
+- 干扰来源：每个样本额外挂 4 个与查询无关的来源（实习内推群、家人群、社团活动群、其他课程群），
+  内含“网申截止 / 例会报名截止 / 其他课程作业截止”等像 DDL 的诱饵。它们**不进入 ground truth**，
+  ground truth 仍只由事实导出；用途是检验动态选源是否排除无关来源，以及固定源时是否多花抽取成本。
 - `ground_truth` 字段：`task_name`、`course`、`deadline_iso`、`status`、`expected_sources[]`、`conflict_expected`（bool）、`winner_reason`。
 - 划分：按 tier 分层抽样 `train/val/test = 60%/20%/20%`，固定随机种子，生成时写 `split` 字段，避免 prompt 调参泄漏。
 - 生成器确定性（seed 固定），可重建；不手写虚构“实测指标”。
@@ -329,13 +333,30 @@ experiments/ddl_agent/results/   # 评测输出（.gitignore 已忽略）
 不做规划、不做去重、不做冲突核查、不写审计。`SinglePassBaseline` 是同协议的规则兜底，
 在无 key 时使用。token/成本按同一计价表统计。
 
+### 10.4 语义相似度：词法 / embedding / 组合
+
+- 接口：`SemanticMatcher(strategy, threshold)` 返回 0~1 相似度；去重与指标匹配共用同一实现。
+- 三种策略：
+  - `lexical`：任务名归一化后，token Jaccard 0.6 + 字符序列相似度 0.4；阈值 0.78。
+  - `embedding`：本地 `sentence-transformers`（默认 `paraphrase-multilingual-MiniLM-L12-v2`）余弦；阈值 0.6。
+  - `combined`：取 `max(lexical, embedding)`，任一通道过阈值即可合并；不是加权平均。
+- 降级：`sentence_transformers` 未安装、模型未下载、加载异常或离线不可用时，`similarity()` 返回词法分数，
+  报告的 `similarity.available=false` 并写入 `fallback_reason`；评测与离线测试继续跑完，不中断。
+- 依赖与缓存：`sentence-transformers` 放在 `requirements-embedding.txt`（可选），不进入主依赖与 CI；
+  模型与框架缓存默认 `F:/models/sentence-transformers`，代码在加载前设置 `HF_HOME`、
+  `SENTENCE_TRANSFORMERS_HOME`、`TORCH_HOME`，避免写到 C 盘用户目录。
+- 离线环境：把缓存目录整体拷贝到目标机器，或设置 `DDL_EMBEDDING_CACHE` 指向已有目录，并保持模型名一致；
+  可用 `--embedding-model` / `--embedding-cache` / `--dedupe-threshold` 在评测命令行覆盖。
+- 真实模型用例默认跳过，设置 `RUN_EMBEDDING_TESTS=1` 才执行。
+
 ## 11. 验证状态标注
 
 | 能力 | 状态 |
 |---|---|
 | 本地 `.eml` / 聊天归档连接器、抽取、归一化、去重、冲突、写入、评测 | 已实现，离线测试真跑 |
 | DeepSeek 规划 / 抽取 / 冲突裁决 | 已真实调用（合成数据），用量与成本写入报告 |
-| Graph 邮件连接器 | 骨架，**未经真实数据验证** |
+| Graph 邮件连接器 | 不在主路径；仅保留“将来可选”骨架，未验证 |
+| 语义匹配（本地 embedding） | 已实现并离线跑通；模型缺失时退回词法 |
 | 微信/QQ 真机读取 | 复用现有手机层，**未经真机验证**（设备已拔线） |
 | 真实邮件/聊天上的整体效果 | **未验证** |
 
@@ -366,6 +387,9 @@ baseline 0.5200 / 0.6533 / 0.2051 / 0.7273。
 Agent-LLM 共 179 次调用、75108 token、约 $0.0349。
 
 说明：
+- 该表是**加入干扰来源之前**的三方对比；加入干扰来源后，Agent-LLM 的精确/召回/冲突正确率不变，
+  只是来源配置变长、token 略增（full 从 15968 到 16647）。当前 RQ4 与相似度对比数字见
+  `docs/proposal-compliance.md` 第 8 节。
 - 精确/模糊匹配达不到 1.0，是因为部分 ground truth 本身没有具体时间
   （missing / uncertain），不计入时间命中，但计入召回。
 - 以上数字全部来自**合成数据**；真实邮件与真实微信/QQ 记录尚未验证，
@@ -391,7 +415,7 @@ Agent-LLM 共 179 次调用、75108 token、约 $0.0349。
 3. 数据集生成器 + 划分 + ground truth。
 4. Baseline + 评测脚本，产出离线评测报告。
 5. LLM 规划/抽取/裁决入链、数据集去模板化、三方对比（已完成，见 §11.1）。
-6. （后续）Graph 真实接入、真机聊天读取、真实数据上的复测与消融实验。
+6. （后续）真机聊天读取、真实数据上的复测与消融实验；Graph 接入仅作为**非主路径的可选实现**，不排入当前里程碑。
 
 ## 14. 手机优先架构（阶段五，当前方向）
 
@@ -403,7 +427,7 @@ Agent-LLM 共 179 次调用、75108 token、约 $0.0349。
   agent 自行决定搜索、置顶、列表滚动等操作。
 - 找不到目标会话时抛 `TargetNotFound`，运行结果里记录 `source_errors`，**不静默跳过**、不拿别的会话顶替。
 - 离线测试替身：`LocalEmlConnector` / `LocalChatConnector` 保留，仅在无手机时使用；
-  Graph 连接器保留为将来可选实现。
+  Graph 不在主路径，仅保留未启用的代码骨架作为“将来可选实现”。
 
 ### 14.2 自然语言监控配置
 
@@ -444,7 +468,7 @@ Agent-LLM 共 179 次调用、75108 token、约 $0.0349。
 |---|---|
 | `connectors/local_eml.py`、`local_chat.py` | 降级为离线测试替身，接口不变 |
 | `connectors/mobile_chat.py` → `monitor/sources.py` | 升级为主路径：微信/QQ/Outlook App，按名称定位，未找到显式报错 |
-| `connectors/graph_mail.py` | 保留，标注“将来可选” |
+| `connectors/graph_mail.py` | 不在主路径；仅保留“将来可选”骨架 |
 | `monitor/config.py` | 新增：自然语言配置、持久化、增删改查、显式拒绝 |
 | `monitor/cursor.py` | 新增：游标、消息库、候选库 |
 | `monitor/runner.py`、`monitor/cli.py` | 新增：单轮/常驻调度与结果汇总 |
@@ -456,14 +480,15 @@ Agent-LLM 共 179 次调用、75108 token、约 $0.0349。
 
 - 手机 GUI 读取、目标定位、Outlook App 收件箱、手机系统日历写入：**未经真机验证**。
 - 增量、跨轮更新、调度、配置解析、`data.json` / `.ics` 导出：离线测试可真跑。
-- Graph 与本地连接器只作为替身/备选，不代表真实来源行为。
+- Graph 不在主路径，仅保留未启用的代码骨架；本地连接器只作为离线测试替身，都不代表真实来源行为。
 
 ## 15. 与 proposal 的明确偏差
 
 完整逐条对照见 [`docs/proposal-compliance.md`](proposal-compliance.md)。这里只记录三处容易含糊、必须明确表态的差异：
 
-1. **Outlook 接入方式**：proposal 写 Graph API；当前主路径是**手机 Outlook App GUI 读屏**，
-   Graph 连接器仅保留为将来可选实现与离线替身。这是有意的设计决策，不是“两种都支持、随便切换”。
+1. **Outlook 接入方式**：proposal 写 Graph API；当前**唯一主路径是手机 Outlook App GUI 读屏**，
+   Graph 不在配置、规划、检索、评测路径上，只保留未启用的代码骨架作为“将来可选实现”。
+   这是有意的设计决策，**不是“两种都支持、随便切换”**。
    理由：统一所有来源到手机层、复用定位/留证/设备锁，并避开课程环境无法稳定提供的 Graph 租户凭据。
    代价：读取速度、结构化程度与附件能力弱于 Graph。
 2. **ground truth 来源**：proposal 写“两名组员独立标注、分歧讨论”；当前由生成器先构造事实、再由事实导出
