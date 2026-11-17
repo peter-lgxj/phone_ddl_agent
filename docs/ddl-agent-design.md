@@ -216,6 +216,7 @@ class ResolvedRecord:
     deadline_iso: str | None
     status: Literal["confirmed", "uncertain", "missing_deadline"]
     source: str                    # 获胜证据的来源描述
+    sources: list[str]             # 所有原始来源（去重后）
     evidence_ids: list[str]
     confidence: float
     resolution_note: str           # 冲突解决说明（为什么选它）
@@ -457,3 +458,15 @@ Agent-LLM 共 179 次调用、75108 token、约 $0.0349。
 - 增量、跨轮更新、调度、配置解析、`data.json` / `.ics` 导出：离线测试可真跑。
 - Graph 与本地连接器只作为替身/备选，不代表真实来源行为。
 
+## 15. 与 proposal 的明确偏差
+
+完整逐条对照见 [`docs/proposal-compliance.md`](proposal-compliance.md)。这里只记录三处容易含糊、必须明确表态的差异：
+
+1. **Outlook 接入方式**：proposal 写 Graph API；当前主路径是**手机 Outlook App GUI 读屏**，
+   Graph 连接器仅保留为将来可选实现与离线替身。这是有意的设计决策，不是“两种都支持、随便切换”。
+   理由：统一所有来源到手机层、复用定位/留证/设备锁，并避开课程环境无法稳定提供的 Graph 租户凭据。
+   代价：读取速度、结构化程度与附件能力弱于 Graph。
+2. **ground truth 来源**：proposal 写“两名组员独立标注、分歧讨论”；当前由生成器先构造事实、再由事实导出
+   ground truth，等价于“可控、可复现的标注”，但没有独立人工标注。局限：无法发现生成器事实定义错误，
+   且文本与规则/提示词可能共享模式，存在自我应验风险。
+3. **RQ5 用户研究**：属于人工环节，当前**未做**，需要组内安排问卷/访谈与对照展示；不要在报告中写成已完成。

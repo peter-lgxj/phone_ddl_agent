@@ -32,6 +32,20 @@
 没插手机、未授权 USB 调试、找不到 adb、手机被其他窗口占用（设备锁）时，脚本会分别给出对应提示与下一步动作，
 不会抛 Python traceback。详细说明见 [docs/ddl-agent-monitor.md](docs/ddl-agent-monitor.md)。
 
+## 离线评测与消融
+
+```bash
+# 三方对比：Agent-LLM / Agent-规则 / 单次直出 baseline
+python -m ddl_agent.evaluation.run_eval --split test
+
+# RQ4 单模块消融：全开 / 关去重 / 关冲突验证 / 固定来源
+python -m ddl_agent.evaluation.run_eval --ablation --split test \
+  --out experiments/ddl_agent/results/ablation_test
+```
+
+逐条 proposal 符合度与消融结果见 [docs/proposal-compliance.md](docs/proposal-compliance.md)。
+所有数字来自合成数据；真实设备、真实账号与用户研究尚未验证。
+
 ## 环境与安装
 
 - Python 3.10 或更高版本（具体兼容性取决于依赖版本）
