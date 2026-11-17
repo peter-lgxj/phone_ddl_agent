@@ -52,14 +52,88 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 | 配置项 | 说明 |
 |---|---|
 | `ACTIVE_PROVIDER` | 执行模型（视觉），默认 `qwen` → `qwen-vl-max`，需要 `DASHSCOPE_API_KEY` |
-| `PLANNER_PROVIDER` | 规划/语义模型，默认 `qwen3`，单任务与多应用模式都读这一项 |
+| `PLANNER_PROVIDER` | 规划/语义模型，默认 `deepseek`（`deepseek-flash`），单任务与多应用模式都读这一项；可切回 `qwen3` |
 | `MAX_STEPS` / `STEP_RETRIES` | 最大步数（默认 30，可用同名环境变量覆盖）与单步失败重试次数 |
 | `LLM_TEMPERATURE` | 决策与观察调用温度，默认 0.0，保证重复实验可比 |
 | `ENABLE_SEMANTIC_ANALYSIS` | 消融开关：关闭后跳过文字模型的语义校正 |
+| `HISTORY_IMAGE_WINDOW` / `HISTORY_TEXT_STEPS` | 历史上下文窗口：带最近几张原图（默认 1，当前屏幕始终带图）、更早步骤最多列几条文字摘要（默认 8）；均可用同名环境变量覆盖 |
 | `ARTIFACT_DIR` | 每步截图与动作记录目录，默认 `runs/` |
 | `WECHAT_INPUT_RESOURCE_ID` | 微信输入框 resource-id，随版本变化，置空即跳过该分支 |
 
-可切换的 provider 见 `config.PROVIDERS`；`deepseek` / `minimax` 没有视觉能力，不能用作 `ACTIVE_PROVIDER`。
+可切换的 provider 见 `config.PROVIDERS`；`deepseek` / `qwen3` / `minimax` 没有视觉能力，不能用作 `ACTIVE_PROVIDER`。
+
+规划器默认用 DeepSeek：`base_url=https://api.deepseek.com`（不要加 `/v1`）、模型 `deepseek-flash`、密钥读 `.env` 的 `DEEPSEEK_API_KEY`。规划器只发文字，不接收截图；实测简单任务约 2 秒、三应用任务约 3.5 秒返回可解析 JSON。若开启 `thinking`（通过 `extra_body` 传 `{"thinking": {"type": "enabled"}}`）会返回 `reasoning_content` 并产生 reasoning token，当前默认关闭以降低延迟；实测开关两种模式返回的 `content` 都是合法 JSON。
+
+## 本地视觉模型（Qwen3-VL-8B-Instruct GGUF）
+
+> **暂缓**：6 GB 显存跑 8B Q4 + mmproj 只能把视觉编码器留在 CPU（带图约 75–80 秒/次），当前执行模型改用云端 `deepseek-flash`。本节命令与脚本保留，权重/mmproj 仍在 F 盘，需要时可直接复用。
+
+用于不依赖云端视觉 API 的离线执行。权重、mmproj、llama.cpp 运行时与 HF 缓存全部放在仓库外的 F 盘目录（示例 `F:\work\hku\7608llm\2026-11-17\qwen3vl-local\`），并显式设置 `HF_HOME`，不写用户目录、不进 git。
+
+### 硬件与参数取舍
+
+本机为 RTX 3060 Laptop（6 GB 显存）。Q4_K_M 权重 5,027,784,800 字节（约 4.68 GiB），mmproj F16 1,159,029,824 字节（约 1.08 GiB），两者合计已超过 6 GB，**不可能全部放进显存**。因此：
+
+- 文本层全部卸载到 GPU：`-ngl 36`
+- 视觉编码器留在 CPU：`--no-mmproj-offload`
+- KV cache 量化：`--cache-type-k q8_0 --cache-type-v q8_0`
+- 上下文：`-c 8192`
+- 实测稳定占用约 **5.3 GB / 6.1 GB**（`nvidia-smi` 5367 MiB），无 OOM
+
+代价是视觉编码走 CPU：带一张 1707×1067 截图的请求约 **76–78 秒**；纯文本请求约 10 秒级。若把 mmproj 也放回 GPU，显存不足会 OOM；降低 `-ngl` 可留出余量但文本生成变慢。
+
+### 文件与下载
+
+从同一个 HF 仓库取权重与视觉投影（缺 mmproj 模型看不了图）：
+
+```bash
+# 目标目录示例（仓库外）
+mkdir -p /f/work/hku/7608llm/2026-11-17/qwen3vl-local/models
+
+curl -L -o Qwen3VL-8B-Instruct-Q4_K_M.gguf \
+  https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3VL-8B-Instruct-Q4_K_M.gguf
+curl -L -o mmproj-Qwen3VL-8B-Instruct-F16.gguf \
+  https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-8B-Instruct-F16.gguf
+```
+
+llama.cpp 使用 `b12470` 的 Windows CUDA 12.4 预编译包：`llama-b12470-bin-win-cuda-12.4-x64.zip` + `cudart-llama-bin-win-cuda-12.4-x64.zip`，解压到同一目录（本机 `runtime\llama-extract\`）。显式设置缓存目录：
+
+```powershell
+$env:HF_HOME = "F:\work\hku\7608llm\2026-11-17\qwen3vl-local\hf-cache"
+$env:HF_HUB_CACHE = "$env:HF_HOME\hub"
+```
+
+### 启动与切换
+
+一键启动（前台运行，端口 8080）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_local_vlm.ps1
+```
+
+脚本参数可调：`-Port`、`-NGpuLayers`、`-Ctx`、`-Threads`、`-ModelDir`、`-LlamaDir`。服务提供 OpenAI 兼容接口：
+
+```bash
+curl http://127.0.0.1:8080/v1/models
+# 模型别名：qwen3-vl-8b-instruct；支持 multimodal（image_url base64）
+```
+
+切换执行模型（不用改代码）：
+
+```powershell
+$env:ACTIVE_PROVIDER = "local"   # 或 "qwen" 切回云端
+python run.py
+```
+
+`config.PROVIDERS["local"]` 默认 `base_url=http://127.0.0.1:8080/v1`，可用 `LOCAL_VLM_BASE_URL`、`LOCAL_VLM_MODEL` 覆盖；`llama-server` 不校验密钥，`LOCAL_VLM_API_KEY` 仅需非空（默认 `local`）。
+
+真实请求验证（本机实测）：一张真实桌面截图 → 视觉描述正确；按执行提示词返回 `{"action_type": "home", "params": {}, "observation": "返回桌面"}`，JSON 可解析。带图请求 prompt eval 约 76 秒（CPU 视觉编码），生成约 1–2 秒。未在 Android 真机上跑过，仅验证了模型服务与图片协议。
+
+### 上下文窗口（6 GB 卡为什么要限制）
+
+每张截图都会转成数百到上千个视觉 token，多轮任务里把历史原图全带上会同时抬高上下文与显存。默认策略：`HISTORY_IMAGE_WINDOW=1` 只带最近 1 张历史原图，当前屏幕始终带图；更早的步骤压成文字摘要（动作类型、坐标/输入文字、观察结论），由 `HISTORY_TEXT_STEPS` 控制条数。
+
+调大 `HISTORY_IMAGE_WINDOW` 的代价：视觉 token 与显存占用上升，6 GB 卡更容易 OOM，单步耗时也会增加；建议先在当前设备上逐步加 1 并观察 `nvidia-smi` 与请求耗时。
 
 ## 项目结构
 
@@ -69,7 +143,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（76 个用例，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 测试与工程化：`tests/`（80 个用例，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 

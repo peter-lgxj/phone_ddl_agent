@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from phone_controller import PhoneController
 from app_launcher import AppLauncher
-from memory import TaskMemory
+from memory import TaskMemory, format_steps_compact
 from ocr_locator import OCRLocator
 import config
 from openai import OpenAI
@@ -75,9 +75,11 @@ class ScreenAgent:
         provider      = config.PROVIDERS[provider_name]
 
         if provider_name in config.TEXT_ONLY_PROVIDERS:
+            vision_providers = sorted(set(config.PROVIDERS) - config.TEXT_ONLY_PROVIDERS)
             raise RuntimeError(
                 f"provider「{provider_name}」不支持图片输入，不能作为执行模型；"
-                f"请把 config.ACTIVE_PROVIDER 改为 qwen / zhipu / openai 之一。"
+                f"请把 config.ACTIVE_PROVIDER 改为支持视觉的 provider 之一："
+                f"{' / '.join(vision_providers)}。"
             )
         _require_api_key(provider_name, provider, role="执行模型")
 
@@ -115,7 +117,53 @@ class ScreenAgent:
     #  语义分析：在决策前，用文字大模型理解历史 observation
     # ══════════════════════════════════════════════════════════
 
-    def _build_prompt(self, memory, has_prev: bool, ocr_result: str, semantic_analysis: str) -> str:
+    def _collect_history_images(self, memory: TaskMemory) -> list[dict]:
+        """按 HISTORY_IMAGE_WINDOW 收集最近的历史原图（当前屏幕另行加入）。
+
+        返回 [{"step": n, "label": "...", "b64": "..."}]，数量不超过窗口值。
+        优先用证据目录里归档的 step_NNN_observe.png；没有归档时退回 screen_observe.png。
+        """
+        window = max(0, int(getattr(config, "HISTORY_IMAGE_WINDOW", 1)))
+        if not self.support_multi_image or window == 0 or not memory.steps:
+            return []
+
+        candidates = []
+        if self.run_dir is not None:
+            for path in sorted(Path(self.run_dir).glob("step_*_observe.png")):
+                try:
+                    step_no = int(path.name.split("_")[1])
+                except (IndexError, ValueError):
+                    continue
+                candidates.append((step_no, path))
+        if not candidates and self._observe_valid and os.path.exists("screen_observe.png"):
+            candidates = [(len(memory.steps), Path("screen_observe.png"))]
+
+        images = []
+        for step_no, path in candidates[-window:]:
+            try:
+                images.append({
+                    "step": step_no,
+                    "label": f"第{step_no}步执行后的屏幕",
+                    "b64": base64.b64encode(path.read_bytes()).decode("utf-8"),
+                })
+            except OSError as e:
+                print(f"  ⚠️  历史截图读取失败（{path}）：{e}")
+        return images
+
+    def _build_history_text(self, memory: TaskMemory, image_steps: set[int]) -> str:
+        """没有原图可带的历史步骤压成文字摘要，保留动作类型、关键参数与观察结论"""
+        if not memory.steps:
+            return "尚未执行任何操作，刚刚开始。"
+
+        limit = max(0, int(getattr(config, "HISTORY_TEXT_STEPS", 8)))
+        older = [s for s in memory.steps if s.get("step") not in image_steps]
+        if limit == 0:
+            return "（历史原图已省略；文字摘要窗口为 0）"
+        if not older:
+            return "（更早步骤已省略，仅保留最近原图）"
+        return format_steps_compact(older[-limit:])
+
+    def _build_prompt(self, memory, history_images, history_text, ocr_result, semantic_analysis) -> str:
         """构建单步决策 prompt；关掉语义分析时不再出现任何【语义分析】引用"""
         known_apps = "、".join(AppLauncher.KNOWN_APPS.keys())
 
@@ -139,20 +187,28 @@ class ScreenAgent:
     - 能确认目标已达成 → action_type 填 finish，summary 写出关键结果（名称/价格/地点等）
     - 仍缺步骤 → 继续执行下一步操作"""
 
+        image_lines = [
+            f"    - 第{i + 1}张：{img['label']}"
+            for i, img in enumerate(history_images)
+        ]
+        image_lines.append(
+            f"    - 第{len(history_images) + 1}张：当前屏幕（本次需要决策）"
+        )
+        image_section = "\n".join(image_lines)
+
         return f"""你是一个手机操作智能体，通过观察手机截图决定下一步操作。
 
     ## 总体任务
     {memory.task}
 
-    ## 已执行的历史步骤（VL 模型的原始观察，语义可能有偏差）
-    {memory.format_for_prompt()}
+    ## 已执行的历史步骤（原图只保留最近若干张，更早步骤为文字摘要）
+    {history_text}
 {semantic_section}
     ## 当前屏幕 OCR 识别结果
     {ocr_result}
 
     ## 图片说明
-    {'- 第一张：上一步执行后的屏幕' if has_prev else ''}
-    - {'第二张' if has_prev else '第一张'}：当前屏幕（本次需要决策）
+{image_section}
 
     ## 可用动作
     {self.ACTIONS}
@@ -259,32 +315,29 @@ class ScreenAgent:
         with open("screen_current.png", "rb") as f:
             current_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-        # 上一轮 observe 截图（provider 支持多图时才一起发送）
-        has_prev = self.support_multi_image and len(memory.steps) > 0 and self._observe_valid
-        content = []
-        if has_prev:
-            try:
-                with open("screen_observe.png", "rb") as f:
-                    prev_b64 = base64.b64encode(f.read()).decode("utf-8")
-                content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{prev_b64}"}
-                })
-            except FileNotFoundError:
-                print("  ⚠️  未找到上一步截图 screen_observe.png，只发送当前截图")
-                has_prev = False
-
+        # 历史原图按窗口裁剪；当前屏幕无论如何都要带图
+        history_images = self._collect_history_images(memory)
+        content = [
+            {"type": "image_url",
+             "image_url": {"url": f"data:image/png;base64,{img['b64']}"}}
+            for img in history_images
+        ]
         content.append({
             "type": "image_url",
             "image_url": {"url": f"data:image/png;base64,{current_b64}"}
         })
+
+        # 没带原图的早期步骤压成文字摘要
+        image_steps = {img["step"] for img in history_images}
+        history_text = self._build_history_text(memory, image_steps)
 
         # ── 文字大模型先做语义分析（有历史才分析，可用消融开关关闭）──
         semantic_analysis = ""
         if memory.steps and config.ENABLE_SEMANTIC_ANALYSIS:
             semantic_analysis = self._analyze_history(memory.task, memory.steps)
 
-        prompt = self._build_prompt(memory, has_prev, ocr_result, semantic_analysis)
+        prompt = self._build_prompt(memory, history_images, history_text,
+                                    ocr_result, semantic_analysis)
 
         content.append({"type": "text", "text": prompt})
 

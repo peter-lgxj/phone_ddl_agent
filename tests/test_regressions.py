@@ -164,9 +164,11 @@ def test_prompt_has_no_dangling_semantic_reference():
     agent = object.__new__(screen_agent.ScreenAgent)
     memory = TaskMemory("打开设置看 WiFi")
 
-    prompt = agent._build_prompt(memory, has_prev=False, ocr_result="", semantic_analysis="")
+    prompt = agent._build_prompt(memory, [], "尚未执行任何操作，刚刚开始。",
+                                 ocr_result="", semantic_analysis="")
     assert "语义分析" not in prompt
     assert "根据历史观察判断任务是否完成" in prompt
 
-    with_semantic = agent._build_prompt(memory, has_prev=False, ocr_result="", semantic_analysis="已完成 1/3")
+    with_semantic = agent._build_prompt(memory, [], "尚未执行任何操作，刚刚开始。",
+                                        ocr_result="", semantic_analysis="已完成 1/3")
     assert "语义分析" in with_semantic

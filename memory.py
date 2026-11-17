@@ -97,3 +97,32 @@ class TaskMemory:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         print(f"📄  任务日志已保存：{path}")
+
+
+def format_steps_compact(steps: list[dict], observation_limit: int = 120) -> str:
+    """把早期步骤压成文字摘要：动作类型 + 关键参数 + 观察结论。
+
+    用于上下文窗口策略：原图只带最近几张，更早的步骤靠这段文字保持可追溯。
+    """
+    lines = []
+    for s in steps:
+        action = s.get("action") or {}
+        action_type = action.get("action_type") or s.get("action_type") or "unknown"
+        desc = action.get("description") or s.get("action_desc") or ""
+
+        params = []
+        for key in ("app_name", "x", "y", "x2", "y2", "text", "summary"):
+            value = action.get(key)
+            if value not in (None, ""):
+                params.append(f"{key}={value}")
+        param_text = "，".join(params) if params else "无"
+
+        observation = (s.get("observation") or "").strip().replace("\n", "；")
+        if len(observation) > observation_limit:
+            observation = observation[:observation_limit] + "…"
+
+        lines.append(
+            f"第{s.get('step', '?')}步 [{action_type}] {desc}"
+            f"；参数：{param_text}；观察：{observation or '无'}"
+        )
+    return "\n".join(lines)
