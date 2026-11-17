@@ -55,7 +55,14 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 | `PLANNER_PROVIDER` | 规划/语义模型，默认 `deepseek`（`deepseek-flash`），单任务与多应用模式都读这一项；可切回 `qwen3` |
 | `MAX_STEPS` / `STEP_RETRIES` | 最大步数（默认 30，可用同名环境变量覆盖）与单步失败重试次数 |
 | `LLM_TEMPERATURE` | 决策与观察调用温度，默认 0.0，保证重复实验可比 |
-| `ENABLE_SEMANTIC_ANALYSIS` | 消融开关：关闭后跳过文字模型的语义校正 |
+| `ENABLE_SEMANTIC_ANALYSIS` | 语义分析（每步一次纯文本请求），默认关闭；置 1 可开启消融对比 |
+| `COMPLETION_CHECK` | 完成判断：`decision`（默认，读决策响应里的 `task_done`）/ `every_step`（旧行为，每步额外一次带图请求）/ `off` |
+| `OCR_MODE` | OCR 调用策略：`on_demand`（默认，仅 tap 时跑并吸附落点）/ `always`（旧行为，每步预跑）/ `off` |
+| `OCR_SNAP_MODE` | 吸附路径：`tree_first`（默认，控件树优先、OCR 兜底）/ `ocr_only` / `tree_only` |
+| `OCR_ENGINE` | OCR 引擎：`rapidocr`（默认，ONNX CPU 实测 1.2–1.5s/张）/ `easyocr`（旧实现，12.7–23s/张） |
+| `OCR_SCALE` | OCR 输入图缩放比例，默认 0.5；检测框按 `1/scale` 映射回原图，tap 坐标仍是设备坐标 |
+| `OCR_SNAP_MAX_DISTANCE` | 吸附半径（像素），默认 80；超出则保留模型原始坐标 |
+| `OBSERVE_SETTLE_SECONDS` | 动作后等待界面稳定的秒数，默认 1.0 |
 | `HISTORY_IMAGE_WINDOW` / `HISTORY_TEXT_STEPS` | 历史上下文窗口：带最近几张原图（默认 1，当前屏幕始终带图）、更早步骤最多列几条文字摘要（默认 8）；均可用同名环境变量覆盖 |
 | `IMAGE_PREPROCESS` | 截图预处理总开关（默认开）；置 0 时原样发送 PNG |
 | `IMAGE_JPEG_QUALITY` | JPEG 质量，默认 85；置 0 保留 PNG |
@@ -116,9 +123,56 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 
 若确需缩放，`image_preprocess.map_action_coords` 会把 `x/y`、`x1/y1`、`x2/y2` 按 `scale_x/scale_y` 反算、四舍五入并裁到屏幕范围；每步的 `step_NNN.json` 会记录 `image`（原始/发送尺寸与比例）和 `model_action`（模型原始坐标），可事后核对。未缩放时该函数原样返回，不引入偏移。
 
+## 单步耗时与优化
+
+真机（1080×2374）一次 10 步任务实测 331.8s，约 **33.2s/步**。各阶段实测/估算：
+
+| 阶段 | 耗时 | 说明 |
+|---|---|---|
+| 截图 | 0.2–0.9s | `uiautomator2` 截图 |
+| OCR | 0 或 1.2–1.5s | 按需模式只在 tap 步触发；RapidOCR + `OCR_SCALE=0.5` 实测 |
+| 决策请求 | 1.7–2.6s | DeepSeek，带历史图 + 当前图 |
+| 语义分析 | ≈2s | 仅开启时发生，纯文本 |
+| 执行动作 | 1.9–3.0s | 含 `tap`/`swipe` 固定等待、`open_app` 约 2.5s |
+| 观察请求 | 4.0–6.1s | 含 1.0s 稳定等待 + 截图 + 带图请求 |
+| 完成检测 | ≈2.5s | 旧行为每步一次带图请求 |
+| 循环间隔 | 0.5s | 固定 |
+
+优化前每步最多 **4 次模型请求**（决策 / 语义 / 观察 / 完成检测），其中 3 次带图。当前改动：
+
+1. 完成判断并入决策响应（`task_done` 字段），默认不再单独发完成检测请求；
+2. 语义分析默认关闭（`ENABLE_SEMANTIC_ANALYSIS=0`）；
+3. 补上 vision 请求的 `extra_body`，确保 `thinking` 真正关闭（此前只有规划请求带了该参数）；
+4. `type_text` 在输入框已聚焦时直接写入，避免重复点击与再次 YOLO 兜底；
+5. OCR 改为按需（`OCR_MODE=on_demand`）：决策前不跑，只有模型给出 `tap` 时才跑；并改为「控件树优先、OCR 兜底」（`OCR_SNAP_MODE=tree_first`），控件树命中时完全不跑 OCR；
+6. OCR 引擎换成 RapidOCR（`OCR_ENGINE=rapidocr`，ONNX Runtime，跳过方向分类），并默认按 `OCR_SCALE=0.5` 缩小后再识别：1080×2374 真机截图实测 1.2–1.5s（不缩放约 1.3–1.6s；机器并行负载高时两者都会到 5–8s）。EasyOCR 路径保留，可切回对照；
+7. 每步 `step_NNN.json` 新增 `timings`（screenshot/ocr_pre/ocr/ocr_triggered/ocr_reason/snap_source/snap_tree/snap_ocr/ocr_snap/preprocess/semantic/decision/decide_total/execute/observe/completion），便于统计触发率与省下的时间。
+
+按上表估算：每步请求数 4 → **2**；不触发定位的步骤约 **8–10s**，tap 步控件树命中时约 **8–10s**，退到 OCR 时约 **10–12s**。以上为按实测阶段耗时推算；OCR 耗时是在本机截图上实测的，整步耗时未在真机上重跑（手机已拔线）。
+
+`OCR_SCALE` 取舍（同一批图片实测，二次调用、机器空闲）：
+
+| scale | 缩放后尺寸 | 耗时 | 设置页元素 | 结算页元素 | 关键字段（￥128.00/订单号/确认支付） | 中心点偏差 |
+|---|---|---|---|---|---|---|
+| 1.0 | 1080×2374 | 1.3–1.6s | 23 | 14 | 全对 | 基准 |
+| 0.75 | 810×1780 | 1.2–1.4s | 25 | 14 | 全对 | 均值 1.2–4.4px，最大 32px |
+| **0.5（默认）** | 540×1187 | **1.2–1.5s** | 24 | 14 | 全对 | 均值 1.4–2.9px，最大 32px |
+| 0.35 | 378×831 | 1.3–1.5s | 23 | 14 | 全对 | 均值 1.4px，最大 3px |
+
+结论：在本机这批图上，0.5 没有出现漏字，`￥128.00`、订单号、按钮文字均正确，坐标偏差均值 1.4–2.9px（个别长文本行因 bbox 中心变化到 32px，仍在 80px 吸附半径内）。选 0.5 而不是 0.35，是给更小字号/低对比度界面留余量；若某些 App 小字识别率下降，把 `OCR_SCALE` 调回 1.0 即可。
+
+按需定位的触发与路径（`ocr_locator.should_trigger_ocr` + `OCR_SNAP_MODE`）：
+
+- 触发条件：`OCR_MODE=on_demand` 且动作为 `tap`；其余动作（`open_app`/`back`/`home`/`wait`/`swipe`/`type`/`send`/`finish`）完全不跑。
+- `tree_first`（默认）：先 dump 控件树，用 text / resource-id / content-desc 匹配；命中就用元素中心。树里没有可匹配元素或距离超阈值时，再退到 OCR。
+- `ocr_only` / `tree_only`：强制只走一条路径，便于对照。
+- 吸附只在距最近元素中心 ≤ `OCR_SNAP_MAX_DISTANCE`（默认 80px）或落在 bbox 内时发生，否则保留模型原始坐标；实际路径与耗时写进 `timings.snap_source`（`tree`/`ocr`/`none`）、`snap_tree`、`snap_ocr`。
+
+
+
 ## 本地视觉模型（Qwen3-VL-8B-Instruct GGUF）
 
-> **暂缓**：6 GB 显存跑 8B Q4 + mmproj 只能把视觉编码器留在 CPU（带图约 75–80 秒/次），当前执行模型改用云端 `deepseek-flash`。本节命令与脚本保留，权重/mmproj 仍在 F 盘，需要时可直接复用。
+> **暂缓**：6 GB 显存跑 8B Q4 + mmproj 只能把视觉编码器留在 CPU（带图约 75–80 秒/次），当前执行模型改用云端 `deepseek-flash`。相关文件已删除，如需要请重新下载。
 
 用于不依赖云端视觉 API 的离线执行。权重、mmproj、llama.cpp 运行时与 HF 缓存全部放在仓库外的 F 盘目录（示例 `F:\work\hku\7608llm\2026-11-17\qwen3vl-local\`），并显式设置 `HF_HOME`，不写用户目录、不进 git。
 
