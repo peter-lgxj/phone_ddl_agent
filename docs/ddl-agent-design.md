@@ -228,6 +228,10 @@ class ResolvedRecord:
 
 可信度排序（高 → 低）：`official_email(4) > course_announcement(3) > instructor_chat(2) > student_chat(1)`。
 
+注入 LLM 裁决器时（默认 Agent-LLM 配置）：冲突先交给模型，在已有候选时间中选一个并给出理由与置信度；
+置信度 < 0.6、拒答或编造候选外时间 → 不采纳，继续追加检索，最终标 `uncertain`。
+未注入裁决器（规则版/无 key）时按下面的确定性规则：
+
 ```
 candidates → 取 deadline_iso 去重
   一致 → confirmed
@@ -239,7 +243,7 @@ candidates → 取 deadline_iso 去重
         两轮后仍不一致 → uncertain（保留所有候选，交人工）
 ```
 
-`confidence`：一致=0.95；可信度压制=0.85；时间新者覆盖=0.75；人工复核=0.4。
+`confidence`：一致=0.95；可信度压制=0.85；时间新者覆盖=0.75；人工复核=0.4；LLM 裁决取模型自报置信度。
 
 ### 8.4 文档写入
 
@@ -259,21 +263,29 @@ ddl_agent/
   pipeline.py
   connectors/{base,local_eml,local_chat,graph_mail,mobile_chat}.py
   extract/{rules,normalizer,llm_extractor}.py
+  llm/{client,planner,arbiter}.py
+  factory.py                  # LLM_ENABLED 开关与规则降级
   dedupe.py
   conflict.py
   writer/{base,xlsx_writer,csv_writer,markdown_writer,audit}.py
   dataset/generator.py        # 三档难度 × 20–30 条，train/val/test
   evaluation/{metrics,baseline,run_eval}.py
 tests/test_ddl_*.py
-experiments/ddl_agent/dataset/   # 生成物（可重建，不入库）
-experiments/ddl_agent/results/   # 评测输出（.gitignore 已忽略 experiments/results/）
+experiments/ddl_agent/dataset/   # 合成数据集与 ground truth（已提交，便于复现）
+experiments/ddl_agent/results/   # 评测输出（.gitignore 已忽略）
 ```
 
 ## 10. 合成数据集与评测协议
 
 ### 10.1 数据集
 
-- 三档难度，每档 20–30 个样本（`easy`：直接抽取；`medium`：重复条目 + 字段缺失；`hard`：冲突时间 + 旧 DDL 被新值取代 + 相对时间）。
+- 三档难度，每档 20–30 个样本（`easy`：直接抽取；`medium`：重复条目 + 字段缺失；
+  `hard`：冲突时间 + 旧 DDL 被新值取代 + 相对时间/时区/歧义 + 多任务干扰）。
+- 事实驱动：场景先定义任务、课程、真实截止时间与冲突胜者，ground truth 直接由事实导出，
+  文本只负责渲染，不参与 ground truth 推导。
+- 噪声：引用链（`> `）、`---------- Forwarded message ---------`、签名档、免责声明、无关闲聊、
+  已过期旧 DDL、他人课程任务、考试/上课时间、`27 Nov 2026` 与中文日期等规则不覆盖的写法、
+  `the Friday after next` / `月底前` / `考完试那周` / `PST` 时区等。
 - 每个样本：`sample_id`、`tier`、`query`、`source_config`、`messages[]`（email/chat 混合）、`ground_truth[]`。
 - `ground_truth` 字段：`task_name`、`course`、`deadline_iso`、`status`、`expected_sources[]`、`conflict_expected`（bool）、`winner_reason`。
 - 划分：按 tier 分层抽样 `train/val/test = 60%/20%/20%`，固定随机种子，生成时写 `split` 字段，避免 prompt 调参泄漏。
@@ -293,48 +305,70 @@ experiments/ddl_agent/results/   # 评测输出（.gitignore 已忽略 experimen
 
 ### 10.3 Baseline
 
-`SinglePassBaseline`：把同一批 `RawMessage` 全部拼进一次输入，一次调用直接产出记录，不做规划、不做去重、
-不做冲突核查、不写审计。离线默认走规则的一次性抽取（诚实标注为“单次直出”的确定性替身）；
-注入真实 LLM 客户端时走一次模型调用，token/成本按同一计价表统计。
+`LLMSinglePassBaseline`：把同一批 `RawMessage` 全部拼进**一条** prompt，一次调用直接产出记录，
+不做规划、不做去重、不做冲突核查、不写审计。`SinglePassBaseline` 是同协议的规则兜底，
+在无 key 时使用。token/成本按同一计价表统计。
 
 ## 11. 验证状态标注
 
 | 能力 | 状态 |
 |---|---|
-| 本地 `.eml` / 聊天归档连接器、抽取、归一化、去重、冲突、写入、评测 | 阶段三实现，离线测试真跑 |
+| 本地 `.eml` / 聊天归档连接器、抽取、归一化、去重、冲突、写入、评测 | 已实现，离线测试真跑 |
+| DeepSeek 规划 / 抽取 / 冲突裁决 | 已真实调用（合成数据），用量与成本写入报告 |
 | Graph 邮件连接器 | 骨架，**未经真实数据验证** |
 | 微信/QQ 真机读取 | 复用现有手机层，**未经真机验证**（设备已拔线） |
-| LLM 抽取/仲裁 | 接口就绪，离线默认规则实现；真实模型效果**未验证** |
+| 真实邮件/聊天上的整体效果 | **未验证** |
 
-### 11.1 阶段三离线实测（2026-11-18）
+### 11.1 阶段四三方实测（2026-11-18，合成数据）
 
-命令：`python -m ddl_agent.evaluation.run_eval --split all`（数据集 72 个样本，每档 24，
-train/val/test = 14/5/5）。Agent 与 baseline 使用同一批原始消息。
+命令：`python -m ddl_agent.evaluation.run_eval --split test`
+（test = 15 个样本 / 16 条 ground truth，未参与任何调参）。
+三个系统使用完全相同的原始消息。
 
-| 指标 | Agent | 单次直出 baseline |
-| --- | --- | --- |
-| 精确匹配 | 0.750 | 0.750 |
-| ±1 天模糊匹配 | 0.750 | 0.750 |
-| 召回 | **1.000** | 1.000 |
-| 重复率 | **0.000** | 0.294 |
-| 冲突解决正确率 | **1.000**（18 条冲突） | 0.667（18 条冲突） |
-| 文档结构校验通过率 | **1.000** | 不适用 |
-| 输出行数 | **72** | 102 |
-| LLM 调用次数 | 0（规则实现） | 72 |
-| token 估算 | 1740 | 2758 |
-| 平均耗时（秒/样本） | 0.030 | 0.0001 |
+| 指标 | Agent-LLM | Agent-规则 | baseline 单次直出 |
+| --- | --- | --- | --- |
+| 精确匹配 | **0.8125** | 0.5625 | 0.5000 |
+| ±1 天模糊匹配 | **0.8125** | 0.6250 | 0.5000 |
+| 召回 | **1.0000** | 0.8125 | 0.5625 |
+| 重复率 | **0.0000** | 0.0000 | 0.1923 |
+| 冲突解决正确率 | **1.0000**（3 条冲突） | 0.3333（3 条） | 0.6667（3 条） |
+| 文档结构校验通过率 | **1.0000** | 1.0000 | 不适用 |
+| 输出行数 | 16 | 16 | 26 |
+| LLM 调用次数 | 38 | 0 | 15 |
+| token 估算 | 15956 | 831（字符估算） | 5346 |
+| 成本估算（USD） | 0.007385 | 0 | 0.002623 |
+| 平均耗时（秒/样本） | 2.67 | 0.015 | 0.86 |
+
+全量 72 样本（train+val+test，仅作稳定性参考，未据此调参）：
+Agent-LLM 精确 0.7733 / 召回 1.0000 / 重复率 0 / 冲突正确率 1.0000；
+Agent-规则 0.5200 / 0.8533 / 0 / 0.3636；
+baseline 0.5200 / 0.6533 / 0.2051 / 0.7273。
+Agent-LLM 共 179 次调用、75108 token、约 $0.0349。
 
 说明：
-- 精确/模糊匹配 0.75 而非 1.0，是因为 72 条 ground truth 里有 18 条本身没有具体时间
-  （12 条 missing + 6 条 uncertain），不计入时间命中，但计入召回。
-- Agent 的 LLM 调用为 0 是离线规则实现的真实值，不代表接入真实模型后的成本；
-  替换 `LLMExtractor` 后需重新统计 token 与费用。
-- 以上全部为合成数据结果，**不代表真实邮件/聊天上的表现**。
+- 精确/模糊匹配达不到 1.0，是因为部分 ground truth 本身没有具体时间
+  （missing / uncertain），不计入时间命中，但计入召回。
+- 以上数字全部来自**合成数据**；真实邮件与真实微信/QQ 记录尚未验证，
+  结论只在该生成器的场景分布上成立。
+- 成本按 DeepSeek 公开单价近似换算，不是账单金额。
 
-## 12. 里程碑
+## 12. LLM 入链与降级
+
+- 客户端：`ddl_agent/llm/client.py` 只读 `config.PROVIDERS["deepseek"]`（key 来自 `.env`），
+  失败重试一次，累计每次调用的 token、耗时、成本。
+- 规划：`LLMQueryPlanner` 输出要查询的源、课程过滤词、时间窗、是否允许追加检索；
+  非法输出时回退 `QueryPlanner`。
+- 抽取：`LLMDeadlineExtractor` 输出任务名/课程/时间短语/ISO/置信度/是否复核；
+  ISO 非法时用本地归一化兜底；JSON 非法或断网时整条消息回退 `RuleExtractor`。
+- 裁决：`LLMConflictArbiter` 只能在已有候选中选一个；低置信度/拒答/编造时间 → uncertain。
+- 开关：`LLM_ENABLED`（默认开，设为 `0` 强制离线），无 key 时 `factory.build_agent` 自动返回规则版；
+  所有单元测试与 `--no-llm` 评测均不触网。
+
+## 13. 里程碑
 
 1. 设计评审（本文）。
 2. 包骨架 + 数据模型 + 归一化 + 抽取 + 去重 + 冲突 + 写入器，配单测。
 3. 数据集生成器 + 划分 + ground truth。
 4. Baseline + 评测脚本，产出离线评测报告。
-5. （后续）Graph 真实接入、真机聊天读取、LLM 后端替换与消融实验。
+5. LLM 规划/抽取/裁决入链、数据集去模板化、三方对比（已完成，见 §11.1）。
+6. （后续）Graph 真实接入、真机聊天读取、真实数据上的复测与消融实验。
