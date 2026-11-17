@@ -2,6 +2,36 @@
 
 使用视觉语言模型理解 Android 手机屏幕，通过 ADB 和 uiautomator2 执行操作；支持任务规划、多应用任务、OCR 定位与网页交互界面。
 
+## 操作模型：电脑驱动手机（先读这一段）
+
+- **操作对象是手机**。微信（群聊/私聊）、QQ（群聊）、Outlook App 收件箱的界面，全部在**手机上**被读取和点击。
+  agent 不会在电脑上打开微信/QQ/Outlook 桌面客户端，也不读取电脑本地邮件
+  （本地 `.eml` / 聊天归档只是没有手机时的离线测试替身）。
+- **运行环境是电脑**。本项目在电脑上运行，通过 **ADB（USB 线或 WiFi 调试）** 驱动手机。
+  手机端**不安装任何本项目组件**，也**不需要 root**。首次使用时 uiautomator2 可能自行安装一个自动化辅助组件，
+  那是 uiautomator2 的既有机制，不是本项目的部署。
+- 一句话：**电脑上的 agent 通过 ADB 操作手机 GUI**，把手机里的群聊和邮件 DDL 汇总成日历。
+
+> 当前手机优先方向（微信/QQ/Outlook App 读屏、目标定位、手机系统日历写入）**未经真实数据验证**；
+> 离线测试使用本地 `.eml` 与聊天归档替身。
+
+## 一键启动（Windows）
+
+1. 首次使用，先告诉 agent 要监控什么（自然语言，会写入 `sources.yaml`）：
+
+   ```bash
+   python -m ddl_agent.monitor.cli add "监控微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次"
+   python -m ddl_agent.monitor.cli list
+   ```
+
+2. 双击仓库根目录的 `run_ddl_monitor.bat`。脚本会依次检查 adb、手机是否在线且已授权、设备锁，
+   然后询问「1. 单轮扫描 / 2. 持续监控」，跑完自动刷新并打开 `output/calendar.html`。
+
+3. 产物：`output/deadlines.xlsx`（含审计表）、`data.json`、`deadlines.ics`（可导入系统日历）、`calendar.html`。
+
+没插手机、未授权 USB 调试、找不到 adb、手机被其他窗口占用（设备锁）时，脚本会分别给出对应提示与下一步动作，
+不会抛 Python traceback。详细说明见 [docs/ddl-agent-monitor.md](docs/ddl-agent-monitor.md)。
+
 ## 环境与安装
 
 - Python 3.10 或更高版本（具体兼容性取决于依赖版本）

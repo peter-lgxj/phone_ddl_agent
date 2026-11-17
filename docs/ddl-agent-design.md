@@ -1,10 +1,26 @@
 # DDL Agent 架构设计
 
-> 状态：设计稿（阶段二）。对应需求文档 `main(1).md`：按自然语言查询，从多个来源采集 DDL，
+> 状态：阶段五（手机优先 + 定期监控）。对应需求文档 `main(1).md`：按自然语言查询，从多个来源采集 DDL，
 > 规划/选工具、字段抽取与时间归一化、跨来源去重、按可信度与发布时间解决冲突，写入共享结构化文档，
 > 并配套合成数据集、单次直出 baseline 与评测。
 >
-> 本文只描述设计，不含未实现内容；实现进度在阶段三单独回报。
+> 本文同时记录设计与当前实现边界；真机与真实凭据相关路径均标注“未经真实数据验证”。
+
+## 0. 操作模型（先读这一段）
+
+这里最容易产生误解，所以先讲清楚：
+
+- **操作对象是手机**。微信（群聊/私聊）、QQ（群聊）、Outlook App 收件箱的界面，全部在**手机上**被读取和点击。
+  agent 不会在电脑上打开微信/QQ/Outlook 桌面客户端，也不依赖电脑本地邮件文件
+  （本地 `.eml` / 聊天归档只是离线测试替身）。
+- **运行环境是电脑**。本项目在电脑上运行，通过 **ADB（USB 线或 WiFi 调试）** 驱动手机。
+  手机端**不安装任何本项目组件**，也**不需要 root**；首次使用时 uiautomator2 可能自行安装一个自动化辅助组件，
+  那是 uiautomator2 的既有机制，不是本项目的部署。
+- 一句话：**电脑上的 agent 通过 ADB 操作手机 GUI**，把手机里的群聊和邮件 DDL 汇总成日历。
+
+Windows 用户双击仓库根目录的 `run_ddl_monitor.bat` 即可：脚本先检查 adb、设备在线与授权、设备锁，
+再让用户选择「单轮扫描 / 持续监控」，跑完刷新并打开 `output/calendar.html`。
+没插手机、未授权 USB 调试、找不到 adb、手机被其他窗口占用时，会给出对应的人话提示与下一步动作。
 
 ## 1. 目标与边界
 
@@ -19,10 +35,11 @@
 
 | 事项 | 本阶段处理方式 |
 |---|---|
-| Outlook 真实邮件 | 抽象出 `MessageSource`，提供 Graph 实现骨架；默认使用本地 `.eml` 目录实现。Graph 路径**未经真实数据验证**。 |
-| 微信/QQ 真实聊天记录 | 复用现有手机 GUI 自动化层做 `MobileChatConnector`；默认使用本地聊天归档实现。真机路径**未经真实数据验证**。 |
-| LLM 依赖 | 抽取/冲突环节定义 `LLMExtractor`/`ConflictArbiter` 接口；离线默认用规则实现，LLM 后端可注入。 |
-| 现有手机层 | **不改动任何公开行为**，只作为库被 `MobileChatConnector` 调用。 |
+| 三个真实数据源 | 微信（群聊/私聊）、QQ（群聊）、Outlook App 收件箱，**全部通过手机 GUI 屏幕内容读取**。真机路径**未经真实数据验证**。 |
+| Outlook 接入方式 | 主路径是手机 Outlook App；Microsoft Graph 保留为**将来可选的第二实现**，不再是主路径。 |
+| 本地 `.eml` / 聊天归档 | 降级为**离线测试替身**，保留用于无手机、无账号时跑通全链路与测试。 |
+| LLM 依赖 | 规划/抽取/裁决走 DeepSeek；断网或无 key 自动降级规则实现。 |
+| 现有手机层 | **不改动任何公开行为**，只作为读取工具被调用。 |
 | main 分支 / 现有 PR | 不触碰、不 force push、不合并。 |
 
 ## 2. 总体架构
@@ -136,10 +153,10 @@ class MessageSource(Protocol):
 
 | 实现 | 状态 | 说明 |
 |---|---|---|
-| `LocalEmlConnector` | 默认，离线可跑 | 读取 `*.eml` 目录，按 `Date`/`From`/`Subject` 解析；模拟收件箱 |
-| `GraphMailConnector` | 骨架，**未经真实数据验证** | 通过 Microsoft Graph `/me/messages` 拉取；无凭据时抛 `SourceNotConfigured`，不静默降级 |
-| `LocalChatConnector` | 默认，离线可跑 | 读取聊天归档 JSON（`{sender, role, timestamp, text}`） |
-| `MobileChatConnector` | 骨架，**未经真机验证** | 复用 ScreenAgent 读取微信/QQ；手机已拔线，未跑通 |
+| `MobileAppSource`（微信 / QQ / Outlook） | **主路径，未经真机验证** | 通过 ScreenAgent 在 App 内搜索/滚动定位目标会话，读取屏幕消息 |
+| `LocalEmlConnector` | 离线测试替身 | 读取 `*.eml` 目录；无手机时跑通全链路 |
+| `LocalChatConnector` | 离线测试替身 | 读取聊天归档 JSON；无手机时跑通全链路 |
+| `GraphMailConnector` | 将来可选 | 通过 Microsoft Graph `/me/messages`；无凭据时抛 `SourceNotConfigured` |
 
 同一 `fetch(plan)` 契约，评测可任意替换而不改上层。
 
@@ -268,6 +285,8 @@ ddl_agent/
   dedupe.py
   conflict.py
   writer/{base,xlsx_writer,csv_writer,markdown_writer,audit}.py
+  output.py                   # data.json / .ics / 手机日历可选接口
+  monitor/{config,cursor,sources,runner,cli}.py
   dataset/generator.py        # 三档难度 × 20–30 条，train/val/test
   evaluation/{metrics,baseline,run_eval}.py
 tests/test_ddl_*.py
@@ -372,3 +391,69 @@ Agent-LLM 共 179 次调用、75108 token、约 $0.0349。
 4. Baseline + 评测脚本，产出离线评测报告。
 5. LLM 规划/抽取/裁决入链、数据集去模板化、三方对比（已完成，见 §11.1）。
 6. （后续）Graph 真实接入、真机聊天读取、真实数据上的复测与消融实验。
+
+## 14. 手机优先架构（阶段五，当前方向）
+
+### 14.1 数据源与定位
+
+- 主路径只有三类手机来源：`wechat`（群聊/私聊）、`qq`（群聊）、`outlook`（App 收件箱）。
+  统一实现 `MobileAppSource`，复用现有 `ScreenAgent`：截图/OCR/控件树/tap/设备锁/留证全部由手机层完成。
+- 按目标名称定位，不写死坐标：任务里明确要求「在 App 内搜索目标名称 → 打开会话 → 向上翻阅 → 逐条读取」，
+  agent 自行决定搜索、置顶、列表滚动等操作。
+- 找不到目标会话时抛 `TargetNotFound`，运行结果里记录 `source_errors`，**不静默跳过**、不拿别的会话顶替。
+- 离线测试替身：`LocalEmlConnector` / `LocalChatConnector` 保留，仅在无手机时使用；
+  Graph 连接器保留为将来可选实现。
+
+### 14.2 自然语言监控配置
+
+- 新增 `monitor/config.py`，配置持久化为 `sources.yaml`，每条来源保存：
+  `id / app / kind / target / source_type / enabled / lookback_days / nl_text / parse_note`。
+- `nl_text` 保存原始自然语言，`parse_note` 记录解析出的关键字段，满足“这条配置从哪句话来”的可追溯要求。
+- 支持 `add / list / remove / enable / disable`；`add` 解析失败时显式拒绝并给出原因
+  （例如未指明 App、未给出目标名称、同时出现多个互相冲突的目标），**不猜测**。
+- 调度周期也由自然语言解析（如“每 6 小时”“每天一次”），解析失败直接报错，不套默认值。
+
+### 14.3 增量、去重与调度
+
+- 状态目录（默认 `state/`）：
+  - `cursors.json`：每个来源的 `last_timestamp`、`last_message_id`、`baseline_done`；
+  - `messages.jsonl`：已抓到的原始消息（跨轮保留，供冲突解决复用）；
+  - `candidates.jsonl`：已抽取的候选（LLM 只处理新消息，旧候选直接复用）。
+- 每轮只 **抓取** 游标之后的新消息；首次运行做一次基线扫描（按 `lookback_days`）。
+  游标在来源抓取成功后推进；失败不推进，下一轮重试。游标可手动重置（`monitor reset-cursor`）。
+- 跨轮去重由写入器统一处理：同一 `(课程, 归一化任务名)` 命中则改行；内容和状态都没变则跳过。
+  每轮审计记录 `inserted / updated / skipped`。
+- 调度：`monitor/runner.py` 提供 `run_cycle()`；`monitor/cli.py` 提供常驻循环
+  `python -m ddl_agent.monitor.cli run --config sources.yaml --out output --state state`，
+  以及 `--once` 单轮模式。不依赖任何外部云服务。
+
+### 14.4 输出
+
+| 产物 | 说明 |
+|---|---|
+| `deadlines.xlsx` | 默认结构化文档，含 Deadlines 与 Audit Log 两个 sheet |
+| `data.json` | 供网页使用的扁平结构，每轮全量重写 |
+| `deadlines.ics` | 可导入系统日历，每个 confirmed 记录一个 VEVENT + 提前 1 天 VALARM |
+| `calendar.html` | 自包含日历页（数据内嵌，双击可离线打开），每轮重写，打开后每 2 分钟自动重载 |
+| 手机系统日历 | `PhoneCalendarWriter` 接口预留，**默认关闭**，需真机验证后再启用 |
+
+### 14.5 模块差异
+
+| 模块 | 变化 |
+|---|---|
+| `connectors/local_eml.py`、`local_chat.py` | 降级为离线测试替身，接口不变 |
+| `connectors/mobile_chat.py` → `monitor/sources.py` | 升级为主路径：微信/QQ/Outlook App，按名称定位，未找到显式报错 |
+| `connectors/graph_mail.py` | 保留，标注“将来可选” |
+| `monitor/config.py` | 新增：自然语言配置、持久化、增删改查、显式拒绝 |
+| `monitor/cursor.py` | 新增：游标、消息库、候选库 |
+| `monitor/runner.py`、`monitor/cli.py` | 新增：单轮/常驻调度与结果汇总 |
+| `monitor/launcher.py`、`run_ddl_monitor.bat` | 新增：双击启动，环境检查、人话报错、单轮/常驻、打开日历页 |
+| `output.py` | 新增：`data.json`、`.ics`、`calendar.html`、手机日历可选接口 |
+| `pipeline.py` / `writer/` | 复用；写入器已支持改行/跳过与审计 |
+
+### 14.6 验证边界
+
+- 手机 GUI 读取、目标定位、Outlook App 收件箱、手机系统日历写入：**未经真机验证**。
+- 增量、跨轮更新、调度、配置解析、`data.json` / `.ics` 导出：离线测试可真跑。
+- Graph 与本地连接器只作为替身/备选，不代表真实来源行为。
+
