@@ -56,6 +56,11 @@ runs/
 experiments/results/
 experiments/ddl_agent/results/
 
+# DDL monitor: local config, incremental state and generated deliverables
+/sources.yaml
+/state/
+/output/
+
 # Python tooling caches
 __pycache__/
 .pytest_cache/
