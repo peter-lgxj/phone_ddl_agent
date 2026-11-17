@@ -138,6 +138,7 @@ def test_decision_retry_still_happens_before_action(monkeypatch, tmp_path):
 
 def test_done_summary_keeps_last_observation(monkeypatch, tmp_path):
     """完成检测命中时，摘要必须带上最后观察，供 context_needed 传递"""
+    monkeypatch.setattr(config, "COMPLETION_CHECK", "every_step")
     agent = make_agent(
         monkeypatch, tmp_path,
         lambda m: {"action_type": "wait", "description": "等待"},
@@ -150,6 +151,58 @@ def test_done_summary_keeps_last_observation(monkeypatch, tmp_path):
 
     assert done is True
     assert "天安门" in summary
+
+
+def test_task_done_field_avoids_extra_vision_request(monkeypatch, tmp_path):
+    """默认策略下，决策响应里的 task_done 直接判完成，不再发额外的完成检测请求"""
+    monkeypatch.setattr(config, "COMPLETION_CHECK", "decision")
+    called = {"check": 0}
+
+    agent = make_agent(
+        monkeypatch, tmp_path,
+        lambda m: {"action_type": "wait", "description": "等待", "task_done": True},
+        lambda a: False,
+        lambda a, m: "已显示结果页",
+    )
+
+    def fail_if_called(memory):
+        called["check"] += 1
+        return False
+
+    monkeypatch.setattr(agent, "_check_task_done", fail_if_called)
+
+    _, done, summary = agent._execute_step(3, TaskMemory("查询结果"))
+
+    assert done is True
+    assert called["check"] == 0, "不应再发每步一次的完成检测请求"
+    assert "结果页" in summary
+
+
+def test_task_done_false_does_not_finish(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "COMPLETION_CHECK", "decision")
+    agent = make_agent(
+        monkeypatch, tmp_path,
+        lambda m: {"action_type": "wait", "description": "等待", "task_done": False},
+        lambda a: False,
+        lambda a, m: "还在加载",
+    )
+    _, done, summary = agent._execute_step(3, TaskMemory("查询结果"))
+    assert done is False and summary == ""
+
+
+def test_completion_check_off_never_calls_detector(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "COMPLETION_CHECK", "off")
+    called = {"check": 0}
+    agent = make_agent(
+        monkeypatch, tmp_path,
+        lambda m: {"action_type": "wait", "description": "等待"},
+        lambda a: False,
+        lambda a, m: "加载中",
+    )
+    monkeypatch.setattr(agent, "_check_task_done",
+                        lambda m: called.__setitem__("check", called["check"] + 1) or True)
+    _, done, _ = agent._execute_step(3, TaskMemory("查询结果"))
+    assert done is False and called["check"] == 0
 
 
 def test_build_exec_goal_injects_context():

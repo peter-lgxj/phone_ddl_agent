@@ -8,7 +8,7 @@ from pathlib import Path
 from phone_controller import PhoneController
 from app_launcher import AppLauncher
 from memory import TaskMemory, format_steps_compact
-from ocr_locator import OCRLocator
+from ocr_locator import OCRLocator, should_trigger_ocr, snap_action_coords
 import config
 import image_preprocess
 from adb_utils import ADB
@@ -116,6 +116,8 @@ class ScreenAgent:
         self._observe_valid = False  # 当前 screen_observe.png 是否是本步真实截图
         self._last_image_meta = None     # 本步发送图的规格与缩放比例
         self._last_model_action = None   # 缩放时模型返回的原始坐标（未反算）
+        self._last_decision_timings = {}  # 决策各阶段耗时
+        self._last_step_timings = {}      # 整步各阶段耗时（写进 step json）
 
         print(f"视觉模型：{provider_name} / {self.model}")
         print(f"语义模型：{planner_name} / {self.text_model}")
@@ -185,13 +187,13 @@ class ScreenAgent:
 
         if semantic_analysis:
             progress_rule = "3. 根据【语义分析】判断进度，不重复已完成的操作"
-            duty_rule     = "8. 你的职责是：看截图确认界面状态和坐标，结合语义分析决定动作"
+            duty_rule     = "9. 你的职责是：看截图确认界面状态和坐标，结合语义分析决定动作"
             finish_rules  = """以【语义分析】中的「未完成」为准：
     - 未完成为空 → action_type 填 finish，summary 填完成情况
     - 未完成不为空 → 继续执行，做语义分析中「下一步」建议的操作"""
         else:
             progress_rule = "3. 根据历史观察判断进度，不重复已完成的操作"
-            duty_rule     = "8. 你的职责是：看截图确认界面状态和坐标，结合历史观察决定动作"
+            duty_rule     = "9. 你的职责是：看截图确认界面状态和坐标，结合历史观察决定动作"
             finish_rules  = """根据历史观察判断任务是否完成：
     - 能确认目标已达成 → action_type 填 finish，summary 写出关键结果（名称/价格/地点等）
     - 仍缺步骤 → 继续执行下一步操作"""
@@ -205,6 +207,13 @@ class ScreenAgent:
         )
         image_section = "\n".join(image_lines)
 
+        if ocr_result:
+            ocr_section = ocr_result
+            coord_rule = "1. tap操作必须使用 OCR 结果里的坐标"
+        else:
+            ocr_section = "（本步未预跑 OCR；请依据截图估计元素位置，tap 落点会再做校正）"
+            coord_rule = "1. tap 坐标请根据截图中元素的像素位置估计，尽量落在元素中心"
+
         return f"""你是一个手机操作智能体，通过观察手机截图决定下一步操作。
 
     ## 总体任务
@@ -214,7 +223,7 @@ class ScreenAgent:
     {history_text}
 {semantic_section}
     ## 当前屏幕 OCR 识别结果
-    {ocr_result}
+    {ocr_section}
 
     ## 图片说明
 {image_section}
@@ -223,13 +232,14 @@ class ScreenAgent:
     {self.ACTIONS}
 
     ## 操作规则
-    1. tap操作必须使用 OCR 结果里的坐标
+    {coord_rule}
     2. 已打开的 App 不要重复 open_app
     {progress_rule}
     4. 每次只返回一个动作
     5. 可直接打开的 App：{known_apps}
     6. 需要输入文字固定两步：type → send
     7. 历史中验证结果包含"输入成功"时，下一步必须 send
+    8. tap 时在 target 填上目标元素的文字（或 resource-id），便于精确落点
     {duty_rule}
 
     ## 何时调用 finish
@@ -246,7 +256,9 @@ class ScreenAgent:
     "y2": 数字,
     "text": "（type时填）",
     "summary": "（finish时填）",
-    "description": "本步操作一句话描述"
+    "description": "本步操作一句话描述",
+    "target": "（tap时填）要点击元素的文字或描述，用于精确定位",
+    "task_done": 布尔值（整项任务是否已全部完成，未完成填 false）
     }}
 
     ## 只返回 JSON，注意：
@@ -319,9 +331,22 @@ class ScreenAgent:
     # ══════════════════════════════════════════════════════════
 
     def _think_and_act(self, memory: TaskMemory) -> dict:
+        timings = {}
+        started = time.time()
         self.phone.screenshot("screen_current.png")
-        ocr_result = self.ocr.format_for_prompt("screen_current.png")
+        timings["screenshot"] = round(time.time() - started, 2)
 
+        started = time.time()
+        ocr_mode = getattr(config, "OCR_MODE", "on_demand")
+        ocr_result = ""
+        if ocr_mode == "always":
+            ocr_result = self.ocr.format_for_prompt("screen_current.png")
+        timings["ocr_pre"] = round(time.time() - started, 2)
+        timings["ocr"] = timings["ocr_pre"]
+        timings["ocr_triggered"] = ocr_mode == "always"
+        timings["ocr_reason"] = "always" if ocr_mode == "always" else ""
+
+        started = time.time()
         # 截图后先预处理：JPEG 编码 / 可选等比缩放；缩放比例用于把模型坐标反算回设备坐标
         current_bytes, image_meta = image_preprocess.prepare_image_bytes("screen_current.png")
         self._last_image_meta = image_meta
@@ -346,22 +371,29 @@ class ScreenAgent:
         # 没带原图的早期步骤压成文字摘要
         image_steps = {img["step"] for img in history_images}
         history_text = self._build_history_text(memory, image_steps)
+        timings["preprocess"] = round(time.time() - started, 2)
 
-        # ── 文字大模型先做语义分析（有历史才分析，可用消融开关关闭）──
+        # ── 文字大模型先做语义分析（有历史才分析，默认关闭）──
+        started = time.time()
         semantic_analysis = ""
         if memory.steps and config.ENABLE_SEMANTIC_ANALYSIS:
             semantic_analysis = self._analyze_history(memory.task, memory.steps)
+        timings["semantic"] = round(time.time() - started, 2)
 
         prompt = self._build_prompt(memory, history_images, history_text,
                                     ocr_result, semantic_analysis)
 
         content.append({"type": "text", "text": prompt})
 
+        started = time.time()
         response = self.client.chat.completions.create(
             model=self.model,
             temperature=config.LLM_TEMPERATURE,
-            messages=[{"role": "user", "content": content}]
+            messages=[{"role": "user", "content": content}],
+            extra_body=getattr(self, "extra_body", None),
         )
+        timings["decision"] = round(time.time() - started, 2)
+        self._last_decision_timings = timings
 
         raw = response.choices[0].message.content.strip()
         raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
@@ -384,6 +416,62 @@ class ScreenAgent:
             self._last_model_action = action
             print(f"  🧭 坐标反算：{ {k: action[k] for k in keys if k in action} } -> "
                   f"{ {k: mapped[k] for k in keys if k in mapped} }")
+
+        # 按需定位：控件树优先、OCR 兜底；只在需要精确落点（tap）时触发
+        if should_trigger_ocr(ocr_mode, mapped.get("action_type", "")):
+            snap_mode = getattr(config, "OCR_SNAP_MODE", "tree_first")
+            max_distance = int(getattr(config, "OCR_SNAP_MAX_DISTANCE", 80))
+            snap_source = "none"
+            moves = []
+            tree_elapsed = ocr_elapsed = 0.0
+            tree_count = ocr_count = 0
+            ocr_meta = {}
+
+            if snap_mode in ("tree_first", "tree_only"):
+                started = time.time()
+                try:
+                    tree_elements = self.ocr.detect_tree()
+                except Exception as e:
+                    print(f"  ⚠️  控件树读取失败，继续走 OCR：{e}")
+                    tree_elements = []
+                tree_elapsed = round(time.time() - started, 2)
+                tree_count = len(tree_elements)
+                if tree_elements:
+                    snapped, moves = snap_action_coords(mapped, tree_elements, max_distance)
+                    if moves:
+                        snap_source = "tree"
+                        mapped = snapped
+
+            if snap_source == "none" and snap_mode in ("tree_first", "ocr_only"):
+                started = time.time()
+                try:
+                    ocr_elements = self.ocr.detect_ocr("screen_current.png")
+                except Exception as e:
+                    print(f"  ⚠️  OCR 失败，保留模型坐标：{e}")
+                    ocr_elements = []
+                ocr_elapsed = round(time.time() - started, 2)
+                ocr_count = len(ocr_elements)
+                ocr_meta = dict(getattr(self.ocr, "last_meta", {}) or {})
+                if ocr_elements:
+                    snapped, moves = snap_action_coords(mapped, ocr_elements, max_distance)
+                    if moves:
+                        snap_source = "ocr"
+                        mapped = snapped
+
+            timings["ocr"] = round(timings.get("ocr", 0.0) + tree_elapsed + ocr_elapsed, 2)
+            timings["ocr_triggered"] = True
+            timings["ocr_reason"] = "tap"
+            timings["snap_source"] = snap_source
+            timings["snap_tree"] = {"elapsed": tree_elapsed, "elements": tree_count}
+            timings["snap_ocr"] = {"elapsed": ocr_elapsed, "elements": ocr_count,
+                                   "scale": ocr_meta.get("scale"),
+                                   "scaled_size": ocr_meta.get("scaled_size"),
+                                   "engine": ocr_meta.get("engine")}
+            timings["ocr_snap"] = {"moves": moves}
+            if moves:
+                print(f"  🎯 {snap_source} 吸附：{moves}")
+
+        self._last_decision_timings = timings
         return mapped
 
     # ══════════════════════════════════════════════════════════
@@ -402,7 +490,7 @@ class ScreenAgent:
 
     def _observe(self, last_action: dict, memory: TaskMemory) -> str:
         """执行动作后截图，VL 模型描述结果（原始输出，不做额外处理）"""
-        time.sleep(1)
+        time.sleep(float(getattr(config, "OBSERVE_SETTLE_SECONDS", 1.0)))
         self._clear_observe_shot()   # 先删旧图：截图失败时不会留下过期画面
         self.phone.screenshot("screen_observe.png")
         observe_bytes, observe_meta = image_preprocess.prepare_image_bytes("screen_observe.png")
@@ -457,7 +545,8 @@ class ScreenAgent:
                         }
                     ]
                 }
-            ]
+            ],
+            extra_body=getattr(self, "extra_body", None),
         )
         return response.choices[0].message.content.strip()
 
@@ -547,7 +636,8 @@ class ScreenAgent:
                         }
                     ]
                 }
-            ]
+            ],
+            extra_body=getattr(self, "extra_body", None),
         )
 
         answer = response.choices[0].message.content.strip().upper()
@@ -618,16 +708,22 @@ class ScreenAgent:
         返回 (finished, done, summary)：finished 表示模型主动 finish，
         done 表示完成检测判定已完成，summary 为结束说明。
         """
+        timings = dict(getattr(self, "_last_decision_timings", {}) or {})
+        started = time.time()
         action = self._decide(step, memory)
+        timings["decide_total"] = round(time.time() - started, 2)
 
         # 动作只执行一次，不随观察/完成检测失败而重放
         # 动作执行后旧截图作废，观察成功才重新有效
         self._observe_valid = False
+        started = time.time()
         finished = self._execute(action)
+        timings["execute"] = round(time.time() - started, 2)
 
         if finished:
             observation = "任务完成"
         else:
+            started = time.time()
             try:
                 observation = self._observe(action, memory)
                 self._observe_valid = True
@@ -636,6 +732,7 @@ class ScreenAgent:
                 # 旧截图必须作废，否则完成检测/下一步会把上一步画面当成当前屏幕
                 self._clear_observe_shot()
                 print(f"│  ⚠️  {observation}")
+            timings["observe"] = round(time.time() - started, 2)
         print(f"│  👁   {observation}")
         ui_state.update_observation(observation)
 
@@ -644,15 +741,25 @@ class ScreenAgent:
             action=action,
             observation=observation
         )
-        self._archive_step(step, action, observation)
 
+        # 完成判断：默认直接用决策响应里的 task_done，省掉每步一次带图请求
         done = False
+        started = time.time()
         if not finished and step >= 3:
-            try:
-                done = self._check_task_done(memory)
-            except Exception as e:
-                # 完成检测失败只是无法确认完成，不能因此中断或重放动作
-                print(f"│  ⚠️  完成检测失败，按未完成处理：{e}")
+            mode = getattr(config, "COMPLETION_CHECK", "decision")
+            if mode == "every_step":
+                try:
+                    done = self._check_task_done(memory)
+                except Exception as e:
+                    # 完成检测失败只是无法确认完成，不能因此中断或重放动作
+                    print(f"│  ⚠️  完成检测失败，按未完成处理：{e}")
+            elif mode == "decision" and action.get("task_done"):
+                done = True
+                print("│  🔍  决策模型标记任务完成")
+        timings["completion"] = round(time.time() - started, 2)
+
+        self._last_step_timings = timings
+        self._archive_step(step, action, observation)
 
         if action.get("summary"):
             summary = action["summary"]
@@ -702,6 +809,9 @@ class ScreenAgent:
                 record["image"] = self._last_image_meta
             if getattr(self, "_last_model_action", None):
                 record["model_action"] = self._last_model_action
+            if getattr(self, "_last_step_timings", None):
+                # 每阶段耗时，便于事后定位慢在哪一层
+                record["timings"] = self._last_step_timings
             with open(self.run_dir / f"step_{step:03d}.json", "w", encoding="utf-8") as f:
                 json.dump(record, f, ensure_ascii=False, indent=2)
             sent_path = image_preprocess.sent_filename("screen_current.png", self._last_image_meta)

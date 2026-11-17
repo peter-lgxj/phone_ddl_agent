@@ -50,9 +50,20 @@ class PhoneController:
         以免与动作序列里的 send 叠加导致重复发送或重复回车。
         """
 
-        # 先尝试点击激活输入框
+        # 已聚焦在输入框时直接写入：避免重复点击（tap_input_box 内含 0.8s 等待，YOLO 兜底更慢）
+        focused = self.device(focused=True, className="android.widget.EditText")
+        if bool(focused.exists):
+            try:
+                focused.set_text(text)
+                print(f"输入文字(已聚焦)：{text}")
+                time.sleep(0.3)
+                return
+            except Exception as e:
+                print(f"输入文字(已聚焦)失败：{e}")
+
+        # 未聚焦才点击激活
         self.tap_input_box()
-        time.sleep(0.5)
+        time.sleep(0.3)
         
         # 依次尝试几种写入方式
         # 方式1：标准 EditText
