@@ -1,0 +1,33 @@
+{
+  "sample_id": "hard-011",
+  "course": "COMP7506",
+  "now": "2026-11-16T09:00:00+08:00",
+  "query": "COMP7506 Assignment 1 下周五前要交吗",
+  "source_config": "跟踪课程邮件、课程群聊和同学消息",
+  "messages": [
+    {
+      "message_id": "hard-011-m1",
+      "source_name": "outlook",
+      "source_type": "official_email",
+      "sender": "ta@cs.hku.hk",
+      "published_at": "2026-11-14T09:00:00+08:00",
+      "subject": "[COMP7506] Assignment 1",
+      "body": "Assignment 1 for COMP7506 is due next Friday at 23:59."
+    }
+  ],
+  "ground_truth": [
+    {
+      "task_name": "Assignment 1",
+      "course": "COMP7506",
+      "deadline_iso": "2026-11-27T23:59:00+08:00",
+      "status": "confirmed",
+      "expected_sources": [
+        "official_email"
+      ],
+      "conflict_expected": false,
+      "winner_reason": ""
+    }
+  ],
+  "tier": "hard",
+  "split": "train"
+}

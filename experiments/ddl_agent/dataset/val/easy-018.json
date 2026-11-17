@@ -1,0 +1,34 @@
+{
+  "sample_id": "easy-018",
+  "course": "FITE7410",
+  "now": "2026-11-16T09:00:00+08:00",
+  "query": "FITE7410 的 Lab 2 DDL",
+  "source_config": "跟踪课程邮件、课程群聊和同学消息",
+  "messages": [
+    {
+      "message_id": "easy-018-m1",
+      "source_name": "FITE7410 课程群",
+      "source_type": "student_chat",
+      "sender": "Alice",
+      "role": "student",
+      "published_at": "2026-11-15T09:00:00+08:00",
+      "subject": "",
+      "text": "DDL 提醒：FITE7410 Lab 2 due 2026-11-30 23:59"
+    }
+  ],
+  "ground_truth": [
+    {
+      "task_name": "Lab 2",
+      "course": "FITE7410",
+      "deadline_iso": "2026-11-30T23:59:00+08:00",
+      "status": "confirmed",
+      "expected_sources": [
+        "student_chat"
+      ],
+      "conflict_expected": false,
+      "winner_reason": ""
+    }
+  ],
+  "tier": "easy",
+  "split": "val"
+}

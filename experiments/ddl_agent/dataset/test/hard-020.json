@@ -1,0 +1,44 @@
+{
+  "sample_id": "hard-020",
+  "course": "COMP7404",
+  "now": "2026-11-16T09:00:00+08:00",
+  "query": "COMP7404 Assignment 7 的截止时间",
+  "source_config": "跟踪课程邮件、课程群聊和同学消息",
+  "messages": [
+    {
+      "message_id": "hard-020-m1",
+      "source_name": "COMP7404 课程群",
+      "source_type": "student_chat",
+      "sender": "Alice",
+      "role": "student",
+      "published_at": "2026-11-16T01:00:00+08:00",
+      "subject": "",
+      "text": "Assignment 7 deadline is 2026-12-04 23:59, pretty sure."
+    },
+    {
+      "message_id": "hard-020-m2",
+      "source_name": "COMP7404 课程群",
+      "source_type": "student_chat",
+      "sender": "Bob",
+      "role": "student",
+      "published_at": "2026-11-16T01:00:00+08:00",
+      "subject": "",
+      "text": "Assignment 7 deadline is 2026-12-06 23:59, TA told me."
+    }
+  ],
+  "ground_truth": [
+    {
+      "task_name": "Assignment 7",
+      "course": "COMP7404",
+      "deadline_iso": null,
+      "status": "uncertain",
+      "expected_sources": [
+        "student_chat"
+      ],
+      "conflict_expected": true,
+      "winner_reason": "两个同学消息互相矛盾且无更高可信度来源"
+    }
+  ],
+  "tier": "hard",
+  "split": "test"
+}

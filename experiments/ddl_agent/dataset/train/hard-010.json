@@ -1,0 +1,42 @@
+{
+  "sample_id": "hard-010",
+  "course": "COMP7608",
+  "now": "2026-11-16T09:00:00+08:00",
+  "query": "COMP7608 Assignment 5 的最新截止时间",
+  "source_config": "跟踪课程邮件、课程群聊和同学消息",
+  "messages": [
+    {
+      "message_id": "hard-010-m1",
+      "source_name": "outlook",
+      "source_type": "official_email",
+      "sender": "ta@cs.hku.hk",
+      "published_at": "2026-10-02T09:00:00+08:00",
+      "subject": "[COMP7608] Assignment 5",
+      "body": "Assignment 5 for COMP7608 is due on 2026-12-01 23:59."
+    },
+    {
+      "message_id": "hard-010-m2",
+      "source_name": "outlook",
+      "source_type": "official_email",
+      "sender": "ta@cs.hku.hk",
+      "published_at": "2026-11-06T09:00:00+08:00",
+      "subject": "[COMP7608] Assignment 5 deadline extended",
+      "body": "Update: Assignment 5 for COMP7608 is now due on 2026-12-08 23:59."
+    }
+  ],
+  "ground_truth": [
+    {
+      "task_name": "Assignment 5",
+      "course": "COMP7608",
+      "deadline_iso": "2026-12-08T23:59:00+08:00",
+      "status": "confirmed",
+      "expected_sources": [
+        "official_email"
+      ],
+      "conflict_expected": true,
+      "winner_reason": "同源新公告取代旧公告"
+    }
+  ],
+  "tier": "hard",
+  "split": "train"
+}

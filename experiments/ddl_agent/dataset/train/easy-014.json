@@ -1,0 +1,34 @@
+{
+  "sample_id": "easy-014",
+  "course": "COMP7608",
+  "now": "2026-11-16T09:00:00+08:00",
+  "query": "COMP7608 Assignment 5 什么时候截止？",
+  "source_config": "跟踪课程邮件、课程群聊和同学消息",
+  "messages": [
+    {
+      "message_id": "easy-014-m1",
+      "source_name": "COMP7608 课程群",
+      "source_type": "instructor_chat",
+      "sender": "王老师",
+      "role": "instructor",
+      "published_at": "2026-11-14T09:00:00+08:00",
+      "subject": "",
+      "text": "各位同学，Assignment 5 的截止时间是 12月9日 23:59，请按时提交。"
+    }
+  ],
+  "ground_truth": [
+    {
+      "task_name": "Assignment 5",
+      "course": "COMP7608",
+      "deadline_iso": "2026-12-09T23:59:00+08:00",
+      "status": "confirmed",
+      "expected_sources": [
+        "instructor_chat"
+      ],
+      "conflict_expected": false,
+      "winner_reason": ""
+    }
+  ],
+  "tier": "easy",
+  "split": "train"
+}

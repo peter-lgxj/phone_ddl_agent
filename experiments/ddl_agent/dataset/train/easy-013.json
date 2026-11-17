@@ -1,0 +1,33 @@
+{
+  "sample_id": "easy-013",
+  "course": "STAT7001",
+  "now": "2026-11-16T09:00:00+08:00",
+  "query": "帮我查一下 STAT7001 的 Assignment 1 截止时间",
+  "source_config": "跟踪课程邮件、课程群聊和同学消息",
+  "messages": [
+    {
+      "message_id": "easy-013-m1",
+      "source_name": "outlook",
+      "source_type": "official_email",
+      "sender": "ta@cs.hku.hk",
+      "published_at": "2026-11-13T09:00:00+08:00",
+      "subject": "[STAT7001] Assignment 1 deadline",
+      "body": "Dear students,\nAssignment 1 for STAT7001 is due on 2026-12-02 23:59. Please submit via Moodle."
+    }
+  ],
+  "ground_truth": [
+    {
+      "task_name": "Assignment 1",
+      "course": "STAT7001",
+      "deadline_iso": "2026-12-02T23:59:00+08:00",
+      "status": "confirmed",
+      "expected_sources": [
+        "official_email"
+      ],
+      "conflict_expected": false,
+      "winner_reason": ""
+    }
+  ],
+  "tier": "easy",
+  "split": "train"
+}

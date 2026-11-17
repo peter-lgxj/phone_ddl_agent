@@ -1,0 +1,34 @@
+{
+  "sample_id": "medium-020",
+  "course": "STAT7001",
+  "now": "2026-11-16T09:00:00+08:00",
+  "query": "STAT7001 Assignment 5 什么时候截止",
+  "source_config": "跟踪课程邮件、课程群聊和同学消息",
+  "messages": [
+    {
+      "message_id": "medium-020-m1",
+      "source_name": "STAT7001 课程群",
+      "source_type": "student_chat",
+      "sender": "Bob",
+      "role": "student",
+      "published_at": "2026-11-16T03:00:00+08:00",
+      "subject": "",
+      "text": "STAT7001 Assignment 5 的截止时间还没定，TA 说下周会在邮件里通知。"
+    }
+  ],
+  "ground_truth": [
+    {
+      "task_name": "Assignment 5",
+      "course": "STAT7001",
+      "deadline_iso": null,
+      "status": "missing_deadline",
+      "expected_sources": [
+        "student_chat"
+      ],
+      "conflict_expected": false,
+      "winner_reason": ""
+    }
+  ],
+  "tier": "medium",
+  "split": "test"
+}

@@ -1,0 +1,42 @@
+{
+  "sample_id": "hard-018",
+  "course": "FITE7410",
+  "now": "2026-11-16T09:00:00+08:00",
+  "query": "FITE7410 Assignment 7 的最新截止时间",
+  "source_config": "跟踪课程邮件、课程群聊和同学消息",
+  "messages": [
+    {
+      "message_id": "hard-018-m1",
+      "source_name": "outlook",
+      "source_type": "official_email",
+      "sender": "ta@cs.hku.hk",
+      "published_at": "2026-10-02T09:00:00+08:00",
+      "subject": "[FITE7410] Assignment 7",
+      "body": "Assignment 7 for FITE7410 is due on 2026-12-01 23:59."
+    },
+    {
+      "message_id": "hard-018-m2",
+      "source_name": "outlook",
+      "source_type": "official_email",
+      "sender": "ta@cs.hku.hk",
+      "published_at": "2026-11-06T09:00:00+08:00",
+      "subject": "[FITE7410] Assignment 7 deadline extended",
+      "body": "Update: Assignment 7 for FITE7410 is now due on 2026-12-08 23:59."
+    }
+  ],
+  "ground_truth": [
+    {
+      "task_name": "Assignment 7",
+      "course": "FITE7410",
+      "deadline_iso": "2026-12-08T23:59:00+08:00",
+      "status": "confirmed",
+      "expected_sources": [
+        "official_email"
+      ],
+      "conflict_expected": true,
+      "winner_reason": "同源新公告取代旧公告"
+    }
+  ],
+  "tier": "hard",
+  "split": "val"
+}

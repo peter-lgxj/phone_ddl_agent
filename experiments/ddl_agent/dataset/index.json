@@ -1,0 +1,456 @@
+{
+  "created_from": "ddl_agent.dataset.generator",
+  "per_tier": 24,
+  "base_now": "2026-11-16T09:00:00+08:00",
+  "counts": {
+    "train": {
+      "easy": 14,
+      "medium": 14,
+      "hard": 14
+    },
+    "val": {
+      "easy": 5,
+      "medium": 5,
+      "hard": 5
+    },
+    "test": {
+      "easy": 5,
+      "medium": 5,
+      "hard": 5
+    }
+  },
+  "samples": [
+    {
+      "sample_id": "easy-001",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-002",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-003",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-004",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-005",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-006",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-007",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-008",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-009",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-010",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-011",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-012",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-013",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-014",
+      "tier": "easy",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-015",
+      "tier": "easy",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-016",
+      "tier": "easy",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-017",
+      "tier": "easy",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-018",
+      "tier": "easy",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-019",
+      "tier": "easy",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-020",
+      "tier": "easy",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-021",
+      "tier": "easy",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-022",
+      "tier": "easy",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-023",
+      "tier": "easy",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "easy-024",
+      "tier": "easy",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-001",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-002",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-003",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-004",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-005",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-006",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-007",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-008",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-009",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-010",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-011",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-012",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-013",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-014",
+      "tier": "medium",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-015",
+      "tier": "medium",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-016",
+      "tier": "medium",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-017",
+      "tier": "medium",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-018",
+      "tier": "medium",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-019",
+      "tier": "medium",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-020",
+      "tier": "medium",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-021",
+      "tier": "medium",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-022",
+      "tier": "medium",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-023",
+      "tier": "medium",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "medium-024",
+      "tier": "medium",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-001",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-002",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-003",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-004",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-005",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-006",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-007",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-008",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-009",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-010",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-011",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-012",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-013",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-014",
+      "tier": "hard",
+      "split": "train",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-015",
+      "tier": "hard",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-016",
+      "tier": "hard",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-017",
+      "tier": "hard",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-018",
+      "tier": "hard",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-019",
+      "tier": "hard",
+      "split": "val",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-020",
+      "tier": "hard",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-021",
+      "tier": "hard",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-022",
+      "tier": "hard",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-023",
+      "tier": "hard",
+      "split": "test",
+      "ground_truth": 1
+    },
+    {
+      "sample_id": "hard-024",
+      "tier": "hard",
+      "split": "test",
+      "ground_truth": 1
+    }
+  ]
+}
