@@ -31,6 +31,7 @@ def _payload(records: list[ResolvedRecord], generated_at: datetime | None = None
                 "deadline": record.deadline_iso,
                 "status": record.status,
                 "source": record.source,
+                "sources": record.sources,
                 "confidence": round(record.confidence, 4),
                 "evidence": record.evidence_ids,
                 "note": record.resolution_note,

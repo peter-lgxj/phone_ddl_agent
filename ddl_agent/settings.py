@@ -44,6 +44,7 @@ DEADLINE_COLUMNS = [
     "Deadline",
     "Status",
     "Source",
+    "All Sources",
     "Confidence",
     "Evidence",
     "Last Updated",

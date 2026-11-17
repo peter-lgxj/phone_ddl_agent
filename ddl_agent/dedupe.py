@@ -135,5 +135,19 @@ class Deduplicator:
         return current is not None and _rank_key(candidate) > _rank_key(current)
 
 
+def clusters_without_dedup(candidates: list[DeadlineCandidate]) -> list[TaskCluster]:
+    """消融用：每条候选单独成簇，不做任何合并。"""
+    usable = [candidate for candidate in candidates if candidate.task_name_raw.strip()]
+    return [
+        TaskCluster(
+            cluster_id=f"cluster-{position:04d}",
+            task_name=candidate.task_name_raw,
+            course=candidate.course,
+            candidates=[candidate],
+        )
+        for position, candidate in enumerate(usable, start=1)
+    ]
+
+
 def _rank_key(candidate: DeadlineCandidate) -> tuple[int, object]:
     return (SOURCE_CREDIBILITY.get(candidate.source_type, 0), candidate.published_at)

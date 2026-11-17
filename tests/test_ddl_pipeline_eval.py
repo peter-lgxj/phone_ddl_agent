@@ -10,8 +10,15 @@ from ddl_agent.connectors.local_chat import LocalChatConnector
 from ddl_agent.dataset.generator import generate_samples, load_samples, write_dataset
 from ddl_agent.evaluation.baseline import SinglePassBaseline
 from ddl_agent.evaluation.metrics import evaluate_dataset, evaluate_sample, validate_document
-from ddl_agent.evaluation.run_eval import materialize_sources, run_one, summarize
-from ddl_agent.models import ResolvedRecord, RetrievalPlan
+from ddl_agent.conflict import ConflictResolver
+from ddl_agent.evaluation.run_eval import (
+    Ablation,
+    materialize_sources,
+    run_ablation,
+    run_one,
+    summarize,
+)
+from ddl_agent.models import RawMessage, ResolvedRecord, RetrievalPlan
 from ddl_agent.pipeline import DdlAgent
 from ddl_agent.planner import QueryPlanner
 from ddl_agent.writer.xlsx_writer import XlsxWriter
@@ -96,6 +103,114 @@ def test_rule_pipeline_does_not_invent_missing_deadline(tmp_path):
     result = agent.run(sample["query"], sample["source_config"])
     # 规则版宁可漏掉，也不能编一个截止时间
     assert all(record.status != "confirmed" for record in result.records)
+
+
+# ---------------------------------------------------------------- 消融开关
+class _StaticSource:
+    def __init__(self, name: str, source_type: str, messages: list[RawMessage]):
+        self.name = name
+        self.source_type = source_type
+        self.kind = "email" if source_type == "official_email" else "chat"
+        self.enabled = True
+        self.messages = messages
+        self.calls = 0
+
+    def fetch(self, plan=None):
+        self.calls += 1
+        return list(self.messages)
+
+
+class _ExplodingArbiter:
+    def arbitrate(self, *args, **kwargs):  # pragma: no cover - 被调用即失败
+        raise AssertionError("关闭冲突验证后不应调用裁决模型")
+
+
+def _gui_message(message_id: str, source_name: str, source_type: str, body: str,
+                 hour: int = 9) -> RawMessage:
+    return RawMessage(
+        message_id=message_id,
+        source_name=source_name,
+        source_type=source_type,
+        sender="TA",
+        published_at=NOW.replace(hour=hour),
+        subject=source_name,
+        body=body,
+    )
+
+
+def test_no_dedup_keeps_duplicate_rows(tmp_path):
+    body = "COMP7608 HW1 deadline 2026-11-20 23:59"
+    sources = [
+        _StaticSource("outlook", "official_email", [_gui_message("m1", "outlook", "official_email", body)]),
+        _StaticSource("wechat", "student_chat", [_gui_message("m2", "wechat", "student_chat", body)]),
+    ]
+    full = DdlAgent(sources=sources, writer=XlsxWriter(tmp_path / "full.xlsx"), now=NOW)
+    assert len(full.run("COMP7608 的 DDL", "").records) == 1
+
+    ablated = DdlAgent(sources=sources, writer=XlsxWriter(tmp_path / "ablation.xlsx"),
+                       now=NOW, dedupe_enabled=False)
+    assert len(ablated.run("COMP7608 的 DDL", "").records) == 2
+
+
+def test_no_verify_skips_arbiter_and_marks_note(tmp_path):
+    sources = [
+        _StaticSource("outlook", "official_email", [
+            _gui_message("m1", "outlook", "official_email",
+                         "COMP7608 HW1 deadline 2026-11-20 23:59", hour=9),
+            _gui_message("m2", "outlook", "official_email",
+                         "COMP7608 HW1 deadline 2026-11-21 23:59", hour=10),
+        ]),
+    ]
+    agent = DdlAgent(
+        sources=sources, writer=XlsxWriter(tmp_path / "no_verify.xlsx"), now=NOW,
+        resolver=ConflictResolver(arbiter=_ExplodingArbiter()), verify_enabled=False,
+    )
+    result = agent.run("COMP7608 的 DDL", "")
+    assert len(result.records) == 1
+    assert "未做冲突验证" in result.records[0].resolution_note
+
+
+def test_fixed_sources_bypasses_source_config_selection(tmp_path):
+    mail = _StaticSource("outlook", "official_email", [])
+    chat = _StaticSource("wechat", "student_chat", [])
+
+    dynamic = DdlAgent(sources=[mail, chat], writer=XlsxWriter(tmp_path / "dynamic.xlsx"), now=NOW)
+    dynamic.run("COMP7608 的 DDL", "只看邮件")
+    assert (mail.calls, chat.calls) == (1, 0)
+
+    mail.calls = chat.calls = 0
+    fixed = DdlAgent(sources=[mail, chat], writer=XlsxWriter(tmp_path / "fixed.xlsx"),
+                     now=NOW, fixed_sources=True)
+    fixed.run("COMP7608 的 DDL", "只看邮件")
+    assert (mail.calls, chat.calls) == (1, 1)
+
+
+def test_document_has_all_sources_column(tmp_path):
+    import openpyxl
+
+    record = ResolvedRecord(
+        task_name="HW1", course="COMP7608", deadline_iso="2026-11-20T23:59:00+08:00",
+        status="confirmed", source="outlook (official_email)",
+        sources=["outlook (official_email)", "wechat (student_chat)"],
+        evidence_ids=["c1", "c2"], confidence=0.95,
+    )
+    path = tmp_path / "columns.xlsx"
+    XlsxWriter(path).upsert([record])
+    restored = XlsxWriter(path).read()[0]
+    assert restored.sources == ["outlook (official_email)", "wechat (student_chat)"]
+
+    sheet = openpyxl.load_workbook(path)["Deadlines"]
+    header = [cell.value for cell in sheet[1]]
+    assert "Task Name" in header and "Course" in header and "Deadline" in header
+    assert "Status" in header and "Source" in header and "All Sources" in header
+
+
+def test_ablation_variants_run_offline(tmp_path):
+    sample = _sample("medium-001")
+    rows = run_ablation([sample], tmp_path / "ablation", client=None)
+    assert [row["variant"] for row in rows] == ["full", "no_dedup", "no_verify", "fixed_sources"]
+    assert all(row["engine"] == ["rules"] for row in rows)
+    assert all("document_valid_rate" in row and "efficiency" in row for row in rows)
 
 
 def test_planner_extracts_course_and_time_window():

@@ -19,7 +19,8 @@ def llm_enabled() -> bool:
 
 
 def build_components(engine: str | None = None,
-                     tracker: UsageTracker | None = None) -> dict:
+                     tracker: UsageTracker | None = None,
+                     fixed_sources: bool = False) -> dict:
     """返回规划/抽取/裁决组件；``engine`` 为 auto/llm/rules。"""
     tracker = tracker or UsageTracker()
     requested = (engine or ("llm" if llm_enabled() else "rules")).lower()
@@ -31,7 +32,8 @@ def build_components(engine: str | None = None,
                 "engine": "llm",
                 "client": client,
                 "tracker": tracker,
-                "planner": LLMQueryPlanner(client),
+                # 消融 fixed-sources：跳过 LLM 规划，固定使用全部已配置来源
+                "planner": QueryPlanner() if fixed_sources else LLMQueryPlanner(client),
                 "extractor": LLMDeadlineExtractor(client),
                 "resolver": ConflictResolver(arbiter=LLMConflictArbiter(client)),
             }
@@ -47,9 +49,11 @@ def build_components(engine: str | None = None,
 
 
 def build_agent(sources: list, writer=None, now=None, engine: str | None = None,
-                tracker: UsageTracker | None = None) -> tuple[DdlAgent, str]:
+                tracker: UsageTracker | None = None,
+                dedupe_enabled: bool = True, verify_enabled: bool = True,
+                fixed_sources: bool = False) -> tuple[DdlAgent, str]:
     """返回 ``(agent, engine_name)``；engine 为 llm 或 rules。"""
-    components = build_components(engine, tracker)
+    components = build_components(engine, tracker, fixed_sources=fixed_sources)
     agent = DdlAgent(
         sources=sources,
         extractor=components["extractor"],
@@ -58,5 +62,8 @@ def build_agent(sources: list, writer=None, now=None, engine: str | None = None,
         writer=writer,
         now=now,
         usage=components["tracker"],
+        dedupe_enabled=dedupe_enabled,
+        verify_enabled=verify_enabled,
+        fixed_sources=fixed_sources,
     )
     return agent, components["engine"]

@@ -180,7 +180,7 @@ def validate_document(path: str | Path) -> dict:
         if len(row) != len(DEADLINE_COLUMNS):
             issues.append(f"第 {position} 行列数错误：{len(row)}")
             continue
-        task_name, _course, deadline, status, source, confidence, _evidence, _updated = row
+        task_name, _course, deadline, status, source, all_sources, confidence, _evidence, _updated = row
         if not str(task_name).strip():
             issues.append(f"第 {position} 行任务名为空")
         if status not in _VALID_STATUS:
@@ -189,6 +189,8 @@ def validate_document(path: str | Path) -> dict:
             issues.append(f"第 {position} 行截止时间不是合法 ISO-8601：{deadline}")
         if not str(source).strip():
             issues.append(f"第 {position} 行来源为空")
+        if not str(all_sources).strip():
+            issues.append(f"第 {position} 行原始来源列表为空")
         try:
             value = float(confidence)
             if not 0 <= value <= 1:

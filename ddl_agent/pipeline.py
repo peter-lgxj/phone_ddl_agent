@@ -7,7 +7,7 @@ from time import perf_counter
 
 from .conflict import ConflictResolver
 from .connectors.base import MessageSource
-from .dedupe import Deduplicator
+from .dedupe import Deduplicator, clusters_without_dedup
 from .extract.normalizer import TimeNormalizer
 from .extract.rules import RuleExtractor
 from .models import AgentRunResult, RetrievalPlan
@@ -27,7 +27,10 @@ class DdlAgent:
                  now: datetime | None = None,
                  normalizer: TimeNormalizer | None = None,
                  planner=None,
-                 usage=None):
+                 usage=None,
+                 dedupe_enabled: bool = True,
+                 verify_enabled: bool = True,
+                 fixed_sources: bool = False):
         self.sources = sources
         self.now = now or datetime.now(TZ)
         self.normalizer = normalizer or TimeNormalizer()
@@ -38,6 +41,9 @@ class DdlAgent:
         self.source_parser = SourceConfigParser()
         self.planner = planner or QueryPlanner()
         self.usage = usage
+        self.dedupe_enabled = dedupe_enabled
+        self.verify_enabled = verify_enabled
+        self.fixed_sources = fixed_sources
         self.orchestrator = RetrievalOrchestrator(sources, self.extractor, self.now)
 
     # ------------------------------------------------------------------ #
@@ -48,7 +54,10 @@ class DdlAgent:
         usage_before = self.usage.snapshot() if self.usage is not None else None
 
         begin = perf_counter()
-        selected = self.source_parser.parse(source_config, self.sources)
+        selected = (
+            list(self.sources) if self.fixed_sources
+            else self.source_parser.parse(source_config, self.sources)
+        )
         plan = plan or self.planner.plan(query, selected, self.now)
         stages["plan"] = round(perf_counter() - begin, 4)
 
@@ -61,12 +70,18 @@ class DdlAgent:
         stages["extract"] = round(perf_counter() - begin, 4)
 
         begin = perf_counter()
-        clusters = self.deduplicator.cluster(candidates)
+        clusters = (
+            self.deduplicator.cluster(candidates) if self.dedupe_enabled
+            else clusters_without_dedup(candidates)
+        )
         stages["dedupe"] = round(perf_counter() - begin, 4)
 
         begin = perf_counter()
-        outcome = self.resolver.resolve(clusters, plan=plan,
-                                        retrieval=self.orchestrator.supplementary)
+        if self.verify_enabled:
+            outcome = self.resolver.resolve(clusters, plan=plan,
+                                            retrieval=self.orchestrator.supplementary)
+        else:
+            outcome = self.resolver.resolve_without_verification(clusters)
         records = [record for record in outcome.records if _within_window(record, plan)]
         stages["resolve"] = round(perf_counter() - begin, 4)
 
@@ -87,6 +102,12 @@ class DdlAgent:
             "record_count": len(records),
             "supplementary_rounds": outcome.supplementary_rounds,
             "planner_reason": plan.reason,
+            "planner": type(self.planner).__name__,
+            "ablation": {
+                "dedupe": self.dedupe_enabled,
+                "verify": self.verify_enabled,
+                "fixed_sources": self.fixed_sources,
+            },
             "llm_calls": usage.get("llm_calls", 0),
             "prompt_tokens": usage.get("prompt_tokens", 0),
             "completion_tokens": usage.get("completion_tokens", 0),

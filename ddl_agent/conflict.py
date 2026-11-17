@@ -53,6 +53,36 @@ class ConflictResolver:
             result.records.append(record)
         return result
 
+    def resolve_without_verification(self, clusters: list[TaskCluster]) -> ResolveResult:
+        """消融用：直接采用首个候选，不比较可信度/发布时间、不追加检索、不调用裁决模型。"""
+        result = ResolveResult()
+        for cluster in clusters:
+            winner = cluster.candidates[0] if cluster.candidates else None
+            unresolved = any(
+                candidate.unresolved_time or candidate.needs_review
+                for candidate in cluster.candidates
+            )
+            if winner is not None and winner.deadline_iso:
+                status, confidence = "confirmed", 0.6
+            elif unresolved:
+                status, confidence = "uncertain", CONFIDENCE_UNCERTAIN
+            else:
+                status, confidence = "missing_deadline", CONFIDENCE_MISSING
+            result.records.append(
+                ResolvedRecord(
+                    task_name=cluster.task_name,
+                    course=cluster.course,
+                    deadline_iso=winner.deadline_iso if winner else None,
+                    status=status,
+                    source=_describe(winner),
+                    evidence_ids=[candidate.candidate_id for candidate in cluster.candidates],
+                    sources=_sources(cluster.candidates),
+                    confidence=confidence,
+                    resolution_note="消融：未做冲突验证与追加检索，直接采用首个候选",
+                )
+            )
+        return result
+
     # ------------------------------------------------------------------ #
     def _resolve_cluster(self, cluster: TaskCluster, plan: RetrievalPlan | None,
                          retrieval: SupplementaryFn | None,
@@ -73,6 +103,7 @@ class ConflictResolver:
                     status="uncertain" if unresolved else "missing_deadline",
                     source=_describe(winner) if winner else cluster.task_name,
                     evidence_ids=[candidate.candidate_id for candidate in candidates],
+                    sources=_sources(candidates),
                     confidence=CONFIDENCE_UNCERTAIN if unresolved else CONFIDENCE_MISSING,
                     resolution_note=(
                         "时间表达无法可靠解析，标记 uncertain 交人工"
@@ -101,6 +132,7 @@ class ConflictResolver:
                     status="confirmed",
                     source=_describe(winner),
                     evidence_ids=[candidate.candidate_id for candidate in candidates],
+                    sources=_sources(candidates),
                     confidence=CONFIDENCE_CONSISTENT,
                     resolution_note="所有来源一致" if len(dated) > 1 else "单一来源",
                 ),
@@ -130,6 +162,7 @@ class ConflictResolver:
                     status="confirmed",
                     source=_describe(decision.winner),
                     evidence_ids=[candidate.candidate_id for candidate in candidates],
+                    sources=_sources(candidates),
                     confidence=decision.confidence,
                     resolution_note=decision.note,
                     alternatives=_other_deadlines(candidates, decision.deadline_iso),
@@ -179,6 +212,7 @@ class ConflictResolver:
                     status="confirmed",
                     source=_describe(winner),
                     evidence_ids=[candidate.candidate_id for candidate in candidates],
+                    sources=_sources(candidates),
                     confidence=arbitration.confidence,
                     resolution_note=f"LLM 裁决：{arbitration.reason}",
                     alternatives=_other_deadlines(candidates, arbitration.deadline_iso),
@@ -254,6 +288,7 @@ def _uncertain_record(cluster: TaskCluster, candidates: list[DeadlineCandidate],
         status="uncertain",
         source=_describe(winner),
         evidence_ids=[candidate.candidate_id for candidate in candidates],
+        sources=_sources(candidates),
         confidence=CONFIDENCE_UNCERTAIN,
         resolution_note=note,
         alternatives=_other_deadlines(candidates, None),
@@ -274,6 +309,14 @@ def _describe(candidate: DeadlineCandidate | None) -> str:
     if candidate is None:
         return "unknown"
     return f"{candidate.source_name} ({candidate.source_type})"
+
+
+def _sources(candidates: list[DeadlineCandidate]) -> list[str]:
+    """保留同一任务的全部原始来源，按可信度与名称稳定排序。"""
+    labels = {
+        _describe(candidate): _credibility(candidate) for candidate in candidates
+    }
+    return sorted(labels, key=lambda label: (-labels[label], label))
 
 
 def _other_deadlines(candidates: list[DeadlineCandidate], chosen: str | None) -> list[str]:

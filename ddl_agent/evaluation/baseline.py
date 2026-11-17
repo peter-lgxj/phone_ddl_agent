@@ -37,6 +37,7 @@ class SinglePassBaseline:
                 deadline_iso=candidate.deadline_iso,
                 status="confirmed" if candidate.deadline_iso else "missing_deadline",
                 source=f"{candidate.source_name} ({candidate.source_type})",
+                sources=[f"{candidate.source_name} ({candidate.source_type})"],
                 evidence_ids=[candidate.candidate_id],
                 confidence=0.6 if candidate.deadline_iso else 0.3,
                 resolution_note="single-pass baseline：未去重、未做冲突核查",
@@ -115,13 +116,15 @@ class LLMSinglePassBaseline:
                 if not task_name:
                     continue
                 deadline = _validate_iso(item.get("deadline_iso"))
+                label = _source_label(messages, item.get("source_index"))
                 records.append(
                     ResolvedRecord(
                         task_name=task_name,
                         course=str(item.get("course") or "").strip() or None,
                         deadline_iso=deadline,
                         status="confirmed" if deadline else "missing_deadline",
-                        source=_source_label(messages, item.get("source_index")),
+                        source=label,
+                        sources=[label],
                         evidence_ids=[f"baseline:{position}"],
                         confidence=0.6 if deadline else 0.3,
                         resolution_note="single-pass baseline：一次直出，未去重、未核查冲突",

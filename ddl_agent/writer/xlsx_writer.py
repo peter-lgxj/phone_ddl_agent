@@ -20,6 +20,7 @@ def _row_values(record: ResolvedRecord) -> list:
         record.deadline_iso or "",
         record.status,
         record.source,
+        "; ".join(record.sources),
         round(record.confidence, 2),
         "; ".join(record.evidence_ids),
         record.updated_at or "",
@@ -71,9 +72,10 @@ class XlsxWriter(DeadlineWriter):
                         deadline_iso=str(row[2]) if row[2] else None,
                         status=str(row[3] or "uncertain"),
                         source=str(row[4] or ""),
-                        confidence=float(row[5] or 0.0),
-                        evidence_ids=[item for item in str(row[6] or "").split("; ") if item],
-                        updated_at=str(row[7]) if row[7] else None,
+                        sources=[item for item in str(row[5] or "").split("; ") if item],
+                        confidence=float(row[6] or 0.0),
+                        evidence_ids=[item for item in str(row[7] or "").split("; ") if item],
+                        updated_at=str(row[8]) if row[8] else None,
                     )
                 )
             return records

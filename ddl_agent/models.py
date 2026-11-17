@@ -123,8 +123,9 @@ class ResolvedRecord:
     course: str | None
     deadline_iso: str | None
     status: RecordStatus
-    source: str
+    source: str                    # 获胜证据的来源描述
     evidence_ids: list[str] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)  # 所有原始来源（跨来源去重后）
     confidence: float = 0.0
     resolution_note: str = ""
     alternatives: list[str] = field(default_factory=list)

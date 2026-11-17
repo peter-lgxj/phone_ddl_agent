@@ -30,6 +30,7 @@ class MarkdownWriter(DeadlineWriter):
                 record.deadline_iso or "-",
                 record.status,
                 record.source,
+                "; ".join(record.sources) or "-",
                 f"{record.confidence:.2f}",
                 ", ".join(record.evidence_ids) or "-",
                 record.updated_at or "-",
@@ -67,9 +68,10 @@ class MarkdownWriter(DeadlineWriter):
                     deadline_iso=None if cells[2] in ("-", "") else cells[2],
                     status=cells[3],
                     source=_unescape(cells[4]),
-                    confidence=float(cells[5]) if cells[5] else 0.0,
-                    evidence_ids=[item.strip() for item in cells[6].split(",") if item.strip() and item != "-"],
-                    updated_at=None if cells[7] in ("-", "") else cells[7],
+                    sources=[item.strip() for item in cells[5].split(";") if item.strip() and item != "-"],
+                    confidence=float(cells[6]) if cells[6] else 0.0,
+                    evidence_ids=[item.strip() for item in cells[7].split(",") if item.strip() and item != "-"],
+                    updated_at=None if cells[8] in ("-", "") else cells[8],
                 )
             )
         return records

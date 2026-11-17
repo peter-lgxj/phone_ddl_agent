@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import defaultdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from email.message import EmailMessage
 from email.utils import format_datetime
@@ -27,6 +28,34 @@ from .baseline import LLMSinglePassBaseline, SinglePassBaseline
 from .metrics import evaluate_dataset, evaluate_sample, validate_document
 
 SYSTEMS = ("agent_llm", "agent_rules", "baseline")
+
+
+@dataclass(frozen=True)
+class Ablation:
+    """单模块消融开关；默认全开。"""
+
+    dedupe: bool = True
+    verify: bool = True
+    fixed_sources: bool = False
+
+    @property
+    def label(self) -> str:
+        parts = []
+        if not self.dedupe:
+            parts.append("no_dedup")
+        if not self.verify:
+            parts.append("no_verify")
+        if self.fixed_sources:
+            parts.append("fixed_sources")
+        return "_".join(parts) or "full"
+
+
+ABLATIONS = [
+    Ablation(),
+    Ablation(dedupe=False),
+    Ablation(verify=False),
+    Ablation(fixed_sources=True),
+]
 
 
 def materialize_sources(sample: dict, root: Path) -> list:
@@ -72,8 +101,12 @@ def _write_eml(message: dict, directory: Path) -> None:
     (directory / f"{message['message_id']}.eml").write_bytes(email.as_bytes())
 
 
-def run_one(sample: dict, work_root: Path, client: LLMClient | None = None) -> dict:
+def run_one(sample: dict, work_root: Path, client: LLMClient | None = None,
+            ablation: Ablation | None = None,
+            include_baseline: bool = True,
+            systems: tuple[str, ...] = ("agent_llm", "agent_rules")) -> dict:
     now = datetime.fromisoformat(sample["now"])
+    ablation = ablation or Ablation()
     sample_dir = work_root / sample["sample_id"]
     sources = materialize_sources(sample, sample_dir / "sources")
 
@@ -82,14 +115,21 @@ def run_one(sample: dict, work_root: Path, client: LLMClient | None = None) -> d
         "tier": sample["tier"],
         "split": sample["split"],
         "query": sample["query"],
+        "ablation": asdict(ablation),
+        "ablation_label": ablation.label,
     }
 
     for key, engine in (("agent_llm", "llm"), ("agent_rules", "rules")):
+        if key not in systems:
+            continue
         # 没有可用 LLM 客户端时不发网络请求，两个 Agent 都走规则实现
         effective_engine = engine if (engine == "rules" or client is not None) else "rules"
-        document = sample_dir / f"{key}.xlsx"
-        agent, engine_name = build_agent(sources, writer=XlsxWriter(document), now=now,
-                                         engine=effective_engine)
+        document = sample_dir / f"{key}_{ablation.label}.xlsx"
+        agent, engine_name = build_agent(
+            sources, writer=XlsxWriter(document), now=now, engine=effective_engine,
+            dedupe_enabled=ablation.dedupe, verify_enabled=ablation.verify,
+            fixed_sources=ablation.fixed_sources,
+        )
         result = agent.run(sample["query"], sample.get("source_config", ""))
         entry[key] = {
             **evaluate_sample(result.records, sample["ground_truth"]),
@@ -100,10 +140,14 @@ def run_one(sample: dict, work_root: Path, client: LLMClient | None = None) -> d
             "warnings": result.warnings,
             "records": [
                 {"task_name": r.task_name, "course": r.course, "deadline_iso": r.deadline_iso,
-                 "status": r.status, "confidence": r.confidence, "note": r.resolution_note}
+                 "status": r.status, "confidence": r.confidence, "source": r.source,
+                 "sources": r.sources, "note": r.resolution_note}
                 for r in result.records
             ],
         }
+
+    if not include_baseline:
+        return entry
 
     plan = QueryPlanner().plan(sample["query"], sources, now)
     orchestrator = RetrievalOrchestrator(sources, now=now)
@@ -169,13 +213,15 @@ def _render_report(summary: dict, dataset: str, split: str) -> str:
         f"Agent-规则={summary['engines']['agent_rules']}，"
         f"baseline={summary['engines']['baseline']}",
         "- 三者使用完全相同的原始消息；baseline 为单次直出（一次模型调用，不去重、不核查冲突）。",
+        f"- 消融设置：去重={'开' if summary.get('ablation', {}).get('dedupe', True) else '关'}，"
+        f"冲突验证={'开' if summary.get('ablation', {}).get('verify', True) else '关'}，"
+        f"动态工具选择={'关（固定源）' if summary.get('ablation', {}).get('fixed_sources') else '开'}。",
         "",
         "## 总体指标",
         "",
         "| 指标 | Agent-LLM | Agent-规则 | baseline 单次直出 |",
         "| --- | --- | --- | --- |",
     ]
-
     def row(label: str, key: str, fmt=lambda value: f"{value:.3f}"):
         values = []
         for system in SYSTEMS:
@@ -230,6 +276,101 @@ def _render_report(summary: dict, dataset: str, split: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def summarize_ablation(entries: list[dict], ablation: Ablation) -> dict:
+    block = evaluate_dataset([entry["agent_llm"] for entry in entries])
+    valid_docs = sum(1 for entry in entries if entry["agent_llm"]["document"]["ok"])
+    block.update({
+        "variant": ablation.label,
+        "ablation": asdict(ablation),
+        "engine": sorted({entry["agent_llm"]["engine"] for entry in entries}),
+        "document_valid_rate": round(valid_docs / len(entries), 4) if entries else 0.0,
+        "efficiency": _efficiency(entries, "agent_llm"),
+    })
+    return block
+
+
+def run_ablation(samples: list[dict], work_root: Path, client: LLMClient | None) -> list[dict]:
+    rows: list[dict] = []
+    for ablation in ABLATIONS:
+        entries = [
+            run_one(
+                sample, work_root / "ablation" / ablation.label, client=client,
+                ablation=ablation, include_baseline=False, systems=("agent_llm",),
+            )
+            for sample in samples
+        ]
+        rows.append(summarize_ablation(entries, ablation))
+        print(f"消融 {ablation.label}: "
+              f"exact={rows[-1]['exact_match']:.3f} recall={rows[-1]['recall']:.3f} "
+              f"dup={rows[-1]['duplicate_rate']:.3f}")
+    return rows
+
+
+def _render_ablation(rows: list[dict], dataset: str, split: str) -> str:
+    engines = sorted({engine for row in rows for engine in row["engine"]})
+    lines = [
+        "# 单模块消融实验（RQ4）",
+        "",
+        f"- 数据集：`{dataset}`；划分：`{split}`；样本数：{rows[0]['samples'] if rows else 0}",
+        f"- 实际引擎：{engines}",
+        "- 同一批样本、同一套原始消息；每行只改变一个开关，其余保持全开。",
+        "- 指标口径与三方对比一致；冲突正确率只在含冲突 ground truth 的样本上统计。",
+        "",
+        "| 变体 | 精确 | ±1天模糊 | 召回 | 重复率 | 冲突正确率 | 文档通过率 | "
+        "LLM 调用 | token | 成本 USD | 平均耗时 s |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        efficiency = row["efficiency"]
+        lines.append(
+            f"| {row['variant']} | {row['exact_match']:.3f} | {row['fuzzy_match']:.3f} | "
+            f"{row['recall']:.3f} | {row['duplicate_rate']:.3f} | "
+            f"{_fmt(row['conflict_accuracy'])} | {row['document_valid_rate']:.3f} | "
+            f"{efficiency['llm_calls']} | {efficiency['tokens_estimate']} | "
+            f"{efficiency['cost_usd']:.6f} | {efficiency['avg_seconds']:.3f} |"
+        )
+
+    lines += ["", "## 关闭单项后的变化（相对全开）", ""]
+    full = next((row for row in rows if row["variant"] == "full"), rows[0] if rows else None)
+    if full is not None:
+        for row in rows:
+            if row["variant"] == "full":
+                continue
+            delta_exact = row["exact_match"] - full["exact_match"]
+            delta_recall = row["recall"] - full["recall"]
+            delta_dup = row["duplicate_rate"] - full["duplicate_rate"]
+            delta_conflict = (
+                None if row["conflict_accuracy"] is None or full["conflict_accuracy"] is None
+                else row["conflict_accuracy"] - full["conflict_accuracy"]
+            )
+            lines.append(
+                f"- **{row['variant']}**：精确 {delta_exact:+.3f}，召回 {delta_recall:+.3f}，"
+                f"重复率 {delta_dup:+.3f}，冲突正确率 "
+                f"{'N/A' if delta_conflict is None else f'{delta_conflict:+.3f}'}"
+            )
+        drops = [
+            (full["exact_match"] - row["exact_match"], row["variant"])
+            for row in rows if row["variant"] != "full"
+        ]
+        if drops:
+            worst = max(drops)
+            lines += [
+                "",
+                f"以精确匹配为主要口径，关闭 **{worst[1]}** 的下降幅度最大（{worst[0]:.3f}）。",
+            ]
+    lines += [
+        "",
+        "## 口径与限制",
+        "",
+        "- 以上数字来自合成数据，只反映本生成器覆盖的场景。",
+        "- `fixed_sources` 关闭的是 LLM 规划器的来源子集选择，改为固定使用全部已配置来源；"
+        "规则版本身就没有 LLM 规划，因此该开关对规则版影响很小。",
+        "- `no_verify` 仍保留去重，只跳过冲突比对、追加检索与裁决模型调用。",
+        "- `no_dedup` 让每条候选单独成行，会直接抬高重复率、降低文档质量。",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="DDL Agent 三方离线评测")
     parser.add_argument("--dataset", default="experiments/ddl_agent/dataset")
@@ -239,6 +380,12 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--per-tier", type=int, default=24)
     parser.add_argument("--no-llm", action="store_true", help="强制纯规则/离线模式")
+    parser.add_argument("--ablation", action="store_true",
+                        help="跑 RQ4 单模块消融：全开 / 关去重 / 关冲突验证 / 固定来源")
+    parser.add_argument("--no-dedup", action="store_true", help="消融：关闭跨来源去重")
+    parser.add_argument("--no-verify", action="store_true", help="消融：关闭冲突验证与裁决")
+    parser.add_argument("--fixed-sources", action="store_true",
+                        help="消融：关闭动态工具选择，固定使用全部已配置来源")
     args = parser.parse_args()
 
     dataset_dir = Path(args.dataset)
@@ -261,9 +408,40 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     work_root = out_dir / "work"
 
-    entries = [run_one(sample, work_root, client=client) for sample in samples]
+    if args.ablation:
+        rows = run_ablation(samples, work_root, client)
+        payload = {
+            "dataset": args.dataset,
+            "split": args.split,
+            "samples": len(samples),
+            "variants": rows,
+        }
+        (out_dir / "ablation.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (out_dir / "ablation.md").write_text(
+            _render_ablation(rows, args.dataset, args.split), encoding="utf-8"
+        )
+        print(json.dumps(
+            [{key: row[key] for key in (
+                "variant", "exact_match", "fuzzy_match", "recall", "duplicate_rate",
+                "conflict_accuracy", "document_valid_rate",
+            )} for row in rows],
+            ensure_ascii=False, indent=2,
+        ))
+        print(f"\n消融报告已写入：{out_dir / 'ablation.md'}")
+        return
+
+    ablation = Ablation(
+        dedupe=not args.no_dedup,
+        verify=not args.no_verify,
+        fixed_sources=args.fixed_sources,
+    )
+    entries = [run_one(sample, work_root, client=client, ablation=ablation)
+               for sample in samples]
 
     overall = summarize(entries)
+    overall["ablation"] = asdict(ablation)
     by_tier: dict[str, list[dict]] = defaultdict(list)
     for entry in entries:
         by_tier[entry["tier"]].append(entry)
