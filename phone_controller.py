@@ -165,8 +165,9 @@ class PhoneController:
         
 
     def is_keyboard_shown(self) -> bool:
+        from adb_utils import ADB
         result = subprocess.run(
-            ["adb", "shell", "dumpsys", "input_method"],
+            [ADB, "shell", "dumpsys", "input_method"],
             capture_output=True,
             encoding="utf-8",
             errors="ignore"

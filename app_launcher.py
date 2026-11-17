@@ -55,6 +55,7 @@ class AppLauncher:
         返回 True 表示成功发起启动命令。
         """
         import subprocess, time
+        from adb_utils import ADB
 
         # 先查表，找不到就把 app_name 当包名直接用
         package = self.KNOWN_APPS.get(app_name, app_name)
@@ -62,7 +63,7 @@ class AppLauncher:
         print(f"  🚀  启动 App：{app_name}（{package}）")
 
         result = subprocess.run([
-            "adb", "shell", "monkey",
+            ADB, "shell", "monkey",
             "-p", package,
             "-c", "android.intent.category.LAUNCHER", "1"
         ], capture_output=True, text=True)
@@ -85,8 +86,9 @@ class AppLauncher:
         用法：python app_launcher.py 微信
         """
         import subprocess
+        from adb_utils import ADB
         result = subprocess.run(
-            ["adb", "shell", "pm", "list", "packages"],
+            [ADB, "shell", "pm", "list", "packages"],
             capture_output=True, text=True
         )
         lines = result.stdout.strip().split("\n")
@@ -100,8 +102,9 @@ class AppLauncher:
     def list_all_packages(self):
         """列出手机上所有已安装的包名"""
         import subprocess
+        from adb_utils import ADB
         result = subprocess.run(
-            ["adb", "shell", "pm", "list", "packages"],
+            [ADB, "shell", "pm", "list", "packages"],
             capture_output=True, text=True
         )
         return [

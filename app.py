@@ -7,6 +7,7 @@ from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
 
 from device_lock import device_lock
+from adb_utils import ADB
 
 app = Flask(__name__)
 # 默认值仅用于本地调试；对外暴露时请通过环境变量覆盖
@@ -84,7 +85,7 @@ def run_single(task: str):
             if not locked:
                 raise RuntimeError("设备正被其它任务占用（另一个 Web/CLI/实验任务在运行），请稍后重试")
             # 回桌面与执行器构造都在锁内，避免与另一个任务的重置互相穿插
-            subprocess.run(["adb", "shell", "input", "keyevent", "3"])
+            subprocess.run([ADB, "shell", "input", "keyevent", "3"])
             time.sleep(1)
             agent = WebAgent(max_steps=config.MAX_STEPS)
             agent.run(task)
@@ -135,7 +136,7 @@ def run_multi(task: str):
             if not locked:
                 raise RuntimeError("设备正被其它任务占用（另一个 Web/CLI/实验任务在运行），请稍后重试")
             # 回桌面与执行器构造都在锁内，避免与另一个任务的重置互相穿插
-            subprocess.run(["adb", "shell", "input", "keyevent", "3"])
+            subprocess.run([ADB, "shell", "input", "keyevent", "3"])
             time.sleep(1)
             agent = WebMultiAgent()
             agent.run(task)

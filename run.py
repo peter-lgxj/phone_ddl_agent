@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import time
+from adb_utils import ADB
 from device_lock import device_lock
 from screen_agent import ScreenAgent
 import config
@@ -9,7 +10,7 @@ import config
 def clear_background_apps():
     """清空手机后台所有运行中的 App"""
     print("正在清空后台程序...")
-    subprocess.run(["adb", "shell", "input", "keyevent", "187"])
+    subprocess.run([ADB, "shell", "input", "keyevent", "187"])
     time.sleep(1.5)
     from phone_controller import PhoneController
     phone = PhoneController()
@@ -42,7 +43,7 @@ def run_agent(task: str):
             print("设备正被其它任务占用，请稍后重试")
             sys.exit(1)
         # clear_background_apps()
-        subprocess.run(["adb", "shell", "input", "keyevent", "3"])
+        subprocess.run([ADB, "shell", "input", "keyevent", "3"])
         time.sleep(1)
         agent = ScreenAgent(max_steps=config.MAX_STEPS)  # 从 config 读，不再传 api_key
         agent.run(task)

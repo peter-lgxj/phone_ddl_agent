@@ -6,7 +6,7 @@
 
 - Python 3.10 或更高版本（具体兼容性取决于依赖版本）
 - Android 手机，开启开发者选项和 USB 调试
-- Android Platform Tools（`adb` 已加入 PATH）
+- Android Platform Tools（`adb` 已加入 PATH；未加入时可用 `ADB_BINARY` 指向 adb 可执行文件，或直接复用 `uiautomator2` 自带的 adb，`adb_utils.py` 会自动兜底）
 - 可用的模型 API 密钥
 
 ```bash

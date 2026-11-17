@@ -16,6 +16,7 @@ import subprocess
 from task_planner import TaskPlanner, TaskPlan, SubTask, build_exec_goal, unfinished_subtasks
 from screen_agent import ScreenAgent, make_run_dir
 from device_lock import device_lock
+from adb_utils import ADB
 from memory import TaskMemory
 import config
 
@@ -120,7 +121,7 @@ class MultiAppAgent:
             print(f"{C.DIM}  ⚠️  事件推送失败({event})：{e}{C.RESET}")
 
     def _go_home(self):
-        subprocess.run(["adb", "shell", "input", "keyevent", "3"], capture_output=True)
+        subprocess.run([ADB, "shell", "input", "keyevent", "3"], capture_output=True)
         time.sleep(1)
 
     def _save_log(self, plan: TaskPlan):

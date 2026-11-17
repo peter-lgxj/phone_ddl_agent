@@ -11,6 +11,7 @@ from memory import TaskMemory, format_steps_compact
 from ocr_locator import OCRLocator
 import config
 import image_preprocess
+from adb_utils import ADB
 from openai import OpenAI
 import ui_state
 
@@ -478,10 +479,10 @@ class ScreenAgent:
                 return False
             self.phone.type_text(text)
         elif t == "send":
-            subprocess.run(["adb", "shell", "input", "keyevent", "66"])
+            subprocess.run([ADB, "shell", "input", "keyevent", "66"])
             print("ADB 回车发送")
         elif t == "press_enter":
-            subprocess.run(["adb", "shell", "input", "keyevent", "66"])
+            subprocess.run([ADB, "shell", "input", "keyevent", "66"])
             print("ADB 回车发送")
         elif t == "back":
             self.phone.press_back()
