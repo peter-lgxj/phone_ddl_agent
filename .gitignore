@@ -54,6 +54,7 @@ models/
 # Per-run evidence (screenshots + step actions)
 runs/
 experiments/results/
+experiments/ddl_agent/results/
 
 # Python tooling caches
 __pycache__/
