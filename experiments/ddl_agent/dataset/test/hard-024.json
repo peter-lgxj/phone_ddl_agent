@@ -2,41 +2,30 @@
   "sample_id": "hard-024",
   "course": "COMP7608",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7608 Assignment 7 的截止时间",
+  "query": "帮我查一下 COMP7608 的 Report 3 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
       "message_id": "hard-024-m1",
-      "source_name": "COMP7608 课程群",
-      "source_type": "student_chat",
-      "sender": "Alice",
-      "role": "student",
-      "published_at": "2026-11-16T01:00:00+08:00",
-      "subject": "",
-      "text": "Assignment 7 deadline is 2026-12-04 23:59, pretty sure."
-    },
-    {
-      "message_id": "hard-024-m2",
-      "source_name": "COMP7608 课程群",
-      "source_type": "student_chat",
-      "sender": "Bob",
-      "role": "student",
-      "published_at": "2026-11-16T01:00:00+08:00",
-      "subject": "",
-      "text": "Assignment 7 deadline is 2026-12-06 23:59, TA told me."
+      "source_name": "outlook",
+      "source_type": "official_email",
+      "sender": "ta@cs.hku.hk",
+      "published_at": "2026-11-11T09:00:00+08:00",
+      "subject": "[COMP7608] Report 3 (external)",
+      "body": "The external host set the cut-off in their local time zone.\nReport 3 must be uploaded before 2026-12-03 23:59 PST.\nConvert to your local time before submitting.\n\nThis email is intended only for enrolled students of the course.\nRegards,\nTeaching Team"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 7",
+      "task_name": "Report 3",
       "course": "COMP7608",
-      "deadline_iso": null,
-      "status": "uncertain",
+      "deadline_iso": "2026-12-04T15:59:00+08:00",
+      "status": "confirmed",
       "expected_sources": [
-        "student_chat"
+        "official_email"
       ],
-      "conflict_expected": true,
-      "winner_reason": "两个同学消息互相矛盾且无更高可信度来源"
+      "conflict_expected": false,
+      "winner_reason": ""
     }
   ],
   "tier": "hard",

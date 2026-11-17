@@ -2,7 +2,7 @@
   "sample_id": "medium-007",
   "course": "COMP7404",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7404 Assignment 5 的截止时间",
+  "query": "帮我查一下 COMP7404 的 Assignment 2 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
@@ -10,9 +10,9 @@
       "source_name": "outlook",
       "source_type": "official_email",
       "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-11T09:00:00+08:00",
-      "subject": "[COMP7404] Assignment 5",
-      "body": "Dear students,\nAssignment 5 for COMP7404 is due on 2026-12-07 23:59."
+      "published_at": "2026-11-10T09:00:00+08:00",
+      "subject": "[COMP7404] Assignment 2",
+      "body": "Dear all,\n\nAssignment 2 for COMP7404 is due 09 Dec 2026 23:59.\nFor reference, HW0 was due on 2026-10-10 23:59 and is already closed.\n\nRegards,\nTeaching Team"
     },
     {
       "message_id": "medium-007-m2",
@@ -22,14 +22,14 @@
       "role": "ta",
       "published_at": "2026-11-15T09:00:00+08:00",
       "subject": "",
-      "text": "Reminder: HW 5 deadline is 2026-12-07 23:59, submit via Moodle."
+      "text": "提醒一下，HW2 的截止时间是 12月9日 23:59，别和上周那个弄混。\nMy laptop fan is dying, any repair shop recommendations?"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 5",
+      "task_name": "Assignment 2",
       "course": "COMP7404",
-      "deadline_iso": "2026-12-07T23:59:00+08:00",
+      "deadline_iso": "2026-12-09T23:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
         "official_email",

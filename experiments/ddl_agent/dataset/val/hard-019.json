@@ -2,24 +2,24 @@
   "sample_id": "hard-019",
   "course": "STAT7001",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "STAT7001 Assignment 4 下周五前要交吗",
+  "query": "帮我查一下 STAT7001 的 Assignment 9 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
       "message_id": "hard-019-m1",
       "source_name": "outlook",
       "source_type": "official_email",
-      "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-14T09:00:00+08:00",
-      "subject": "[STAT7001] Assignment 4",
-      "body": "Assignment 4 for STAT7001 is due next Friday at 23:59."
+      "sender": "instructor@cs.hku.hk",
+      "published_at": "2026-11-13T09:00:00+08:00",
+      "subject": "[STAT7001] Assignment 9",
+      "body": "Assignment 9 is due the Friday after next, end of day.\nI know the phrasing is confusing — plan for the later Friday, not this week's.\n\n"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 4",
+      "task_name": "Assignment 9",
       "course": "STAT7001",
-      "deadline_iso": "2026-11-27T23:59:00+08:00",
+      "deadline_iso": "2026-12-04T23:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
         "official_email"

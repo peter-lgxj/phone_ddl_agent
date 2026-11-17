@@ -2,7 +2,7 @@
   "sample_id": "medium-013",
   "course": "STAT7001",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "STAT7001 Assignment 3 的截止时间",
+  "query": "帮我查一下 STAT7001 的 Assignment 2 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
@@ -10,9 +10,9 @@
       "source_name": "outlook",
       "source_type": "official_email",
       "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-11T09:00:00+08:00",
-      "subject": "[STAT7001] Assignment 3",
-      "body": "Dear students,\nAssignment 3 for STAT7001 is due on 2026-12-08 23:59."
+      "published_at": "2026-11-10T09:00:00+08:00",
+      "subject": "[STAT7001] Assignment 2",
+      "body": "Dear all,\n\nAssignment 2 for STAT7001 is due Dec 07, 2026 23:59.\nFor reference, HW0 was due on 2026-10-10 23:59 and is already closed.\n\nCheers,\nWei\nCourse coordinator"
     },
     {
       "message_id": "medium-013-m2",
@@ -22,14 +22,14 @@
       "role": "ta",
       "published_at": "2026-11-15T09:00:00+08:00",
       "subject": "",
-      "text": "Reminder: HW 3 deadline is 2026-12-08 23:59, submit via Moodle."
+      "text": "提醒一下，HW2 的截止时间是 12月7日 23:59，别和上周那个弄混。\n"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 3",
+      "task_name": "Assignment 2",
       "course": "STAT7001",
-      "deadline_iso": "2026-12-08T23:59:00+08:00",
+      "deadline_iso": "2026-12-07T23:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
         "official_email",

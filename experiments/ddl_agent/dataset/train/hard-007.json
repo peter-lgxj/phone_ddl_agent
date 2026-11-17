@@ -1,8 +1,8 @@
 {
   "sample_id": "hard-007",
-  "course": "COMP7608",
+  "course": "FITE7410",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7608 Assignment 2 下周五前要交吗",
+  "query": "帮我查一下 FITE7410 的 Assignment 11、Lab 7 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
@@ -10,16 +10,27 @@
       "source_name": "outlook",
       "source_type": "official_email",
       "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-14T09:00:00+08:00",
-      "subject": "[COMP7608] Assignment 2",
-      "body": "Assignment 2 for COMP7608 is due next Friday at 23:59."
+      "published_at": "2026-11-12T09:00:00+08:00",
+      "subject": "[FITE7410] two reminders",
+      "body": "Two reminders for FITE7410:\n1) Assignment 11 is due Dec 05, 2026 23:59.\n2) Lab 7 is due 12月12日 23:59.\nThe final exam will take place on 2026-12-15 09:30 in LTC.\nThe revision lecture is on 2026-12-10 14:00.\n\nCheers,\nWei\nCourse coordinator"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 2",
-      "course": "COMP7608",
-      "deadline_iso": "2026-11-27T23:59:00+08:00",
+      "task_name": "Assignment 11",
+      "course": "FITE7410",
+      "deadline_iso": "2026-12-05T23:59:00+08:00",
+      "status": "confirmed",
+      "expected_sources": [
+        "official_email"
+      ],
+      "conflict_expected": false,
+      "winner_reason": ""
+    },
+    {
+      "task_name": "Lab 7",
+      "course": "FITE7410",
+      "deadline_iso": "2026-12-12T23:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
         "official_email"

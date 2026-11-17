@@ -1,8 +1,8 @@
 {
   "sample_id": "hard-023",
-  "course": "COMP7404",
+  "course": "FITE7410",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7404 Assignment 3 下周五前要交吗",
+  "query": "帮我查一下 FITE7410 的 Homework 2 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
@@ -10,22 +10,31 @@
       "source_name": "outlook",
       "source_type": "official_email",
       "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-14T09:00:00+08:00",
-      "subject": "[COMP7404] Assignment 3",
-      "body": "Assignment 3 for COMP7404 is due next Friday at 23:59."
+      "published_at": "2026-10-01T09:00:00+08:00",
+      "subject": "[FITE7410] Homework 2",
+      "body": "Homework 2 for FITE7410 was originally due 30 Nov 2026 23:59.\n\n"
+    },
+    {
+      "message_id": "hard-023-m2",
+      "source_name": "outlook",
+      "source_type": "official_email",
+      "sender": "ta@cs.hku.hk",
+      "published_at": "2026-11-07T09:00:00+08:00",
+      "subject": "[FITE7410] Homework 2 deadline extended",
+      "body": "We are extending the deadline after the typhoon warning.\n\nHomework 2 for FITE7410 is now due Dec 09, 2026 23:59.\n\nOn Oct 02, 2026, course office wrote:\n> Homework 2 for FITE7410 was originally due 30 Nov 2026 23:59.\n\n"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 3",
-      "course": "COMP7404",
-      "deadline_iso": "2026-11-27T23:59:00+08:00",
+      "task_name": "Homework 2",
+      "course": "FITE7410",
+      "deadline_iso": "2026-12-09T23:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
         "official_email"
       ],
-      "conflict_expected": false,
-      "winner_reason": ""
+      "conflict_expected": true,
+      "winner_reason": "同源新公告取代旧公告"
     }
   ],
   "tier": "hard",

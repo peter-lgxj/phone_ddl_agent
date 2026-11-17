@@ -1,28 +1,29 @@
 {
   "sample_id": "hard-011",
-  "course": "COMP7506",
+  "course": "FITE7410",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7506 Assignment 1 下周五前要交吗",
+  "query": "帮我查一下 FITE7410 的 Homework 6 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
       "message_id": "hard-011-m1",
-      "source_name": "outlook",
-      "source_type": "official_email",
-      "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-14T09:00:00+08:00",
-      "subject": "[COMP7506] Assignment 1",
-      "body": "Assignment 1 for COMP7506 is due next Friday at 23:59."
+      "source_name": "FITE7410 课程群",
+      "source_type": "instructor_chat",
+      "sender": "TA Chen",
+      "role": "ta",
+      "published_at": "2026-11-15T09:00:00+08:00",
+      "subject": "",
+      "text": "通知：Homework 6 请在月底之前提交，系统按北京时间 11 月最后一刻关闭。\n"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 1",
-      "course": "COMP7506",
-      "deadline_iso": "2026-11-27T23:59:00+08:00",
+      "task_name": "Homework 6",
+      "course": "FITE7410",
+      "deadline_iso": "2026-11-30T23:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
-        "official_email"
+        "instructor_chat"
       ],
       "conflict_expected": false,
       "winner_reason": ""

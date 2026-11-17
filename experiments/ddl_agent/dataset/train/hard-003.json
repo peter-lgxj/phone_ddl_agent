@@ -1,8 +1,8 @@
 {
   "sample_id": "hard-003",
-  "course": "COMP7404",
+  "course": "COMP7506",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7404 Assignment 3 下周五前要交吗",
+  "query": "帮我查一下 COMP7506 的 Report 3 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
@@ -10,16 +10,16 @@
       "source_name": "outlook",
       "source_type": "official_email",
       "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-14T09:00:00+08:00",
-      "subject": "[COMP7404] Assignment 3",
-      "body": "Assignment 3 for COMP7404 is due next Friday at 23:59."
+      "published_at": "2026-11-11T09:00:00+08:00",
+      "subject": "[COMP7506] Report 3 (external)",
+      "body": "The external host set the cut-off in their local time zone.\nReport 3 must be uploaded before 2026-12-03 23:59 PST.\nConvert to your local time before submitting.\n\n"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 3",
-      "course": "COMP7404",
-      "deadline_iso": "2026-11-27T23:59:00+08:00",
+      "task_name": "Report 3",
+      "course": "COMP7506",
+      "deadline_iso": "2026-12-04T15:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
         "official_email"

@@ -10,16 +10,16 @@
       "source_name": "outlook",
       "source_type": "official_email",
       "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-13T09:00:00+08:00",
-      "subject": "[COMP7608] Assignment 1 deadline",
-      "body": "Dear students,\nAssignment 1 for COMP7608 is due on 2026-11-29 23:59. Please submit via Moodle."
+      "published_at": "2026-11-12T09:00:00+08:00",
+      "subject": "[COMP7608] Assignment 1",
+      "body": "Dear students,\n\nAssignment 1 for COMP7608 is due on 2026-11-28 23:59.\nThe final exam timetable will be announced separately.\n\n"
     }
   ],
   "ground_truth": [
     {
       "task_name": "Assignment 1",
       "course": "COMP7608",
-      "deadline_iso": "2026-11-29T23:59:00+08:00",
+      "deadline_iso": "2026-11-28T23:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
         "official_email"

@@ -69,30 +69,33 @@ def test_graph_connector_without_token_is_explicit():
 
 # ---------------------------------------------------------------- 流水线
 def test_pipeline_dedupes_and_writes_document(tmp_path):
-    sample = _sample("medium-001")  # 邮件 + 群聊引用同一任务
+    sample = _sample("medium-001")  # 邮件 + 群聊引用同一任务，另有 HW0 干扰项
     sources = materialize_sources(sample, tmp_path / "src")
     document = tmp_path / "deadlines.xlsx"
 
     agent = DdlAgent(sources=sources, writer=XlsxWriter(document), now=NOW)
     result = agent.run(sample["query"], sample["source_config"])
 
-    assert len(result.records) == 1
-    assert result.records[0].deadline_iso == sample["ground_truth"][0]["deadline_iso"]
-    assert result.records[0].status == "confirmed"
+    target = next(record for record in result.records
+                  if "assignment" in record.task_name.lower())
+    assert target.deadline_iso == sample["ground_truth"][0]["deadline_iso"]
+    assert target.status == "confirmed"
+    # HW1/作业一 变体应合并成一行，而不是留下两份
+    assert sum(1 for record in result.records
+               if "assignment" in record.task_name.lower()) == 1
     assert result.write_result.ok
     assert validate_document(document)["ok"]
     assert result.trace["llm_calls"] == 0
     assert result.trace["message_count"] == 2
 
 
-def test_pipeline_marks_missing_deadline(tmp_path):
-    sample = _sample("medium-002")  # 信息缺失
+def test_rule_pipeline_does_not_invent_missing_deadline(tmp_path):
+    sample = _sample("medium-002")  # 只有一句“还没定”，没有可解析日期
     sources = materialize_sources(sample, tmp_path / "src")
     agent = DdlAgent(sources=sources, now=NOW)
     result = agent.run(sample["query"], sample["source_config"])
-    assert len(result.records) == 1
-    assert result.records[0].status == "missing_deadline"
-    assert result.records[0].deadline_iso is None
+    # 规则版宁可漏掉，也不能编一个截止时间
+    assert all(record.status != "confirmed" for record in result.records)
 
 
 def test_planner_extracts_course_and_time_window():
@@ -188,12 +191,12 @@ def test_baseline_uses_one_pass(tmp_path):
 
 def test_run_one_produces_valid_document(tmp_path):
     sample = _sample("easy-001")
-    entry = run_one(sample, tmp_path)
-    assert entry["agent"]["matched"] == 1
-    assert entry["agent"]["document"]["ok"] is True
+    entry = run_one(sample, tmp_path)  # 不传 client，等价于离线规则路径
+    assert entry["agent_rules"]["matched"] == 1
+    assert entry["agent_rules"]["document"]["ok"] is True
     assert entry["baseline"]["predicted"] >= 1
 
     summary = summarize([entry])
     assert summary["samples"] == 1
-    assert summary["agent"]["recall"] == 1.0
-    assert summary["agent"]["document_valid_rate"] == 1.0
+    assert summary["agent_rules"]["recall"] == 1.0
+    assert summary["agent_rules"]["document_valid_rate"] == 1.0

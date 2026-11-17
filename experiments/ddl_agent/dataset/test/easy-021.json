@@ -2,28 +2,27 @@
   "sample_id": "easy-021",
   "course": "COMP7404",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7404 的 Lab 1 DDL",
+  "query": "帮我查一下 COMP7404 的 Lab 2 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
       "message_id": "easy-021-m1",
-      "source_name": "COMP7404 课程群",
-      "source_type": "student_chat",
-      "sender": "Alice",
-      "role": "student",
-      "published_at": "2026-11-15T09:00:00+08:00",
-      "subject": "",
-      "text": "DDL 提醒：COMP7404 Lab 1 due 2026-11-27 23:59"
+      "source_name": "outlook",
+      "source_type": "official_email",
+      "sender": "coordinator@hku.hk",
+      "published_at": "2026-11-08T09:00:00+08:00",
+      "subject": "Fwd: [COMP7404] Lab 2 timeline",
+      "body": "FYI — forwarding the original note from the course office.\n\n---------- Forwarded message ---------\nFrom: course-office@hku.hk\nDate: Sat, 07 Nov 2026 09:00:00 +0800\nSubject: [COMP7404] Lab 2 timeline\n\nHi all,\nLab 2 submission opens next week. The hard cut-off is 06 Dec 2026 23:59.\nLate submissions lose 10% per day.\n\nPlease do not reply-all to this announcement."
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Lab 1",
+      "task_name": "Lab 2",
       "course": "COMP7404",
-      "deadline_iso": "2026-11-27T23:59:00+08:00",
+      "deadline_iso": "2026-12-06T23:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
-        "student_chat"
+        "official_email"
       ],
       "conflict_expected": false,
       "winner_reason": ""

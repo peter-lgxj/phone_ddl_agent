@@ -1,29 +1,28 @@
 {
   "sample_id": "medium-018",
-  "course": "COMP7608",
+  "course": "FITE7410",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7608 Assignment 6 什么时候截止",
+  "query": "帮我查一下 FITE7410 的 Project 2 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
       "message_id": "medium-018-m1",
-      "source_name": "COMP7608 课程群",
-      "source_type": "student_chat",
-      "sender": "Bob",
-      "role": "student",
-      "published_at": "2026-11-16T03:00:00+08:00",
-      "subject": "",
-      "text": "COMP7608 Assignment 6 的截止时间还没定，TA 说下周会在邮件里通知。"
+      "source_name": "outlook",
+      "source_type": "official_email",
+      "sender": "ta@cs.hku.hk",
+      "published_at": "2026-11-14T09:00:00+08:00",
+      "subject": "Re: [FITE7410] Project 2",
+      "body": "Adding the course office's note below so everyone has the same date.\n\nOn Nov 04, 2026, course office wrote:\n> Hi,\n> Project 2 for FITE7410 is due Dec 04, 2026 23:59.\n> Please upload a single PDF.\n\nBest regards,\nTA Chen\nDepartment of Computer Science"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 6",
-      "course": "COMP7608",
-      "deadline_iso": null,
-      "status": "missing_deadline",
+      "task_name": "Project 2",
+      "course": "FITE7410",
+      "deadline_iso": "2026-12-04T23:59:00+08:00",
+      "status": "confirmed",
       "expected_sources": [
-        "student_chat"
+        "official_email"
       ],
       "conflict_expected": false,
       "winner_reason": ""

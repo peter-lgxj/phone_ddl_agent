@@ -2,7 +2,7 @@
   "sample_id": "easy-016",
   "course": "COMP7608",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "帮我查一下 COMP7608 的 Assignment 4 截止时间",
+  "query": "帮我查一下 COMP7608 的 Lab 4 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
@@ -10,16 +10,16 @@
       "source_name": "outlook",
       "source_type": "official_email",
       "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-13T09:00:00+08:00",
-      "subject": "[COMP7608] Assignment 4 deadline",
-      "body": "Dear students,\nAssignment 4 for COMP7608 is due on 2026-12-05 23:59. Please submit via Moodle."
+      "published_at": "2026-11-12T09:00:00+08:00",
+      "subject": "[COMP7608] Lab 4",
+      "body": "Dear students,\n\nLab 4 for COMP7608 is due on 2026-12-04 23:59.\nThe final exam timetable will be announced separately.\n\nIf you received this message in error, please ignore it.\nRegards,\nTeaching Team"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 4",
+      "task_name": "Lab 4",
       "course": "COMP7608",
-      "deadline_iso": "2026-12-05T23:59:00+08:00",
+      "deadline_iso": "2026-12-04T23:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
         "official_email"

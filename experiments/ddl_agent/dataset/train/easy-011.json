@@ -2,7 +2,7 @@
   "sample_id": "easy-011",
   "course": "STAT7001",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "STAT7001 Assignment 2 什么时候截止？",
+  "query": "帮我查一下 STAT7001 的 实验三 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
@@ -13,14 +13,14 @@
       "role": "instructor",
       "published_at": "2026-11-14T09:00:00+08:00",
       "subject": "",
-      "text": "各位同学，Assignment 2 的截止时间是 12月6日 23:59，请按时提交。"
+      "text": "各位同学，实验三安排在 12月7日 23:59 前完成，逾期系统会关闭。\nAnyone has notes for last week's lecture?"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 2",
+      "task_name": "实验三",
       "course": "STAT7001",
-      "deadline_iso": "2026-12-06T23:59:00+08:00",
+      "deadline_iso": "2026-12-07T23:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
         "instructor_chat"

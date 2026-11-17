@@ -1,8 +1,8 @@
 {
   "sample_id": "hard-015",
-  "course": "FITE7410",
+  "course": "COMP7506",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "FITE7410 Assignment 5 下周五前要交吗",
+  "query": "帮我查一下 COMP7506 的 Lab 3 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
@@ -10,22 +10,32 @@
       "source_name": "outlook",
       "source_type": "official_email",
       "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-14T09:00:00+08:00",
-      "subject": "[FITE7410] Assignment 5",
-      "body": "Assignment 5 for FITE7410 is due next Friday at 23:59."
+      "published_at": "2026-11-09T09:00:00+08:00",
+      "subject": "[COMP7506] Lab 3 deadline",
+      "body": "Lab 3 for COMP7506 is due Dec 08, 2026 23:59.\nThe submission portal will close automatically.\n\nIf you received this message in error, please ignore it.\nThanks,\nAlice"
+    },
+    {
+      "message_id": "hard-015-m2",
+      "source_name": "COMP7506 课程群",
+      "source_type": "student_chat",
+      "sender": "David",
+      "role": "student",
+      "published_at": "2026-11-13T09:00:00+08:00",
+      "subject": "",
+      "text": "I asked around and heard Lab 3 is actually due 2026-12-10 23:59? Can anyone confirm?\nCoffee chat after class still on?"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 5",
-      "course": "FITE7410",
-      "deadline_iso": "2026-11-27T23:59:00+08:00",
+      "task_name": "Lab 3",
+      "course": "COMP7506",
+      "deadline_iso": "2026-12-08T23:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
         "official_email"
       ],
-      "conflict_expected": false,
-      "winner_reason": ""
+      "conflict_expected": true,
+      "winner_reason": "官方邮件优先于同学消息"
     }
   ],
   "tier": "hard",

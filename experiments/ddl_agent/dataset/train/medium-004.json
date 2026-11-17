@@ -1,29 +1,39 @@
 {
   "sample_id": "medium-004",
-  "course": "COMP7404",
+  "course": "FITE7410",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7404 Assignment 4 什么时候截止",
+  "query": "帮我查一下 FITE7410 的 Assignment 2 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
       "message_id": "medium-004-m1",
-      "source_name": "COMP7404 课程群",
-      "source_type": "student_chat",
-      "sender": "Bob",
-      "role": "student",
-      "published_at": "2026-11-16T03:00:00+08:00",
+      "source_name": "outlook",
+      "source_type": "official_email",
+      "sender": "ta@cs.hku.hk",
+      "published_at": "2026-11-10T09:00:00+08:00",
+      "subject": "[FITE7410] Assignment 2",
+      "body": "Dear all,\n\nAssignment 2 for FITE7410 is due 10 Dec 2026 23:59.\nFor reference, HW0 was due on 2026-10-10 23:59 and is already closed.\n\nThis email is intended only for enrolled students of the course."
+    },
+    {
+      "message_id": "medium-004-m2",
+      "source_name": "FITE7410 课程群",
+      "source_type": "instructor_chat",
+      "sender": "TA Chen",
+      "role": "ta",
+      "published_at": "2026-11-15T09:00:00+08:00",
       "subject": "",
-      "text": "COMP7404 Assignment 4 的截止时间还没定，TA 说下周会在邮件里通知。"
+      "text": "提醒一下，HW2 的截止时间是 12月10日 23:59，别和上周那个弄混。\nBy the way, is anyone going to the library tonight?"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 4",
-      "course": "COMP7404",
-      "deadline_iso": null,
-      "status": "missing_deadline",
+      "task_name": "Assignment 2",
+      "course": "FITE7410",
+      "deadline_iso": "2026-12-10T23:59:00+08:00",
+      "status": "confirmed",
       "expected_sources": [
-        "student_chat"
+        "official_email",
+        "instructor_chat"
       ],
       "conflict_expected": false,
       "winner_reason": ""

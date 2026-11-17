@@ -2,7 +2,7 @@
   "sample_id": "easy-002",
   "course": "FITE7410",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "FITE7410 Assignment 3 什么时候截止？",
+  "query": "帮我查一下 FITE7410 的 作业二 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
@@ -13,12 +13,12 @@
       "role": "instructor",
       "published_at": "2026-11-14T09:00:00+08:00",
       "subject": "",
-      "text": "各位同学，Assignment 3 的截止时间是 12月4日 23:59，请按时提交。"
+      "text": "各位同学，作业二安排在 12月4日 23:59 前完成，逾期系统会关闭。\n"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 3",
+      "task_name": "作业二",
       "course": "FITE7410",
       "deadline_iso": "2026-12-04T23:59:00+08:00",
       "status": "confirmed",

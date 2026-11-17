@@ -2,39 +2,41 @@
   "sample_id": "hard-006",
   "course": "COMP7404",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7404 Assignment 7 的最新截止时间",
+  "query": "帮我查一下 COMP7404 的 Report 4 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
       "message_id": "hard-006-m1",
-      "source_name": "outlook",
-      "source_type": "official_email",
-      "sender": "ta@cs.hku.hk",
-      "published_at": "2026-10-02T09:00:00+08:00",
-      "subject": "[COMP7404] Assignment 7",
-      "body": "Assignment 7 for COMP7404 is due on 2026-12-01 23:59."
+      "source_name": "COMP7404 课程群",
+      "source_type": "student_chat",
+      "sender": "Alice",
+      "role": "student",
+      "published_at": "2026-11-15T23:00:00+08:00",
+      "subject": "",
+      "text": "Report 4 什么时候交？助教说考完试那周再说，具体日期还没定。\nCoffee chat after class still on?"
     },
     {
       "message_id": "hard-006-m2",
-      "source_name": "outlook",
-      "source_type": "official_email",
-      "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-06T09:00:00+08:00",
-      "subject": "[COMP7404] Assignment 7 deadline extended",
-      "body": "Update: Assignment 7 for COMP7404 is now due on 2026-12-08 23:59."
+      "source_name": "COMP7404 课程群",
+      "source_type": "student_chat",
+      "sender": "Bob",
+      "role": "student",
+      "published_at": "2026-11-16T00:00:00+08:00",
+      "subject": "",
+      "text": "我听到的版本也一样，反正不是这周，等正式邮件吧。"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 7",
+      "task_name": "Report 4",
       "course": "COMP7404",
-      "deadline_iso": "2026-12-08T23:59:00+08:00",
-      "status": "confirmed",
+      "deadline_iso": null,
+      "status": "uncertain",
       "expected_sources": [
-        "official_email"
+        "student_chat"
       ],
       "conflict_expected": true,
-      "winner_reason": "同源新公告取代旧公告"
+      "winner_reason": "相对时间有歧义且无可信来源"
     }
   ],
   "tier": "hard",

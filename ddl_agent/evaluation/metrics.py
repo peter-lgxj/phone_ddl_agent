@@ -206,7 +206,7 @@ def validate_document(path: str | Path) -> dict:
             audit_rows = sum(1 for _ in reader)
         if audit_header != AUDIT_COLUMNS:
             issues.append(f"审计表头不符：{audit_header}")
-        if audit_rows == 0:
+        if audit_rows == 0 and rows:
             issues.append("审计日志为空")
 
     return {"ok": not issues, "issues": issues, "rows": len(rows)}

@@ -1,42 +1,41 @@
 {
   "sample_id": "hard-008",
-  "course": "COMP7506",
+  "course": "STAT7001",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7506 Assignment 7 的截止时间",
+  "query": "帮我查一下 STAT7001 的 Homework 5 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
       "message_id": "hard-008-m1",
-      "source_name": "COMP7506 课程群",
-      "source_type": "student_chat",
-      "sender": "Alice",
-      "role": "student",
-      "published_at": "2026-11-16T01:00:00+08:00",
-      "subject": "",
-      "text": "Assignment 7 deadline is 2026-12-04 23:59, pretty sure."
+      "source_name": "outlook",
+      "source_type": "official_email",
+      "sender": "ta@cs.hku.hk",
+      "published_at": "2026-11-09T09:00:00+08:00",
+      "subject": "[STAT7001] Homework 5 deadline",
+      "body": "Homework 5 for STAT7001 is due Dec 08, 2026 23:59.\nThe submission portal will close automatically.\n\nRegards,\nTeaching Team"
     },
     {
       "message_id": "hard-008-m2",
-      "source_name": "COMP7506 课程群",
+      "source_name": "STAT7001 课程群",
       "source_type": "student_chat",
-      "sender": "Bob",
+      "sender": "David",
       "role": "student",
-      "published_at": "2026-11-16T01:00:00+08:00",
+      "published_at": "2026-11-13T09:00:00+08:00",
       "subject": "",
-      "text": "Assignment 7 deadline is 2026-12-06 23:59, TA told me."
+      "text": "I asked around and heard Homework 5 is actually due 2026-12-10 23:59? Can anyone confirm?\nMy laptop fan is dying, any repair shop recommendations?"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 7",
-      "course": "COMP7506",
-      "deadline_iso": null,
-      "status": "uncertain",
+      "task_name": "Homework 5",
+      "course": "STAT7001",
+      "deadline_iso": "2026-12-08T23:59:00+08:00",
+      "status": "confirmed",
       "expected_sources": [
-        "student_chat"
+        "official_email"
       ],
       "conflict_expected": true,
-      "winner_reason": "两个同学消息互相矛盾且无更高可信度来源"
+      "winner_reason": "官方邮件优先于同学消息"
     }
   ],
   "tier": "hard",

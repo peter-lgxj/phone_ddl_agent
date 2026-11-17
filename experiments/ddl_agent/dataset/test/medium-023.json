@@ -1,38 +1,39 @@
 {
   "sample_id": "medium-023",
-  "course": "STAT7001",
+  "course": "COMP7608",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "STAT7001 Assignment 5 的截止时间",
+  "query": "帮我查一下 COMP7608 的 作业五 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
       "message_id": "medium-023-m1",
-      "source_name": "outlook",
-      "source_type": "official_email",
-      "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-11T09:00:00+08:00",
-      "subject": "[STAT7001] Assignment 5",
-      "body": "Dear students,\nAssignment 5 for STAT7001 is due on 2026-12-08 23:59."
+      "source_name": "COMP7608 课程群",
+      "source_type": "student_chat",
+      "sender": "Bob",
+      "role": "student",
+      "published_at": "2026-11-16T04:00:00+08:00",
+      "subject": "",
+      "text": "COMP7608 作业五 到底什么时候交？助教说排期还没定，可能在期末周之后。\n"
     },
     {
       "message_id": "medium-023-m2",
-      "source_name": "STAT7001 课程群",
+      "source_name": "COMP7608 课程群",
       "source_type": "instructor_chat",
       "sender": "TA Chen",
       "role": "ta",
-      "published_at": "2026-11-15T09:00:00+08:00",
+      "published_at": "2026-11-16T05:00:00+08:00",
       "subject": "",
-      "text": "Reminder: HW 5 deadline is 2026-12-08 23:59, submit via Moodle."
+      "text": "还没最终确定，定了会在 Outlook 发正式通知，先别按旧日期准备。"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 5",
-      "course": "STAT7001",
-      "deadline_iso": "2026-12-08T23:59:00+08:00",
-      "status": "confirmed",
+      "task_name": "作业五",
+      "course": "COMP7608",
+      "deadline_iso": null,
+      "status": "missing_deadline",
       "expected_sources": [
-        "official_email",
+        "student_chat",
         "instructor_chat"
       ],
       "conflict_expected": false,

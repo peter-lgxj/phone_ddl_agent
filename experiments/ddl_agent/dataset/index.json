@@ -1,5 +1,6 @@
 {
-  "created_from": "ddl_agent.dataset.generator",
+  "created_from": "ddl_agent.dataset.generator (fact-based v2)",
+  "seed": 42,
   "per_tier": 24,
   "base_now": "2026-11-16T09:00:00+08:00",
   "counts": {
@@ -348,7 +349,7 @@
       "sample_id": "hard-007",
       "tier": "hard",
       "split": "train",
-      "ground_truth": 1
+      "ground_truth": 2
     },
     {
       "sample_id": "hard-008",
@@ -390,7 +391,7 @@
       "sample_id": "hard-014",
       "tier": "hard",
       "split": "train",
-      "ground_truth": 1
+      "ground_truth": 2
     },
     {
       "sample_id": "hard-015",
@@ -432,7 +433,7 @@
       "sample_id": "hard-021",
       "tier": "hard",
       "split": "test",
-      "ground_truth": 1
+      "ground_truth": 2
     },
     {
       "sample_id": "hard-022",

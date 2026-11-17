@@ -1,41 +1,31 @@
 {
   "sample_id": "hard-005",
-  "course": "COMP7506",
+  "course": "FITE7410",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7506 Assignment 2 到底什么时候交",
+  "query": "帮我查一下 FITE7410 的 Homework 7 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
       "message_id": "hard-005-m1",
       "source_name": "outlook",
       "source_type": "official_email",
-      "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-10T09:00:00+08:00",
-      "subject": "[COMP7506] Assignment 2 deadline",
-      "body": "Assignment 2 for COMP7506 is due on 2026-12-07 23:59."
-    },
-    {
-      "message_id": "hard-005-m2",
-      "source_name": "COMP7506 课程群",
-      "source_type": "student_chat",
-      "sender": "David",
-      "role": "student",
-      "published_at": "2026-11-12T09:00:00+08:00",
-      "subject": "",
-      "text": "I heard Assignment 2 deadline is 2026-12-09 23:59?"
+      "sender": "instructor@cs.hku.hk",
+      "published_at": "2026-11-13T09:00:00+08:00",
+      "subject": "[FITE7410] Homework 7",
+      "body": "Homework 7 is due the Friday after next, end of day.\nI know the phrasing is confusing — plan for the later Friday, not this week's.\n\n"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 2",
-      "course": "COMP7506",
-      "deadline_iso": "2026-12-07T23:59:00+08:00",
+      "task_name": "Homework 7",
+      "course": "FITE7410",
+      "deadline_iso": "2026-12-04T23:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
         "official_email"
       ],
-      "conflict_expected": true,
-      "winner_reason": "官方邮件优先于同学消息"
+      "conflict_expected": false,
+      "winner_reason": ""
     }
   ],
   "tier": "hard",

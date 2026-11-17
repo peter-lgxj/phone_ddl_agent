@@ -1,41 +1,42 @@
 {
   "sample_id": "hard-013",
-  "course": "STAT7001",
+  "course": "FITE7410",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "STAT7001 Assignment 2 到底什么时候交",
+  "query": "帮我查一下 FITE7410 的 作业三 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
       "message_id": "hard-013-m1",
-      "source_name": "outlook",
-      "source_type": "official_email",
-      "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-10T09:00:00+08:00",
-      "subject": "[STAT7001] Assignment 2 deadline",
-      "body": "Assignment 2 for STAT7001 is due on 2026-12-07 23:59."
+      "source_name": "FITE7410 课程群",
+      "source_type": "student_chat",
+      "sender": "Alice",
+      "role": "student",
+      "published_at": "2026-11-15T23:00:00+08:00",
+      "subject": "",
+      "text": "作业三 什么时候交？助教说考完试那周再说，具体日期还没定。\nAnyone has notes for last week's lecture?"
     },
     {
       "message_id": "hard-013-m2",
-      "source_name": "STAT7001 课程群",
+      "source_name": "FITE7410 课程群",
       "source_type": "student_chat",
-      "sender": "David",
+      "sender": "Bob",
       "role": "student",
-      "published_at": "2026-11-12T09:00:00+08:00",
+      "published_at": "2026-11-16T00:00:00+08:00",
       "subject": "",
-      "text": "I heard Assignment 2 deadline is 2026-12-09 23:59?"
+      "text": "我听到的版本也一样，反正不是这周，等正式邮件吧。"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 2",
-      "course": "STAT7001",
-      "deadline_iso": "2026-12-07T23:59:00+08:00",
-      "status": "confirmed",
+      "task_name": "作业三",
+      "course": "FITE7410",
+      "deadline_iso": null,
+      "status": "uncertain",
       "expected_sources": [
-        "official_email"
+        "student_chat"
       ],
       "conflict_expected": true,
-      "winner_reason": "官方邮件优先于同学消息"
+      "winner_reason": "相对时间有歧义且无可信来源"
     }
   ],
   "tier": "hard",

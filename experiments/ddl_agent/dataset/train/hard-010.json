@@ -1,8 +1,8 @@
 {
   "sample_id": "hard-010",
-  "course": "COMP7608",
+  "course": "COMP7404",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7608 Assignment 5 的最新截止时间",
+  "query": "帮我查一下 COMP7404 的 Assignment 7 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
@@ -10,31 +10,22 @@
       "source_name": "outlook",
       "source_type": "official_email",
       "sender": "ta@cs.hku.hk",
-      "published_at": "2026-10-02T09:00:00+08:00",
-      "subject": "[COMP7608] Assignment 5",
-      "body": "Assignment 5 for COMP7608 is due on 2026-12-01 23:59."
-    },
-    {
-      "message_id": "hard-010-m2",
-      "source_name": "outlook",
-      "source_type": "official_email",
-      "sender": "ta@cs.hku.hk",
-      "published_at": "2026-11-06T09:00:00+08:00",
-      "subject": "[COMP7608] Assignment 5 deadline extended",
-      "body": "Update: Assignment 5 for COMP7608 is now due on 2026-12-08 23:59."
+      "published_at": "2026-11-11T09:00:00+08:00",
+      "subject": "[COMP7404] Assignment 7 (external)",
+      "body": "The external host set the cut-off in their local time zone.\nAssignment 7 must be uploaded before 2026-12-03 23:59 PST.\nConvert to your local time before submitting.\n\nBest regards,\nTA Chen\nDepartment of Computer Science"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 5",
-      "course": "COMP7608",
-      "deadline_iso": "2026-12-08T23:59:00+08:00",
+      "task_name": "Assignment 7",
+      "course": "COMP7404",
+      "deadline_iso": "2026-12-04T15:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
         "official_email"
       ],
-      "conflict_expected": true,
-      "winner_reason": "同源新公告取代旧公告"
+      "conflict_expected": false,
+      "winner_reason": ""
     }
   ],
   "tier": "hard",

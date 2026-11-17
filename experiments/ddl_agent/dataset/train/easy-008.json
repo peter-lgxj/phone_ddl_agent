@@ -2,7 +2,7 @@
   "sample_id": "easy-008",
   "course": "COMP7506",
   "now": "2026-11-16T09:00:00+08:00",
-  "query": "COMP7506 Assignment 4 什么时候截止？",
+  "query": "帮我查一下 COMP7506 的 报告四 截止时间",
   "source_config": "跟踪课程邮件、课程群聊和同学消息",
   "messages": [
     {
@@ -13,14 +13,14 @@
       "role": "instructor",
       "published_at": "2026-11-14T09:00:00+08:00",
       "subject": "",
-      "text": "各位同学，Assignment 4 的截止时间是 12月3日 23:59，请按时提交。"
+      "text": "各位同学，报告四安排在 12月4日 23:59 前完成，逾期系统会关闭。\nBy the way, is anyone going to the library tonight?"
     }
   ],
   "ground_truth": [
     {
-      "task_name": "Assignment 4",
+      "task_name": "报告四",
       "course": "COMP7506",
-      "deadline_iso": "2026-12-03T23:59:00+08:00",
+      "deadline_iso": "2026-12-04T23:59:00+08:00",
       "status": "confirmed",
       "expected_sources": [
         "instructor_chat"
