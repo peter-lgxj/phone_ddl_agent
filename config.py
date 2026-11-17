@@ -36,13 +36,13 @@ PROVIDERS = {
     "qwen": {
         "api_key": os.getenv("DASHSCOPE_API_KEY", ""),
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model": "qwen-vl-max",          # 可选: qwen-vl-plus / qwen-vl-max
+        "model": "qwen3.7-flash",          # 可选: qwen-vl-plus / qwen-vl-max
         "support_multi_image": True,
     },
     "qwen3": {
         "api_key": os.getenv("DASHSCOPE_API_KEY", ""),
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model": "qwen3.5-flash",          # 纯文本模型，可选: qwen3.5-flash / qwen-max / qwen-plus
+        "model": "qwen3.7-flash",          # 纯文本模型，可选: qwen3.5-flash / qwen-max / qwen-plus
         "support_multi_image": False,      # 纯文字模型，不能直接当视觉执行器
     },
     "deepseek": {
@@ -106,7 +106,37 @@ WECHAT_INPUT_RESOURCE_ID = "com.tencent.mm:id/b4z"
 MAX_STEPS = int(os.getenv("MAX_STEPS", "30"))
 STEP_RETRIES = 2            # 单步失败后的重试次数，避免一次 API 抖动直接判任务失败
 LLM_TEMPERATURE = 0.0       # 决策/观察调用温度，固定后重复实验才可比
-ENABLE_SEMANTIC_ANALYSIS = True  # 消融开关：关闭后不调用文字模型做语义校正
+
+# 语义分析：每步额外一次纯文本请求。实测每步约 2s，且多数场景下决策模型已能自行理解历史，
+# 默认关闭；需要消融对比时置 1。
+ENABLE_SEMANTIC_ANALYSIS = os.getenv("ENABLE_SEMANTIC_ANALYSIS", "0") not in ("0", "", "false", "False")
+
+# 完成判断策略（减少每步一次带图请求）：
+#   decision    —— 由决策响应里的 task_done 字段给出（默认，省一次视觉请求）
+#   every_step  —— 旧行为：每步额外发一张图问 YES/NO
+#   off         —— 完全依赖模型主动 finish
+COMPLETION_CHECK = os.getenv("COMPLETION_CHECK", "decision")
+
+# OCR 调用策略（1080x2374 上每步全屏 OCR 约 10-14s，是单步最大固定开销）：
+#   on_demand —— 默认：决策前不跑 OCR；仅当模型给出 tap（需要精确落点）时跑一次，
+#                并把落点吸附到最近元素中心（距离超过 OCR_SNAP_MAX_DISTANCE 则不吸附）
+#   always    —— 旧行为：每步决策前都跑 OCR，并把结果写进提示词
+#   off       —— 完全不跑 OCR
+OCR_MODE = os.getenv("OCR_MODE", "on_demand")
+# 吸附半径（像素）：模型坐标与元素中心距离超过该值就不吸附，避免跳到相邻条目
+OCR_SNAP_MAX_DISTANCE = int(os.getenv("OCR_SNAP_MAX_DISTANCE", "80"))
+# 吸附路径：tree_first（默认，控件树优先、OCR 兜底）/ ocr_only / tree_only
+OCR_SNAP_MODE = os.getenv("OCR_SNAP_MODE", "tree_first")
+# OCR 引擎：rapidocr（默认，ONNX CPU 约 1-2s）/ easyocr（旧实现，保留对照）
+OCR_ENGINE = os.getenv("OCR_ENGINE", "rapidocr")
+# OCR 输入图缩放比例（只影响 OCR，与 VLM 的 IMAGE_MAX_SIDE 无关）：
+# 识别框会按 1/scale 映射回原始截图坐标，tap 坐标仍是设备坐标系。
+# 1.0 关闭缩放；默认值按实测速度/小字识别率取平衡。
+OCR_SCALE = float(os.getenv("OCR_SCALE", "0.5"))
+
+# 动作执行后等待界面稳定的秒数（再截图观察）
+OBSERVE_SETTLE_SECONDS = float(os.getenv("OBSERVE_SETTLE_SECONDS", "1.0"))
+
 ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "runs")  # 每步截图与动作记录的归档目录
 
 # 历史上下文窗口：只带最近 N 张历史原图（当前屏幕始终带图），更早步骤压成文字摘要。
