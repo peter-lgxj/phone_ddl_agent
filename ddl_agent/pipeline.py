@@ -25,7 +25,9 @@ class DdlAgent:
                  resolver: ConflictResolver | None = None,
                  writer: DeadlineWriter | None = None,
                  now: datetime | None = None,
-                 normalizer: TimeNormalizer | None = None):
+                 normalizer: TimeNormalizer | None = None,
+                 planner=None,
+                 usage=None):
         self.sources = sources
         self.now = now or datetime.now(TZ)
         self.normalizer = normalizer or TimeNormalizer()
@@ -34,7 +36,8 @@ class DdlAgent:
         self.resolver = resolver or ConflictResolver()
         self.writer = writer
         self.source_parser = SourceConfigParser()
-        self.planner = QueryPlanner()
+        self.planner = planner or QueryPlanner()
+        self.usage = usage
         self.orchestrator = RetrievalOrchestrator(sources, self.extractor, self.now)
 
     # ------------------------------------------------------------------ #
@@ -42,6 +45,7 @@ class DdlAgent:
             plan: RetrievalPlan | None = None, write: bool = True) -> AgentRunResult:
         started = perf_counter()
         stages: dict[str, float] = {}
+        usage_before = self.usage.snapshot() if self.usage is not None else None
 
         begin = perf_counter()
         selected = self.source_parser.parse(source_config, self.sources)
@@ -73,6 +77,7 @@ class DdlAgent:
         stages["write"] = round(perf_counter() - begin, 4)
 
         tokens = sum(len(message.subject) + len(message.body) for message in messages) // 4
+        usage = self.usage.since(usage_before) if self.usage is not None else {}
         trace = {
             "stages": stages,
             "elapsed_seconds": round(perf_counter() - started, 4),
@@ -81,9 +86,13 @@ class DdlAgent:
             "cluster_count": len(clusters),
             "record_count": len(records),
             "supplementary_rounds": outcome.supplementary_rounds,
-            "llm_calls": 0,  # 默认规则实现不调用模型
-            "tokens_estimate": tokens,
-            "cost_usd": 0.0,
+            "planner_reason": plan.reason,
+            "llm_calls": usage.get("llm_calls", 0),
+            "prompt_tokens": usage.get("prompt_tokens", 0),
+            "completion_tokens": usage.get("completion_tokens", 0),
+            "tokens_estimate": usage.get("tokens_estimate", tokens) or tokens,
+            "llm_seconds": usage.get("llm_seconds", 0.0),
+            "cost_usd": usage.get("cost_usd", 0.0),
         }
 
         return AgentRunResult(

@@ -1,13 +1,13 @@
 """冲突核查与解决。
 
-规则顺序：来源可信度优先 → 同可信度下发布时间新者覆盖 → 追加检索（最多两轮）→
+优先用 LLM 裁决（可注入），不可用时退回规则：
+来源可信度优先 → 同可信度下发布时间新者覆盖 → 追加检索（最多两轮）→
 仍无法判定则标 ``uncertain`` 交人工，绝不随便挑一个时间。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Callable
 
 from .models import DeadlineCandidate, ResolvedRecord, RetrievalPlan, TaskCluster
@@ -40,8 +40,9 @@ class _Decision:
 
 
 class ConflictResolver:
-    def __init__(self, max_rounds: int = MAX_SUPPLEMENTARY_ROUNDS):
+    def __init__(self, max_rounds: int = MAX_SUPPLEMENTARY_ROUNDS, arbiter=None):
         self.max_rounds = max_rounds
+        self.arbiter = arbiter
 
     def resolve(self, clusters: list[TaskCluster], plan: RetrievalPlan | None = None,
                 retrieval: SupplementaryFn | None = None) -> ResolveResult:
@@ -57,43 +58,68 @@ class ConflictResolver:
                          retrieval: SupplementaryFn | None,
                          warnings: list[str]) -> tuple[ResolvedRecord, int]:
         candidates = list(cluster.candidates)
-        dated = [c for c in candidates if c.deadline_iso]
+        dated = [candidate for candidate in candidates if candidate.deadline_iso]
 
         if not dated:
+            unresolved = any(
+                candidate.unresolved_time or candidate.needs_review for candidate in candidates
+            )
             winner = _best(candidates)
             return (
                 ResolvedRecord(
                     task_name=cluster.task_name,
                     course=cluster.course,
                     deadline_iso=None,
-                    status="missing_deadline",
+                    status="uncertain" if unresolved else "missing_deadline",
                     source=_describe(winner) if winner else cluster.task_name,
-                    evidence_ids=[c.candidate_id for c in candidates],
-                    confidence=CONFIDENCE_MISSING,
-                    resolution_note="消息存在截止语义但没有可解析的日期，交由人工确认",
+                    evidence_ids=[candidate.candidate_id for candidate in candidates],
+                    confidence=CONFIDENCE_UNCERTAIN if unresolved else CONFIDENCE_MISSING,
+                    resolution_note=(
+                        "时间表达无法可靠解析，标记 uncertain 交人工"
+                        if unresolved
+                        else "消息存在截止语义但没有可解析的日期，交由人工确认"
+                    ),
                 ),
                 0,
             )
 
-        rounds_used = 0
-        decision = self._decide(cluster, candidates)
+        unique = {candidate.deadline_iso for candidate in dated}
+        if len(unique) == 1:
+            if all(candidate.needs_review for candidate in dated):
+                winner = _best(dated)
+                return (
+                    _uncertain_record(cluster, candidates, winner,
+                                      "抽取置信度不足，标记 uncertain 交人工"),
+                    0,
+                )
+            winner = _best(dated)
+            return (
+                ResolvedRecord(
+                    task_name=cluster.task_name,
+                    course=cluster.course,
+                    deadline_iso=winner.deadline_iso,
+                    status="confirmed",
+                    source=_describe(winner),
+                    evidence_ids=[candidate.candidate_id for candidate in candidates],
+                    confidence=CONFIDENCE_CONSISTENT,
+                    resolution_note="所有来源一致" if len(dated) > 1 else "单一来源",
+                ),
+                0,
+            )
 
+        if self.arbiter is not None:
+            return self._resolve_with_llm(cluster, candidates, plan, retrieval, warnings)
+
+        rounds_used = 0
+        decision = self._decide(candidates)
         while decision is None and retrieval is not None and rounds_used < self.max_rounds:
             rounds_used += 1
-            try:
-                extra = retrieval(plan, cluster, rounds_used)
-            except Exception as exc:  # 追加检索失败不应中断整轮
-                warnings.append(f"追加检索失败（{cluster.task_name} 第 {rounds_used} 轮）：{exc}")
-                extra = []
-
-            known = {c.candidate_id for c in candidates}
-            fresh = [c for c in extra if c.candidate_id not in known]
-            if not fresh:
+            extra = self._supplement(plan, cluster, retrieval, rounds_used, warnings)
+            if not extra:
                 continue
-            candidates.extend(fresh)
-            if fresh:
-                cluster.candidates = candidates
-            decision = self._decide(cluster, candidates)
+            candidates.extend(extra)
+            cluster.candidates = candidates
+            decision = self._decide(candidates)
 
         if decision is not None:
             return (
@@ -103,7 +129,7 @@ class ConflictResolver:
                     deadline_iso=decision.deadline_iso,
                     status="confirmed",
                     source=_describe(decision.winner),
-                    evidence_ids=[c.candidate_id for c in candidates],
+                    evidence_ids=[candidate.candidate_id for candidate in candidates],
                     confidence=decision.confidence,
                     resolution_note=decision.note,
                     alternatives=_other_deadlines(candidates, decision.deadline_iso),
@@ -112,44 +138,86 @@ class ConflictResolver:
             )
 
         return (
-            ResolvedRecord(
-                task_name=cluster.task_name,
-                course=cluster.course,
-                deadline_iso=None,
-                status="uncertain",
-                source=_describe(_best(candidates)),
-                evidence_ids=[c.candidate_id for c in candidates],
-                confidence=CONFIDENCE_UNCERTAIN,
-                resolution_note=(
-                    f"存在 {len({c.deadline_iso for c in candidates})} 个互相矛盾的截止时间，"
-                    f"追加检索 {rounds_used} 轮仍无法判定，标记 uncertain 交人工"
-                ),
-                alternatives=_other_deadlines(candidates, None),
+            _uncertain_record(
+                cluster, candidates, _best(candidates),
+                f"存在 {len({c.deadline_iso for c in candidates})} 个互相矛盾的截止时间，"
+                f"追加检索 {rounds_used} 轮仍无法判定，标记 uncertain 交人工",
             ),
             rounds_used,
         )
 
     # ------------------------------------------------------------------ #
-    def _decide(self, cluster: TaskCluster, candidates: list[DeadlineCandidate]) -> _Decision | None:
-        dated = [c for c in candidates if c.deadline_iso]
-        unique = {c.deadline_iso for c in dated}
+    def _resolve_with_llm(self, cluster: TaskCluster, candidates: list[DeadlineCandidate],
+                          plan: RetrievalPlan | None, retrieval: SupplementaryFn | None,
+                          warnings: list[str]) -> tuple[ResolvedRecord, int]:
+        rounds_used = 0
+        arbitration = self.arbiter.arbitrate(cluster, candidates, 0)
+        allow_more = plan is None or plan.allow_supplementary
+
+        while (
+            (arbitration is None or arbitration.deadline_iso is None)
+            and retrieval is not None and allow_more and rounds_used < self.max_rounds
+        ):
+            rounds_used += 1
+            extra = self._supplement(plan, cluster, retrieval, rounds_used, warnings)
+            if extra:
+                candidates.extend(extra)
+                cluster.candidates = candidates
+            arbitration = self.arbiter.arbitrate(cluster, candidates, rounds_used)
+
+        if arbitration is not None and arbitration.deadline_iso:
+            winner = next(
+                (candidate for candidate in candidates
+                 if candidate.deadline_iso == arbitration.deadline_iso),
+                _best(candidates),
+            )
+            return (
+                ResolvedRecord(
+                    task_name=cluster.task_name,
+                    course=cluster.course,
+                    deadline_iso=arbitration.deadline_iso,
+                    status="confirmed",
+                    source=_describe(winner),
+                    evidence_ids=[candidate.candidate_id for candidate in candidates],
+                    confidence=arbitration.confidence,
+                    resolution_note=f"LLM 裁决：{arbitration.reason}",
+                    alternatives=_other_deadlines(candidates, arbitration.deadline_iso),
+                ),
+                rounds_used,
+            )
+
+        reason = arbitration.reason if arbitration is not None else "LLM 裁决不可用"
+        return (
+            _uncertain_record(
+                cluster, candidates, _best(candidates),
+                f"冲突未能可靠裁决（{reason}），追加检索 {rounds_used} 轮，标记 uncertain 交人工",
+            ),
+            rounds_used,
+        )
+
+    def _supplement(self, plan, cluster, retrieval, round_index, warnings) -> list[DeadlineCandidate]:
+        try:
+            extra = retrieval(plan, cluster, round_index)
+        except Exception as exc:  # 追加检索失败不应中断整轮
+            warnings.append(f"追加检索失败（{cluster.task_name} 第 {round_index} 轮）：{exc}")
+            return []
+        known = {candidate.candidate_id for candidate in cluster.candidates}
+        return [candidate for candidate in extra if candidate.candidate_id not in known]
+
+    # ------------------------------------------------------------------ #
+    def _decide(self, candidates: list[DeadlineCandidate]) -> _Decision | None:
+        dated = [candidate for candidate in candidates if candidate.deadline_iso]
+        unique = {candidate.deadline_iso for candidate in dated}
         if not dated:
             return None
 
         if len(unique) == 1:
             winner = _best(dated)
-            return _Decision(
-                deadline_iso=winner.deadline_iso,
-                note="所有来源一致" if len(dated) > 1 else "单一来源",
-                confidence=CONFIDENCE_CONSISTENT,
-                winner=winner,
-            )
+            return _Decision(winner.deadline_iso, "所有来源一致", CONFIDENCE_CONSISTENT, winner)
 
-        top_weight = max(_credibility(c) for c in dated)
-        top_group = [c for c in dated if _credibility(c) == top_weight]
-        top_unique = {c.deadline_iso for c in top_group}
-
-        if len(top_unique) == 1:
+        top_weight = max(_credibility(candidate) for candidate in dated)
+        top_group = [candidate for candidate in dated if _credibility(candidate) == top_weight]
+        if len({candidate.deadline_iso for candidate in top_group}) == 1:
             winner = _best(top_group)
             return _Decision(
                 deadline_iso=winner.deadline_iso,
@@ -161,10 +229,9 @@ class ConflictResolver:
                 winner=winner,
             )
 
-        latest = max(c.published_at for c in top_group)
-        latest_group = [c for c in top_group if c.published_at == latest]
-        latest_unique = {c.deadline_iso for c in latest_group}
-        if len(latest_unique) == 1:
+        latest = max(candidate.published_at for candidate in top_group)
+        latest_group = [candidate for candidate in top_group if candidate.published_at == latest]
+        if len({candidate.deadline_iso for candidate in latest_group}) == 1:
             winner = _best(latest_group)
             return _Decision(
                 deadline_iso=winner.deadline_iso,
@@ -175,8 +242,22 @@ class ConflictResolver:
                 confidence=CONFIDENCE_NEWER_ANNOUNCEMENT,
                 winner=winner,
             )
-
         return None
+
+
+def _uncertain_record(cluster: TaskCluster, candidates: list[DeadlineCandidate],
+                      winner: DeadlineCandidate | None, note: str) -> ResolvedRecord:
+    return ResolvedRecord(
+        task_name=cluster.task_name,
+        course=cluster.course,
+        deadline_iso=None,
+        status="uncertain",
+        source=_describe(winner),
+        evidence_ids=[candidate.candidate_id for candidate in candidates],
+        confidence=CONFIDENCE_UNCERTAIN,
+        resolution_note=note,
+        alternatives=_other_deadlines(candidates, None),
+    )
 
 
 def _credibility(candidate: DeadlineCandidate) -> int:

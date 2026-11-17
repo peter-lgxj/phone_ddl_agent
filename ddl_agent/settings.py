@@ -53,3 +53,10 @@ AUDIT_COLUMNS = ["Timestamp", "Action", "Task Name", "Old Value", "New Value", "
 # 成本估算用的默认单价（美元 / 1K token），仅用于评测报告中的近似值
 DEFAULT_INPUT_PRICE_PER_1K = 0.0002
 DEFAULT_OUTPUT_PRICE_PER_1K = 0.0008
+
+# DeepSeek 官方定价（约 $0.27 / 百万输入、$1.10 / 百万输出），仅作近似成本
+LLM_INPUT_PRICE_PER_1K = 0.00027
+LLM_OUTPUT_PRICE_PER_1K = 0.0011
+
+# 冲突裁决的最低可接受置信度；低于该值一律标 uncertain
+LLM_MIN_CONFIDENCE = 0.6

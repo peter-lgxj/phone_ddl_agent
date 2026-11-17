@@ -63,6 +63,10 @@ class RetrievalPlan:
     # 追加检索轮次：0 表示首轮；>0 表示针对某个冲突任务定向补查
     round_index: int = 0
     focus_task: str | None = None
+    # 规划器决定冲突时是否允许追加检索（LLM 规划可关闭）
+    allow_supplementary: bool = True
+    # 规划理由，写进 trace 便于人工检查
+    reason: str = ""
 
 
 @dataclass
@@ -92,6 +96,9 @@ class DeadlineCandidate:
     message_subject: str = ""
     missing_fields: list[str] = field(default_factory=list)
     unresolved_time: bool = False
+    # LLM 抽取的置信度与是否需要人工复核（规则抽取保持 None/False）
+    extractor_confidence: float | None = None
+    needs_review: bool = False
 
     @property
     def has_deadline(self) -> bool:
