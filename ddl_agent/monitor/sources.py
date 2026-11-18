@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from ..connectors.base import SourceError
+from ..connectors.mobile_reading import build_mobile_messages
 from ..models import RawMessage, RetrievalPlan
 from ..settings import TZ
 from .config import APP_LABELS, MonitorConfig, MonitorSource
@@ -20,7 +19,10 @@ class TargetNotFound(SourceError):
 
 
 class MobileAppSource:
-    """复用现有手机智能体读屏；本实现**未经真机验证**。"""
+    """复用现有手机智能体读屏；与 MobileChatConnector 共用解析与 timeout 语义。
+
+    真机验证范围见 ``docs/real-device-test-report.md``：单机、自聊会话、只读。
+    """
 
     def __init__(self, source: MonitorSource, agent: Any | None = None,
                  agent_factory: Any | None = None, use_device_lock: bool = True,
@@ -32,8 +34,14 @@ class MobileAppSource:
         self.agent_factory = agent_factory
         self.use_device_lock = use_device_lock
         self.now = now
+        self.partial = False
+        self.last_status: str | None = None
+        self.last_fetch_meta: dict[str, Any] = {}
 
     def fetch(self, plan: RetrievalPlan | None = None) -> list[RawMessage]:
+        self.partial = False
+        self.last_status = None
+        self.last_fetch_meta = {}
         agent = self._get_agent()
         task = self._build_task()
 
@@ -50,14 +58,24 @@ class MobileAppSource:
             agent.run(task)
 
         status = str(getattr(agent, "last_status", "") or "").lower()
-        if status in ("failed", "timeout"):
-            raise SourceError(f"手机读取未完成（status={status}）")
+        self.last_status = status
+        if status == "failed":
+            raise SourceError(f"手机读取失败（status={status}）")
         if status in _NOT_FOUND_STATUS or self._mentions_not_found(agent):
             raise TargetNotFound(
                 f"未找到目标「{self.source.target}」（{APP_LABELS.get(self.source.app, self.source.app)}）"
             )
+        if status == "timeout":
+            # 到达步数上限不等于没读到：返回已归档观察，由上层标记为部分结果
+            self.partial = True
 
-        return self._messages_from_steps(agent)
+        messages = self._messages_from_steps(agent)
+        self.last_fetch_meta = {
+            "partial": self.partial,
+            "last_status": status,
+            "message_count": len(messages),
+        }
+        return messages
 
     # ------------------------------------------------------------------ #
     def _build_task(self) -> str:
@@ -87,37 +105,15 @@ class MobileAppSource:
         return self.agent
 
     def _messages_from_steps(self, agent) -> list[RawMessage]:
-        memory = getattr(agent, "last_memory", None)
-        steps = list(getattr(memory, "steps", []) or [])
-        run_dir = Path(getattr(agent, "run_dir", "") or ".")
-        now = self.now or datetime.now(TZ)
-        messages: list[RawMessage] = []
-        seen: set[str] = set()
-
-        for index, step in enumerate(steps, start=1):
-            observation = str(step.get("observation") or "").strip()
-            if not observation:
-                continue
-            digest = hashlib.sha1(f"{self.source.id}|{observation}".encode("utf-8")).hexdigest()[:16]
-            if digest in seen:
-                continue
-            seen.add(digest)
-            step_no = int(step.get("step") or index)
-            evidence = run_dir / f"step_{step_no:03d}.json"
-            messages.append(
-                RawMessage(
-                    message_id=digest,
-                    source_name=self.source.target,
-                    source_type=self.source.source_type,
-                    sender=str(step.get("sender") or self.source.target),
-                    published_at=now,
-                    subject=f"{APP_LABELS.get(self.source.app, self.source.app)} / {self.source.target}",
-                    body=observation,
-                    evidence_path=str(evidence) if evidence.exists() else None,
-                    thread_id=self.source.id,
-                )
-            )
-        return messages
+        app = APP_LABELS.get(self.source.app, self.source.app)
+        return build_mobile_messages(
+            agent,
+            source_name=self.source.target,
+            source_type=self.source.source_type,
+            subject=f"{app} / {self.source.target}",
+            thread_id=self.source.id,
+            now=self.now or datetime.now(TZ),
+        )
 
     @staticmethod
     def _mentions_not_found(agent) -> bool:

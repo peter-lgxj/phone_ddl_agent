@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import difflib
 import re
+from datetime import datetime
 from typing import Callable
 
 from .extract.normalizer import cn_number
@@ -17,7 +18,10 @@ from .settings import (
     DEDUPE_THRESHOLD,
     DEDUPE_TOKEN_WEIGHT,
     SOURCE_CREDIBILITY,
+    TZ,
 )
+
+_MIN_TIME = datetime.min.replace(tzinfo=TZ)
 
 _CN_TASK_MAP = [
     (re.compile(r"大作业\s*([一二三四五六七八九十\d]+)?"), "project"),
@@ -96,7 +100,7 @@ class Deduplicator:
             [c for c in candidates if c.task_name_raw.strip()],
             key=lambda c: (
                 normalize_task_name(c.task_name_raw),
-                c.published_at,
+                c.published_at or _MIN_TIME,
                 c.source_name,
                 c.candidate_id,
             ),
@@ -157,4 +161,5 @@ def clusters_without_dedup(candidates: list[DeadlineCandidate]) -> list[TaskClus
 
 
 def _rank_key(candidate: DeadlineCandidate) -> tuple[int, object]:
-    return (SOURCE_CREDIBILITY.get(candidate.source_type, 0), candidate.published_at)
+    return (SOURCE_CREDIBILITY.get(candidate.source_type, 0),
+            candidate.published_at or _MIN_TIME)

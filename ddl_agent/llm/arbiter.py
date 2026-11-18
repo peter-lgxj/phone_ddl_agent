@@ -55,7 +55,8 @@ class LLMConflictArbiter:
             weight = SOURCE_CREDIBILITY.get(candidate.source_type, 0)
             lines.append(
                 f"{position}. {candidate.deadline_iso} | 来源={candidate.source_type}"
-                f"（可信度 {weight}）| 发布={candidate.published_at.isoformat()}"
+                f"（可信度 {weight}）| 发布="
+                f"{candidate.published_at.isoformat() if candidate.published_at else 'unknown'}"
                 f" | 原文={candidate.deadline_raw or '-'}"
                 f" | 抽取置信度={candidate.extractor_confidence if candidate.extractor_confidence is not None else '-'}"
             )

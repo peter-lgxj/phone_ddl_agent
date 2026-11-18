@@ -12,8 +12,9 @@
   那是 uiautomator2 的既有机制，不是本项目的部署。
 - 一句话：**电脑上的 agent 通过 ADB 操作手机 GUI**，把手机里的群聊和邮件 DDL 汇总成日历。
 
-> 当前手机优先方向（微信/QQ/Outlook App 读屏、目标定位、手机系统日历写入）**未经真实数据验证**；
-> 离线测试使用本地 `.eml` 与聊天归档替身。
+> 手机读屏已在单台真机、微信「文件传输助手」自聊会话上做过一次只读验证
+> （见 `docs/real-device-test-report.md`）；真实课程群、QQ / Outlook App、图片型 DDL
+> 与真实实验数据仍未验证。
 >
 > Outlook **只走手机 App 读屏**，不接 Microsoft Graph；Graph 相关代码只是保留的未启用骨架，
 > 不是可切换的第二条读取路径。
@@ -71,7 +72,8 @@ set DDL_EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
 
 逐条 proposal 符合度、RQ4 消融与三种相似度的前后对比数字见
 [docs/proposal-compliance.md](docs/proposal-compliance.md)。
-所有数字来自合成数据；真实设备、真实账号与用户研究尚未验证。
+所有数字来自合成数据；真机只做过单机、单账号自聊会话的只读读取验证
+（`docs/real-device-test-report.md`），真实群聊、QQ / Outlook 与用户研究尚未验证。
 
 ## 环境与安装
 
@@ -92,7 +94,7 @@ pip install -r requirements.txt
 
 用 `adb devices` 确认手机已连接并完成授权。将 `.env.example` 复制为 `.env`，填写所使用服务的密钥。默认执行模型与规划模型都是 `deepseek`（`deepseek-flash`，读 `DEEPSEEK_API_KEY`）；执行模型可切回 `qwen`（`qwen-vl-max`，读 `DASHSCOPE_API_KEY`）。其他模型与接口配置见 `config.py`。
 
-首次运行会通过 EasyOCR 下载中文识别模型（需要联网，体积较大）；截图定位还依赖 uiautomator2 在手机上安装的自动化组件。
+首次运行默认使用 RapidOCR，会下载对应的 ONNX 模型（需要联网，体积较小）；只有显式设置 `OCR_ENGINE=easyocr` 时才会使用 EasyOCR 及其模型。截图定位还依赖 uiautomator2 在手机上安装的自动化组件。
 
 `.env`、任务运行记录和手机界面导出文件不提交到仓库。
 
@@ -196,7 +198,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 
 ## 单步耗时与优化
 
-真机（1080×2374）一次 10 步任务实测 331.8s，约 **33.2s/步**。各阶段实测/估算：
+真机读取实测（OPPO PLJ110 / Android 16 / 1080×2374，微信自聊会话，10 步）：修复前 81.42s（8.14s/步），开启滚动观察与 OCR 后 105.59s（10.56s/步），其中 OCR 26.27s。完整记录见 `docs/real-device-test-report.md`；这是单次结果，不作为稳定性能指标。
 
 | 阶段 | 耗时 | 说明 |
 |---|---|---|
@@ -219,7 +221,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 6. OCR 引擎换成 RapidOCR（`OCR_ENGINE=rapidocr`，ONNX Runtime，跳过方向分类），并默认按 `OCR_SCALE=0.5` 缩小后再识别：1080×2374 真机截图实测 1.2–1.5s（不缩放约 1.3–1.6s；机器并行负载高时两者都会到 5–8s）。EasyOCR 路径保留，可切回对照；
 7. 每步 `step_NNN.json` 新增 `timings`（screenshot/ocr_pre/ocr/ocr_triggered/ocr_reason/snap_source/snap_tree/snap_ocr/ocr_snap/preprocess/semantic/decision/decide_total/execute/observe/completion），便于统计触发率与省下的时间。
 
-按上表估算：每步请求数 4 → **2**；不触发定位的步骤约 **8–10s**，tap 步控件树命中时约 **8–10s**，退到 OCR 时约 **10–12s**。以上为按实测阶段耗时推算；OCR 耗时是在本机截图上实测的，整步耗时未在真机上重跑（手机已拔线）。
+按上表估算：每步请求数 4 → **2**；不触发定位的步骤约 **8–10s**，tap 步控件树命中时约 **8–10s**，退到 OCR 时约 **10–12s**。以上为按阶段耗时推算；整步耗时以真机单次实测为准（见上方报告链接），不作为稳定性能指标。
 
 `OCR_SCALE` 取舍（同一批图片实测，二次调用、机器空闲）：
 
@@ -320,7 +322,7 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（95 个用例，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 测试与工程化：`tests/`（229 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
@@ -424,9 +426,9 @@ python experiments/run_experiment.py --baseline openautoglm \
 
 CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
 
-## 已知限制（未在真实环境验证）
+## 已知限制（部分真机验证）
 
-- 全部运行时行为（点击坐标、OCR 识别、模型决策、重试、跨 App 信息传递）只经过代码审查与导入冒烟，未在真机上跑通。
+- 单机、单账号、微信「文件传输助手」自聊会话做过一次只读读取与端到端抽取验证（`docs/real-device-test-report.md`）；真实课程群、QQ / Outlook App、图片型 DDL、点击与输入、跨 App 信息传递仍未在真实环境跑通。
 - 依赖版本：`requirements-lock.txt` 是在 Windows + Python 3.12 的虚拟环境里实际解析得到的；换机器（尤其 GPU/系统不同）需重新 `pip freeze` 替换。
 - 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）的命令、输出解析与配置要求已按上游代码写实，协议用假上游测过；但三个真实系统仍未在本机安装、未接真机联调，命令未实跑。
 - 任务前重置只做「回桌面 + force-stop 已知包名」，**无法自动清除应用内草稿、聊天输入框、剪贴板与输入法状态**；`reset` 字段会区分 `stopped` / `failed` / `not_installed` / `not_mapped`。

@@ -146,6 +146,8 @@ def _sync_source(source: MonitorSource, connector_factory, extractor,
         "new_messages": 0,
         "new_candidates": 0,
         "error": None,
+        "partial": False,
+        "last_status": None,
     }
 
     connector = connector_factory(source) if connector_factory is not None else MobileAppSource(
@@ -158,10 +160,16 @@ def _sync_source(source: MonitorSource, connector_factory, extractor,
         errors.append(f"{source.id}: {exc}")
         return entry
 
-    # 用户配置的时间范围：只保留最近 N 天内的消息
+    # 用户配置的时间范围：只保留最近 N 天内的消息；
+    # 读屏未解析出发布时间的消息不能按时间丢弃，保留并交给抽取器标记复核
     cutoff = now - timedelta(days=max(1, source.lookback_days))
-    fetched = [message for message in fetched if message.published_at >= cutoff]
+    fetched = [
+        message for message in fetched
+        if message.published_at is None or message.published_at >= cutoff
+    ]
 
+    entry["partial"] = bool(getattr(connector, "partial", False))
+    entry["last_status"] = getattr(connector, "last_status", None)
     entry["fetched"] = len(fetched)
     fresh = messages.add(fetched)
     entry["new_messages"] = len(fresh)
@@ -170,7 +178,11 @@ def _sync_source(source: MonitorSource, connector_factory, extractor,
     candidates.add(new_candidates)
     entry["new_candidates"] = len(new_candidates)
 
-    cursor = cursors.advance(source.id, fetched)
+    if entry["partial"]:
+        # 部分结果不能把游标推到本轮：未读到的旧消息下一轮还要能再取
+        cursor = cursors.get(source.id)
+    else:
+        cursor = cursors.advance(source.id, fetched)
     entry["last_timestamp"] = cursor.last_timestamp
     entry["last_message_id"] = cursor.last_message_id
     return entry

@@ -1,7 +1,7 @@
 # PR #1 评审摘要：`fix/p0-run-blockers` → `main`
 
 面向：peter-lgxj、calmmmiu
-范围：52 个 commit（从 main `967c58a` 起），覆盖 P0 阻塞、P1 正确性、P2 实验支撑与工程化。
+范围：90 个 commit（从 main `967c58a` 起，含本次真机读取与证据校验修复），覆盖 P0 阻塞、P1 正确性、P2 实验支撑与工程化。
 
 ---
 
@@ -34,7 +34,7 @@
 - `experiments/run_experiment.py`：重复执行、单/多应用与 baseline 模式、每任务重置、manifest（git SHA/dirty、模型全名、温度、设备信息）
 - `experiments/metrics.py`：TSR、多 App TSR、SE、AT、ST、CS；CS 在判定粒度混合时拒绝计算并给出覆盖率
 - `experiments/baselines/`：stdin/stdout JSON 协议 + 通用子进程适配器 + 三个 wrapper 骨架（**未安装、未联调**）
-- `tests/`：59 个用例，全部不依赖真机/模型；CI 执行 compileall、tasks 校验、dry-run、ruff、pytest
+- `tests/`：229 passed、2 skipped（跳过的是需要本地 embedding 模型的可选用例）；其余用例不依赖真机/模型；CI 执行 compileall、tasks 校验、dry-run、ruff、pytest
 - 依赖：`requirements.txt`（版本下限）+ `requirements-lock.txt`（本机 3.12 解析）+ `requirements-dev.txt`
 - 文档：README 补运行前置、配置表、项目结构、实验用法、权重来源、隐私提示；`test.md` 的 30 步口径与 T19 残留文本已清理
 
@@ -57,15 +57,15 @@
 
 ### 已实跑（本机）
 
-- Python 3.12.14 venv：`pytest` **59 passed**、`ruff` 全绿、`run_experiment.py --dry-run` 通过
-- 模拟 CI（屏蔽 uiautomator2/easyocr/ultralytics/torch/cv2）：**59 passed，0 skipped**
-- 全模块导入冒烟（torch/easyocr 环境）
-- GitHub Actions：最新提交 #17/#18 **success**，日志实测 `All checks passed!` + `59 passed`
+- Python 3.12.14 venv：`pytest` **229 passed、2 skipped**、`ruff` 全绿、`run_experiment.py --dry-run` 通过
+- 真机：OPPO PLJ110 / Android 16 / 1080×2374，微信「文件传输助手」自聊会话，单机、单账号、只读；包括滚动 OCR 观察、timeout 部分结果、端到端抽取，详见 `docs/real-device-test-report.md`
+- GitHub Actions：以本 PR 最新一次 run 为准
 
-### 静态审查/推断（未连真机）
+### 静态审查/有限真机
 
-- 重试边界、观察有效性、context 注入、依赖修正、锁互斥、reset 结果——都有单元测试覆盖逻辑，但**未在真机上验证实际点击/输入效果**
+- 重试边界、观察有效性、context 注入、依赖修正、锁互斥、reset 结果——都有单元测试覆盖逻辑；真机只验证了只读读取与抽取，**未验证实际点击/输入/发送效果**
 - 动作执行、OCR/YOLO 定位、键盘弹出检测只做了代码级检查
+- 真实课程群、QQ / Outlook App、图片型 DDL 未验证；读屏视觉模型的 token/成本未统计
 
 ### 必须真机/真实环境才能确认
 
@@ -81,8 +81,8 @@
 
 | 项 | 状态 |
 |---|---|
-| 真机交互验证 | 缺设备，未执行 |
-| 真实 API 调用 | 缺 key，未执行 |
+| 真机交互验证 | 部分执行：单机自聊会话只读读取与一次端到端抽取；真实群聊/QQ/Outlook 未执行 |
+| 真实 API 调用 | 已执行：DeepSeek 读屏与抽取；稳定性与成本统计未做 |
 | 真实实验数据 | 只有任务集与 runner，无 results/人工判分 |
 | baseline 实装 | 只有协议与 wrapper 骨架，三个系统均未安装 |
 | 权重 | 仓库不含二进制；需从 `peter-lgxj/gui_yolo_model` 取 `best.pt` 放到 `models/input_box.pt`（README 有直链与 sha 校验） |

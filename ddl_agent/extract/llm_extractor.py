@@ -10,6 +10,7 @@ from datetime import datetime
 from ..models import DeadlineCandidate, RawMessage
 from ..settings import TZ
 from ..llm.client import LLMClient, LLMUnavailable
+from .evidence import validate_candidate_evidence
 from .normalizer import TimeNormalizer
 from .rules import RuleExtractor
 
@@ -67,7 +68,7 @@ class LLMDeadlineExtractor:
             source_type=message.source_type,
             source_name=message.source_name,
             sender=message.sender,
-            published=message.published_at.isoformat(),
+            published=message.published_at.isoformat() if message.published_at else "unknown",
             subject=message.subject,
             body=message.body,
         )
@@ -115,21 +116,25 @@ class LLMDeadlineExtractor:
         if iso is None:
             missing.append("deadline")
 
-        return DeadlineCandidate(
-            candidate_id=f"{message.message_id}:llm{index}",
-            task_name_raw=task_name,
-            course=course,
-            deadline_raw=deadline_text,
-            deadline_iso=iso,
-            source_type=message.source_type,
-            source_name=message.source_name,
-            published_at=message.published_at,
-            message_id=message.message_id,
-            message_subject=message.subject,
-            missing_fields=missing,
-            unresolved_time=deadline_text is not None and iso is None,
-            extractor_confidence=confidence,
-            needs_review=needs_review,
+        return validate_candidate_evidence(
+            DeadlineCandidate(
+                candidate_id=f"{message.message_id}:llm{index}",
+                task_name_raw=task_name,
+                course=course,
+                deadline_raw=deadline_text,
+                deadline_iso=iso,
+                source_type=message.source_type,
+                source_name=message.source_name,
+                published_at=message.published_at,
+                message_id=message.message_id,
+                message_subject=message.subject,
+                missing_fields=missing,
+                unresolved_time=deadline_text is not None and iso is None,
+                extractor_confidence=confidence,
+                needs_review=needs_review or message.needs_review,
+                review_reason=message.review_reason,
+            ),
+            message.body,
         )
 
 

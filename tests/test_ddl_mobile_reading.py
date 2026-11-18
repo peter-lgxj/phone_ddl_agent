@@ -9,7 +9,11 @@ import pytest
 import screen_agent
 from ddl_agent.connectors.base import SourceError
 from ddl_agent.connectors.mobile_chat import MobileChatConnector
-from ddl_agent.models import RetrievalPlan
+from ddl_agent.connectors.mobile_reading import parse_time_token, split_observation
+from ddl_agent.models import RawMessage, RetrievalPlan
+from ddl_agent.monitor.config import MonitorSource
+from ddl_agent.monitor.cursor import CursorStore
+from ddl_agent.monitor.sources import MobileAppSource
 
 
 class FakeAgent:
@@ -162,3 +166,79 @@ def test_observe_keeps_model_only_when_ocr_disabled(monkeypatch):
 
     assert observation == "这是微信聊天界面"
     assert ocr.calls == 0
+
+
+def _monitor_source() -> MonitorSource:
+    return MonitorSource(
+        id="wechat-course", app="wechat", kind="group",
+        target="COMP7608 课程群", source_type="instructor_chat",
+    )
+
+
+def test_monitor_source_timeout_returns_partial_messages(tmp_path):
+    (tmp_path / "step_001.json").write_text("{}", encoding="utf-8")
+    agent = FakeAgent(
+        tmp_path,
+        ["发送者：TA Chen 时间：2026-11-18 13:39 原文：HW1 截止 11月20日 23:59"],
+        "timeout",
+    )
+    source = MobileAppSource(_monitor_source(), agent=agent, use_device_lock=False)
+
+    messages = source.fetch()
+
+    assert len(messages) == 1
+    assert source.partial is True
+    assert source.last_status == "timeout"
+    assert messages[0].sender == "TA Chen"
+    assert messages[0].published_at.isoformat() == "2026-11-18T13:39:00+08:00"
+    assert messages[0].needs_review is False
+
+
+def test_monitor_and_connector_parse_the_same_observation(tmp_path):
+    observation = "发送者：TA Chen 时间：2026-11-18 13:39 原文：HW1 截止 11月20日 23:59"
+    agent = FakeAgent(tmp_path, [observation], "done")
+    source = MobileAppSource(_monitor_source(), agent=agent, use_device_lock=False)
+    monitor_messages = source.fetch()
+
+    connector = MobileChatConnector("wechat-course", "课程群", agent=agent,
+                                    use_device_lock=False)
+    connector_messages = connector.fetch(RetrievalPlan(query="ddl"))
+
+    left, right = monitor_messages[0], connector_messages[0]
+    assert (left.sender, left.body, left.published_at) == (
+        right.sender, right.body, right.published_at
+    )
+    assert left.needs_review is False and right.needs_review is False
+
+
+def test_unparseable_time_is_blank_and_flagged():
+    parsed = split_observation(
+        "发送者：某人 时间：13:39 原文：作业截止 11月20日",
+        now=SimpleNamespace(year=2026),
+    )
+    assert len(parsed) == 1
+    assert parsed[0].sender == "某人"
+    assert parsed[0].published_at is None
+    assert parsed[0].needs_review is True
+    assert "日期" in parsed[0].review_reason
+
+
+def test_time_parser_rejects_invalid_date():
+    parsed, reason = parse_time_token("2026-11-31 23:59")
+    assert parsed is None
+    assert "无法解析" in reason
+
+
+def test_cursor_does_not_advance_when_all_messages_have_no_time(tmp_path):
+    store = CursorStore(tmp_path / "cursors.json")
+    message = RawMessage(
+        message_id="m1", source_name="群", source_type="student_chat",
+        sender="", published_at=None, subject="", body="作业截止 11月20日",
+        needs_review=True,
+    )
+
+    cursor = store.advance("wechat-course", [message])
+
+    assert cursor.last_timestamp is None
+    assert cursor.last_message_id is None
+

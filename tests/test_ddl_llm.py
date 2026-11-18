@@ -114,7 +114,8 @@ def test_llm_extractor_normalizes_and_flags_review():
         {"task_name": "Assignment 3", "course": "COMP7608", "deadline_text": "月底前",
          "deadline_iso": None, "confidence": 0.3, "needs_review": True},
     ]])
-    candidates = LLMDeadlineExtractor(client).extract([_message("...")], now=NOW)
+    body = "COMP7608 HW2 is due Dec 8 23:59; Assignment 3 is due by the end of the month."
+    candidates = LLMDeadlineExtractor(client).extract([_message(body)], now=NOW)
     assert len(candidates) == 2
     assert candidates[0].deadline_iso == ISO_A
     assert candidates[0].needs_review is False

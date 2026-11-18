@@ -94,7 +94,8 @@ class LLMSinglePassBaseline:
         now = now or datetime.now(TZ)
         blocks = [
             f"[{index}] {message.source_type} | {message.source_name} | "
-            f"{message.published_at.isoformat()}\n{message.subject}\n{message.body}"
+            f"{message.published_at.isoformat() if message.published_at else 'unknown'}\n"
+            f"{message.subject}\n{message.body}"
             for index, message in enumerate(messages, start=1)
         ]
         prompt = _PROMPT.format(now=now.isoformat(), messages="\n\n".join(blocks))

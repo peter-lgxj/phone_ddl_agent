@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Callable
 
 from .models import DeadlineCandidate, ResolvedRecord, RetrievalPlan, TaskCluster
@@ -19,7 +20,10 @@ from .settings import (
     CONFIDENCE_UNCERTAIN,
     MAX_SUPPLEMENTARY_ROUNDS,
     SOURCE_CREDIBILITY,
+    TZ,
 )
+
+_MIN_TIME = datetime.min.replace(tzinfo=TZ)
 
 SupplementaryFn = Callable[[RetrievalPlan | None, TaskCluster, int], list[DeadlineCandidate]]
 
@@ -263,7 +267,11 @@ class ConflictResolver:
                 winner=winner,
             )
 
-        latest = max(candidate.published_at for candidate in top_group)
+        dated_times = [candidate.published_at for candidate in top_group
+                       if candidate.published_at is not None]
+        if not dated_times:
+            return None
+        latest = max(dated_times)
         latest_group = [candidate for candidate in top_group if candidate.published_at == latest]
         if len({candidate.deadline_iso for candidate in latest_group}) == 1:
             winner = _best(latest_group)
@@ -302,7 +310,9 @@ def _credibility(candidate: DeadlineCandidate) -> int:
 def _best(candidates: list[DeadlineCandidate]) -> DeadlineCandidate | None:
     if not candidates:
         return None
-    return max(candidates, key=lambda c: (_credibility(c), c.published_at, c.candidate_id))
+    return max(candidates, key=lambda c: (
+        _credibility(c), c.published_at or _MIN_TIME, c.candidate_id
+    ))
 
 
 def _describe(candidate: DeadlineCandidate | None) -> str:

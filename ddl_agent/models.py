@@ -43,11 +43,14 @@ class RawMessage:
     source_name: str
     source_type: SourceType
     sender: str
-    published_at: datetime
+    published_at: datetime | None
     subject: str
     body: str
     evidence_path: str | None = None
     thread_id: str | None = None
+    # 读屏无法解析真实发送者/发布时间时置位，供抽取与输出标记复核
+    needs_review: bool = False
+    review_reason: str = ""
 
 
 @dataclass
@@ -91,7 +94,7 @@ class DeadlineCandidate:
     deadline_iso: str | None
     source_type: SourceType
     source_name: str
-    published_at: datetime
+    published_at: datetime | None
     message_id: str
     message_subject: str = ""
     missing_fields: list[str] = field(default_factory=list)
@@ -99,6 +102,7 @@ class DeadlineCandidate:
     # LLM 抽取的置信度与是否需要人工复核（规则抽取保持 None/False）
     extractor_confidence: float | None = None
     needs_review: bool = False
+    review_reason: str = ""
 
     @property
     def has_deadline(self) -> bool:

@@ -9,6 +9,7 @@ import re
 from datetime import datetime
 
 from ..models import DeadlineCandidate, RawMessage
+from .evidence import validate_candidate_evidence
 from .normalizer import TimeNormalizer
 
 _TASK_PATTERNS = [
@@ -147,19 +148,24 @@ class RuleExtractor:
             seen.add(key)
 
             results.append(
-                DeadlineCandidate(
-                    candidate_id=f"{message.message_id}:{index}",
-                    task_name_raw=task_name,
-                    course=normalize_course(course),
-                    deadline_raw=normalized.matched_text,
-                    deadline_iso=normalized.iso,
-                    source_type=message.source_type,
-                    source_name=message.source_name,
-                    published_at=message.published_at,
-                    message_id=message.message_id,
-                    message_subject=message.subject,
-                    missing_fields=sorted(set(missing)),
-                    unresolved_time=normalized.unresolved,
+                validate_candidate_evidence(
+                    DeadlineCandidate(
+                        candidate_id=f"{message.message_id}:{index}",
+                        task_name_raw=task_name,
+                        course=normalize_course(course),
+                        deadline_raw=normalized.matched_text,
+                        deadline_iso=normalized.iso,
+                        source_type=message.source_type,
+                        source_name=message.source_name,
+                        published_at=message.published_at,
+                        message_id=message.message_id,
+                        message_subject=message.subject,
+                        missing_fields=sorted(set(missing)),
+                        unresolved_time=normalized.unresolved,
+                        needs_review=message.needs_review,
+                        review_reason=message.review_reason,
+                    ),
+                    message.body,
                 )
             )
         return results

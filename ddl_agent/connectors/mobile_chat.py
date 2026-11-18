@@ -1,9 +1,8 @@
 """手机 GUI 自动化聊天连接器。
 
 复用现有手机自动化层（``ScreenAgent`` + OCR/控件树 + 留证目录）读取微信/QQ 聊天。
-
-**状态：未经真机验证。** 设备已拔线，当前只保证接口与解析逻辑可用；
-真正跑通需要手机在线、微信/QQ 已登录，并建议外层套 ``device_lock``。
+读屏结果由 ``mobile_reading`` 统一拆分：真实发送者/时间能解析就填，解析不出来就置空
+并标记 ``needs_review``；到达步数上限时返回部分结果，不丢弃已归档观察。
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ from typing import Any
 from ..models import RawMessage, RetrievalPlan, SourceType
 from ..settings import TZ
 from .base import SourceError, SourceNotConfigured, message_in_plan
+from .mobile_reading import build_mobile_messages
 
 
 class MobileChatConnector:
@@ -93,32 +93,14 @@ class MobileChatConnector:
         return self.agent
 
     def _messages_from_steps(self, agent) -> list[RawMessage]:
-        memory = getattr(agent, "last_memory", None)
-        steps = list(getattr(memory, "steps", []) or [])
-        run_dir = Path(getattr(agent, "run_dir", "") or ".")
-        now = datetime.now(TZ)
-        messages: list[RawMessage] = []
-
-        for step in steps:
-            observation = str(step.get("observation") or "").strip()
-            if not observation:
-                continue
-            step_no = int(step.get("step") or len(messages) + 1)
-            evidence = run_dir / f"step_{step_no:03d}.json"
-            messages.append(
-                RawMessage(
-                    message_id=f"{self.name}-step-{step_no:03d}",
-                    source_name=self.name,
-                    source_type=self.source_type,
-                    sender=str(step.get("action", {}).get("sender") or self.contact),
-                    published_at=now,
-                    subject=f"{self.app} / {self.contact}",
-                    body=observation,
-                    evidence_path=str(evidence) if evidence.exists() else self._run_json(run_dir),
-                    thread_id=f"{self.app}:{self.contact}",
-                )
-            )
-        return messages
+        return build_mobile_messages(
+            agent,
+            source_name=self.name,
+            source_type=self.source_type,
+            subject=f"{self.app} / {self.contact}",
+            thread_id=f"{self.app}:{self.contact}",
+            message_prefix=f"{self.name}-",
+        )
 
     @staticmethod
     def _run_json(run_dir: Path) -> str | None:

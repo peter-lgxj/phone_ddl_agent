@@ -36,12 +36,14 @@ class CursorStore:
 
     def advance(self, source_id: str, messages: list[RawMessage]) -> Cursor:
         cursor = self.get(source_id)
-        if messages:
-            latest = max(messages, key=lambda message: (message.published_at, message.message_id))
+        dated = [message for message in messages if message.published_at is not None]
+        if dated:
+            latest = max(dated, key=lambda message: (message.published_at, message.message_id))
             timestamp = latest.published_at.astimezone(TZ).isoformat(timespec="seconds")
             if cursor.last_timestamp is None or timestamp >= cursor.last_timestamp:
                 cursor.last_timestamp = timestamp
                 cursor.last_message_id = latest.message_id
+        # 没有任何可解析发布时间时保持游标不动，避免把“本轮”刷成伪时间
         cursor.baseline_done = True
         self._data[source_id] = cursor
         self.save()
@@ -135,11 +137,13 @@ def _message_to_dict(message: RawMessage) -> dict:
         "source_name": message.source_name,
         "source_type": message.source_type,
         "sender": message.sender,
-        "published_at": message.published_at.isoformat(),
+        "published_at": message.published_at.isoformat() if message.published_at else None,
         "subject": message.subject,
         "body": message.body,
         "evidence_path": message.evidence_path,
         "thread_id": message.thread_id,
+        "needs_review": message.needs_review,
+        "review_reason": message.review_reason,
     }
 
 
@@ -148,12 +152,16 @@ def _message_from_dict(item: dict) -> RawMessage:
         message_id=item["message_id"],
         source_name=item["source_name"],
         source_type=item["source_type"],
-        sender=item.get("sender") or "unknown",
-        published_at=datetime.fromisoformat(item["published_at"]),
+        sender=item.get("sender") or "",
+        published_at=(
+            datetime.fromisoformat(item["published_at"]) if item.get("published_at") else None
+        ),
         subject=item.get("subject") or "",
         body=item.get("body") or "",
         evidence_path=item.get("evidence_path"),
         thread_id=item.get("thread_id"),
+        needs_review=bool(item.get("needs_review")),
+        review_reason=item.get("review_reason") or "",
     )
 
 
@@ -166,13 +174,14 @@ def _candidate_to_dict(candidate: DeadlineCandidate) -> dict:
         "deadline_iso": candidate.deadline_iso,
         "source_type": candidate.source_type,
         "source_name": candidate.source_name,
-        "published_at": candidate.published_at.isoformat(),
+        "published_at": candidate.published_at.isoformat() if candidate.published_at else None,
         "message_id": candidate.message_id,
         "message_subject": candidate.message_subject,
         "missing_fields": candidate.missing_fields,
         "unresolved_time": candidate.unresolved_time,
         "extractor_confidence": candidate.extractor_confidence,
         "needs_review": candidate.needs_review,
+        "review_reason": candidate.review_reason,
     }
 
 
@@ -185,11 +194,14 @@ def _candidate_from_dict(item: dict) -> DeadlineCandidate:
         deadline_iso=item.get("deadline_iso"),
         source_type=item["source_type"],
         source_name=item["source_name"],
-        published_at=datetime.fromisoformat(item["published_at"]),
+        published_at=(
+            datetime.fromisoformat(item["published_at"]) if item.get("published_at") else None
+        ),
         message_id=item["message_id"],
         message_subject=item.get("message_subject") or "",
         missing_fields=item.get("missing_fields") or [],
         unresolved_time=bool(item.get("unresolved_time")),
         extractor_confidence=item.get("extractor_confidence"),
         needs_review=bool(item.get("needs_review")),
+        review_reason=item.get("review_reason") or "",
     )
