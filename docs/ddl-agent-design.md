@@ -130,11 +130,15 @@ Windows 用户双击仓库根目录的 `run_ddl_monitor.bat` 即可：脚本先�
 
 | 现有模块 | 复用方式 | 边界 |
 |---|---|---|
-| `screen_agent.ScreenAgent` | `MobileChatConnector` 以自然语言任务驱动其执行“打开微信 → 进入指定群/会话 → 向上翻页读取消息” | 只调用公开方法，不改行为 |
-| `ocr_locator.OCRLocator` / `detect_tree` / `snap_action_coords` | 由 ScreenAgent 内部使用；连接器不直接调用 | 不改接口 |
+| `screen_agent.ScreenAgent` | `MobileChatConnector` 以自然语言任务驱动其执行“打开微信 → 进入指定群/会话 → 向上翻页读取消息” | 复用公开接口；滚动观察新增逐条消息提示与 OCR 叠加 |
+| `ocr_locator.OCRLocator` / `detect_tree` / `snap_action_coords` | 由 ScreenAgent 内部使用；滚动观察时 `detect_ocr` 的文本会并入 observation | 不改 OCR 接口 |
 | `phone_controller.PhoneController` | 由 ScreenAgent 内部使用（截图、tap、type_text） | 不改接口 |
 | `device_lock.DeviceLock` | 连接器在整段读取周期外层加锁，防止与其他实验并发操作手机 | 只读复用 |
 | `runs/` 留证目录 | 连接器把每步截图与 `step_NNN.json` 作为 `RawMessage.evidence_path` | 只读复用 |
+
+真机只读验证（2026-11-18，微信「文件传输助手」）：ScreenAgent 能进入目标会话并滚动留证；
+滚动观察叠加 OCR 后，10 步产生 10 条非零消息文本（修复前为 0 条）。到达步数上限时
+`MobileChatConnector` 返回已采集观察，并带 `partial=true` / `last_status=timeout`，不再丢弃证据。
 
 其余部分（规划、抽取、去重、冲突、写入、评测、数据集）**全部新建**于 `ddl_agent/` 包内。
 
@@ -153,7 +157,7 @@ class MessageSource(Protocol):
 
 | 实现 | 状态 | 说明 |
 |---|---|---|
-| `MobileAppSource`（微信 / QQ / Outlook） | **主路径，未经真机验证** | 通过 ScreenAgent 在 App 内搜索/滚动定位目标会话，读取屏幕消息 |
+| `MobileAppSource`（微信 / QQ / Outlook） | **主路径；真机只读读取已验证一次** | 通过 ScreenAgent 在 App 内搜索/滚动定位目标会话，读取屏幕消息；未覆盖真实课程群/第三方会话 |
 | `LocalEmlConnector` | 离线测试替身 | 读取 `*.eml` 目录；无手机时跑通全链路 |
 | `LocalChatConnector` | 离线测试替身 | 读取聊天归档 JSON；无手机时跑通全链路 |
 | `GraphMailConnector` | 不在主路径 | 将来可选实现的代码骨架；当前不启用、不测试、不作为交付能力 |

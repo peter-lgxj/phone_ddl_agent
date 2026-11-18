@@ -137,6 +137,17 @@ OCR_SCALE = float(os.getenv("OCR_SCALE", "0.5"))
 # 动作执行后等待界面稳定的秒数（再截图观察）
 OBSERVE_SETTLE_SECONDS = float(os.getenv("OBSERVE_SETTLE_SECONDS", "1.0"))
 
+# 滚动观察时是否额外跑 OCR：模型只给概括时，仍能把屏幕文字带进 observation。
+# 开关默认开启，只对 OBSERVE_OCR_ACTIONS 中的动作生效，不影响点击/输入等场景。
+OBSERVE_OCR_ENABLED = os.getenv("OBSERVE_OCR_ENABLED", "1").strip().lower() not in (
+    "0", "false", "off", ""
+)
+OBSERVE_OCR_ACTIONS = {
+    item.strip().lower()
+    for item in os.getenv("OBSERVE_OCR_ACTIONS", "swipe,scroll").split(",")
+    if item.strip()
+}
+
 ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "runs")  # 每步截图与动作记录的归档目录
 
 # 历史上下文窗口：只带最近 N 张历史原图（当前屏幕始终带图），更早步骤压成文字摘要。

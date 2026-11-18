@@ -32,8 +32,15 @@ class MobileChatConnector:
         self.agent_factory = agent_factory
         self.source_type = source_type
         self.use_device_lock = use_device_lock
+        # 最近一次 fetch 的完成度：timeout 时仍返回已归档的观察，但标记 partial
+        self.partial = False
+        self.last_status: str | None = None
+        self.last_fetch_meta: dict[str, Any] = {}
 
     def fetch(self, plan: RetrievalPlan) -> list[RawMessage]:
+        self.partial = False
+        self.last_status = None
+        self.last_fetch_meta = {}
         agent = self._get_agent()
         task = (
             f"打开{self.app}，进入与「{self.contact}」的聊天窗口，向上翻阅最近消息，"
@@ -53,14 +60,24 @@ class MobileChatConnector:
             agent.run(task)
 
         status = getattr(agent, "last_status", None)
-        if status in ("failed", "timeout"):
-            raise SourceError(f"手机读取未完成（status={status}）")
+        self.last_status = status
+        if status == "failed":
+            raise SourceError(f"手机读取失败（status={status}）")
+        if status == "timeout":
+            # 到达步数上限不等于没读到：把已归档的观察交给上层，由调用方决定是否使用
+            self.partial = True
 
-        return [
+        messages = [
             message
             for message in self._messages_from_steps(agent)
             if message_in_plan(message, plan)
         ]
+        self.last_fetch_meta = {
+            "partial": self.partial,
+            "last_status": status,
+            "message_count": len(messages),
+        }
+        return messages
 
     def _get_agent(self):
         if self.agent is not None:

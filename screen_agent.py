@@ -56,6 +56,68 @@ def make_run_dir(name: str) -> Path:
     return path
 
 
+def build_observe_question(last_action: dict, memory) -> str:
+    """按动作类型构造观察问题。
+
+    滚动类动作不能只让模型说一句“这是某界面”，否则聊天正文永远进不了
+    observation；这里要求逐条列出可见消息，作为 OCR 之外的第一层文本来源。
+    """
+    action_type = str(last_action.get("action_type") or "").lower()
+    action_desc = last_action.get("description", "")
+
+    if action_type == "type":
+        text = last_action.get("text", "")
+        return (
+            f"输入框里是否有文字'{text}'？"
+            f"有则说'输入成功，输入框显示:{text}'，没有则说'输入失败，输入框为空'"
+        )
+    if action_type in ("send", "press_enter"):
+        sent_text = ""
+        for step in reversed(getattr(memory, "steps", [])):
+            if step.get("action_type") == "type":
+                sent_text = step.get("text", "")
+                break
+        return (
+            f"聊天记录最底部是否出现了内容为'{sent_text}'的消息？"
+            f"出现了说'发送成功，消息内容:{sent_text}'，没有说'发送失败'"
+        )
+    if action_type == "tap":
+        return (
+            f"点击'{action_desc}'后：\n"
+            f"1. 当前在什么界面？\n"
+            f"2. 屏幕上有哪些重要的文字内容？请完整列出原文\n"
+            f"请用'当前界面:[界面名]，关键内容:[完整原文]'的格式回复"
+        )
+    if action_type == "open_app":
+        app = last_action.get("app_name", "")
+        return f"{app}是否已打开？用一句话描述当前界面。"
+    if action_type in ("swipe", "scroll"):
+        return (
+            f"执行“{action_desc or action_type}”后，请逐条列出当前屏幕上可见的消息，"
+            "每条尽量包含发送者、时间和消息原文；按屏幕从上到下的顺序输出，"
+            "不要概括、不要合并多条。忽略状态栏、输入框、底部导航和按钮等系统 UI 文字。"
+            "如果没有任何消息文本，只回复“未看到消息文本”。"
+        )
+    return "用一句话描述当前手机屏幕是什么界面。"
+
+
+def format_ocr_observation(elements: list[dict]) -> str:
+    """把 OCR 元素按屏幕阅读顺序拼成文本，供 observation 使用。"""
+    def _key(item: dict) -> tuple[int, int]:
+        bbox = item.get("bbox") or (0, 0, 0, 0)
+        return (int(bbox[1]), int(bbox[0]))
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for item in sorted(elements, key=_key):
+        text = str(item.get("text") or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        lines.append(text)
+    return "\n".join(lines)
+
+
 class ScreenAgent:
 
     ACTIONS = """
@@ -118,6 +180,7 @@ class ScreenAgent:
         self._last_model_action = None   # 缩放时模型返回的原始坐标（未反算）
         self._last_decision_timings = {}  # 决策各阶段耗时
         self._last_step_timings = {}      # 整步各阶段耗时（写进 step json）
+        self._last_observe_ocr_seconds = 0.0  # 本步滚动 OCR 耗时（未触发为 0）
 
         print(f"视觉模型：{provider_name} / {self.model}")
         print(f"语义模型：{planner_name} / {self.text_model}")
@@ -489,44 +552,16 @@ class ScreenAgent:
             print(f"│  ⚠️  旧观察截图无法删除（{e}），完成检测前会再次尝试")
 
     def _observe(self, last_action: dict, memory: TaskMemory) -> str:
-        """执行动作后截图，VL 模型描述结果（原始输出，不做额外处理）"""
+        """执行动作后截图，VL 模型描述结果；滚动类动作再叠加 OCR 文本。"""
         time.sleep(float(getattr(config, "OBSERVE_SETTLE_SECONDS", 1.0)))
         self._clear_observe_shot()   # 先删旧图：截图失败时不会留下过期画面
+        self._last_observe_ocr_seconds = 0.0
         self.phone.screenshot("screen_observe.png")
         observe_bytes, observe_meta = image_preprocess.prepare_image_bytes("screen_observe.png")
         image_b64 = base64.b64encode(observe_bytes).decode("utf-8")
 
-        action_type = last_action.get("action_type", "")
-        action_desc = last_action.get("description", "")
-
-        if action_type == "type":
-            text = last_action.get("text", "")
-            verify_question = (
-                f"输入框里是否有文字'{text}'？"
-                f"有则说'输入成功，输入框显示:{text}'，没有则说'输入失败，输入框为空'"
-            )
-        elif action_type in ("send", "press_enter"):
-            sent_text = ""
-            for step in reversed(memory.steps):
-                if step["action_type"] == "type":
-                    sent_text = step.get("text", "")
-                    break
-            verify_question = (
-                f"聊天记录最底部是否出现了内容为'{sent_text}'的消息？"
-                f"出现了说'发送成功，消息内容:{sent_text}'，没有说'发送失败'"
-            )
-        elif action_type == "tap":
-            verify_question = (
-                f"点击'{action_desc}'后：\n"
-                f"1. 当前在什么界面？\n"
-                f"2. 屏幕上有哪些重要的文字内容？请完整列出原文\n"
-                f"请用'当前界面:[界面名]，关键内容:[完整原文]'的格式回复"
-            )
-        elif action_type == "open_app":
-            app = last_action.get("app_name", "")
-            verify_question = f"{app}是否已打开？用一句话描述当前界面。"
-        else:
-            verify_question = "用一句话描述当前手机屏幕是什么界面。"
+        action_type = str(last_action.get("action_type") or "").lower()
+        verify_question = build_observe_question(last_action, memory)
 
         response = self.client.chat.completions.create(
             model=self.model,
@@ -548,7 +583,26 @@ class ScreenAgent:
             ],
             extra_body=getattr(self, "extra_body", None),
         )
-        return response.choices[0].message.content.strip()
+        observation = response.choices[0].message.content.strip()
+
+        ocr_actions = getattr(config, "OBSERVE_OCR_ACTIONS", {"swipe", "scroll"})
+        if (
+            getattr(config, "OBSERVE_OCR_ENABLED", False)
+            and action_type in ocr_actions
+        ):
+            try:
+                started = time.perf_counter()
+                elements = self.ocr.detect_ocr("screen_observe.png")
+                ocr_text = format_ocr_observation(elements)
+                elapsed = round(time.perf_counter() - started, 2)
+                self._last_observe_ocr_seconds = elapsed
+                if ocr_text and ocr_text not in observation:
+                    observation = f"{observation}\n[OCR]\n{ocr_text}"
+                print(f"│  🔎  滚动 OCR：{len(elements)} 个文本框，{elapsed}s")
+            except Exception as e:
+                # OCR 只是补充通道，失败不能中断滚动或让整步失败
+                print(f"│  ⚠️  滚动 OCR 失败，保留模型描述：{e}")
+        return observation
 
     # ══════════════════════════════════════════════════════════
     #  执行（保持原样，不改动）
@@ -733,6 +787,9 @@ class ScreenAgent:
                 self._clear_observe_shot()
                 print(f"│  ⚠️  {observation}")
             timings["observe"] = round(time.time() - started, 2)
+            timings["observe_ocr"] = round(
+                getattr(self, "_last_observe_ocr_seconds", 0.0), 2
+            )
         print(f"│  👁   {observation}")
         ui_state.update_observation(observation)
 
