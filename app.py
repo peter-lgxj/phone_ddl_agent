@@ -1,12 +1,22 @@
 import base64
+import os
+import shutil
 import threading
 import sys
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
 
+from device_lock import device_lock
+from adb_utils import ADB
+
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'mobile_agent_secret'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# 默认值仅用于本地调试；对外暴露时请通过环境变量覆盖
+app.config['SECRET_KEY'] = os.getenv("FLASK_SECRET_KEY", "mobile_agent_secret")
+socketio = SocketIO(
+    app,
+    cors_allowed_origins=os.getenv("CORS_ALLOWED_ORIGINS", "*"),
+    async_mode='threading',
+)
 
 agent_running = False
 
@@ -33,12 +43,22 @@ def encode_image(path: str) -> str:
         return ""
 
 
+def _require_adb():
+    """启动任务前确认 adb 可用，否则报错只指向 FileNotFoundError，难以定位"""
+    if shutil.which("adb") is None:
+        raise RuntimeError(
+            "未找到 adb：请安装 Android Platform Tools 并把 adb 加入 PATH，"
+            "再用 `adb devices` 确认手机已连接且已授权 USB 调试。"
+        )
+
+
 # ── 单任务模式 ─────────────────────────────────────────
 def run_single(task: str):
     global agent_running
     agent_running = True
     sys.stdout = WebLogger(sys.__stdout__)
     try:
+        _require_adb()
         import config
         from screen_agent import ScreenAgent
 
@@ -61,10 +81,14 @@ def run_single(task: str):
                 return obs
 
         import subprocess, time
-        subprocess.run(["adb", "shell", "input", "keyevent", "3"])
-        time.sleep(1)
-        agent = WebAgent(max_steps=config.MAX_STEPS)
-        agent.run(task)
+        with device_lock(timeout=30) as locked:
+            if not locked:
+                raise RuntimeError("设备正被其它任务占用（另一个 Web/CLI/实验任务在运行），请稍后重试")
+            # 回桌面与执行器构造都在锁内，避免与另一个任务的重置互相穿插
+            subprocess.run([ADB, "shell", "input", "keyevent", "3"])
+            time.sleep(1)
+            agent = WebAgent(max_steps=config.MAX_STEPS)
+            agent.run(task)
         socketio.emit('done', {'message': '任务完成'})
     except Exception as e:
         socketio.emit('error', {'message': str(e)})
@@ -80,6 +104,7 @@ def run_multi(task: str):
     agent_running = True
     sys.stdout = WebLogger(sys.__stdout__)
     try:
+        _require_adb()
         import config
         from multi_agent import MultiAppAgent, SubTaskScreenAgent
 
@@ -103,14 +128,18 @@ def run_multi(task: str):
 
         class WebMultiAgent(MultiAppAgent):
             def __init__(self):
-                super().__init__(emit_fn=socketio.emit)
-                self.exec_agent = WebSubAgent(max_steps=config.MAX_STEPS)
+                super().__init__(emit_fn=socketio.emit,
+                                 exec_agent=WebSubAgent(max_steps=config.MAX_STEPS))
 
         import subprocess, time
-        subprocess.run(["adb", "shell", "input", "keyevent", "3"])
-        time.sleep(1)
-        agent = WebMultiAgent()
-        agent.run(task)
+        with device_lock(timeout=30) as locked:
+            if not locked:
+                raise RuntimeError("设备正被其它任务占用（另一个 Web/CLI/实验任务在运行），请稍后重试")
+            # 回桌面与执行器构造都在锁内，避免与另一个任务的重置互相穿插
+            subprocess.run([ADB, "shell", "input", "keyevent", "3"])
+            time.sleep(1)
+            agent = WebMultiAgent()
+            agent.run(task)
         socketio.emit('done', {'message': '多应用任务完成'})
     except Exception as e:
         socketio.emit('error', {'message': str(e)})

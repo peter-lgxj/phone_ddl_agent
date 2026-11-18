@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Parse every Python file
+        run: python -m compileall -q .
+
+      - name: Validate task set JSON
+        run: python -m json.tool experiments/tasks.json > /dev/null
+
+      - name: Experiment runner dry-run
+        run: python experiments/run_experiment.py --tasks experiments/tasks.json --dry-run
+
+      - name: Install test dependencies
+        run: pip install python-dotenv openpyxl PyYAML openai Pillow opencv-python-headless "pytest>=8" "ruff>=0.6"
+
+      - name: Lint (error-level rules only)
+        run: ruff check .
+
+      - name: Unit tests
+        run: pytest -q
+
+  locked-deps:
+    # requirements-lock.txt 在 Windows + Python 3.12 下由 pip freeze 生成（仅锁版本、未带 hash）。
+    # 这里在 ubuntu + 3.12 上按锁文件完整安装一遍，验证锁文件不是“写了没人用”。
+    # 平台说明：Linux 与 Windows 的 wheel 集不同；若某版本在 Linux 缺 wheel，本 job 会失败，
+    # 这本身就是需要知道的信号。将来换成 hash 锁时，下方会自动加 --require-hashes。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies from lock file
+        run: |
+          python -m pip install --upgrade pip
+          if grep -q -- '--hash=' requirements-lock.txt; then
+            pip install --require-hashes -r requirements-lock.txt
+          else
+            pip install -r requirements-lock.txt
+          fi
+
+      - name: Import smoke test
+        run: python -c "import flask, openai, cv2, torch, uiautomator2; print('lock-ok')"

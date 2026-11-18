@@ -2,20 +2,99 @@
 
 使用视觉语言模型理解 Android 手机屏幕，通过 ADB 和 uiautomator2 执行操作；支持任务规划、多应用任务、OCR 定位与网页交互界面。
 
+## 操作模型：电脑驱动手机（先读这一段）
+
+- **操作对象是手机**。微信（群聊/私聊）、QQ（群聊）、Outlook App 收件箱的界面，全部在**手机上**被读取和点击。
+  agent 不会在电脑上打开微信/QQ/Outlook 桌面客户端，也不读取电脑本地邮件
+  （本地 `.eml` / 聊天归档只是没有手机时的离线测试替身）。
+- **运行环境是电脑**。本项目在电脑上运行，通过 **ADB（USB 线或 WiFi 调试）** 驱动手机。
+  手机端**不安装任何本项目组件**，也**不需要 root**。首次使用时 uiautomator2 可能自行安装一个自动化辅助组件，
+  那是 uiautomator2 的既有机制，不是本项目的部署。
+- 一句话：**电脑上的 agent 通过 ADB 操作手机 GUI**，把手机里的群聊和邮件 DDL 汇总成日历。
+
+> 手机读屏已在单台真机、微信「文件传输助手」自聊会话上做过一次只读验证
+> （见 `docs/real-device-test-report.md`）；真实课程群、QQ / Outlook App、图片型 DDL
+> 与真实实验数据仍未验证。
+>
+> Outlook **只走手机 App 读屏**，不接 Microsoft Graph；Graph 相关代码只是保留的未启用骨架，
+> 不是可切换的第二条读取路径。
+
+## 一键启动（Windows）
+
+1. 首次使用，先告诉 agent 要监控什么（自然语言，会写入 `sources.yaml`）：
+
+   ```bash
+   python -m ddl_agent.monitor.cli add "监控微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次"
+   python -m ddl_agent.monitor.cli list
+   ```
+
+2. 双击仓库根目录的 `run_ddl_monitor.bat`。脚本会依次检查 adb、手机是否在线且已授权、设备锁，
+   然后询问「1. 单轮扫描 / 2. 持续监控」，跑完自动刷新并打开 `output/calendar.html`。
+
+3. 产物：`output/deadlines.xlsx`（含审计表）、`data.json`、`deadlines.ics`（可导入系统日历）、`calendar.html`。
+
+没插手机、未授权 USB 调试、找不到 adb、手机被其他窗口占用（设备锁）时，脚本会分别给出对应提示与下一步动作，
+不会抛 Python traceback。详细说明见 [docs/ddl-agent-monitor.md](docs/ddl-agent-monitor.md)。
+
+## 离线评测与消融
+
+```bash
+# 三方对比：Agent-LLM / Agent-规则 / 单次直出 baseline
+python -m ddl_agent.evaluation.run_eval --split test
+
+# RQ4 单模块消融：全开 / 关去重 / 关冲突验证 / 固定来源
+python -m ddl_agent.evaluation.run_eval --ablation --split test \
+  --out experiments/ddl_agent/results/ablation_distractors2
+
+# 语义匹配三策略对比：词法 / 本地 embedding / 组合
+python -m ddl_agent.evaluation.run_eval --similarity-ablation --split test \
+  --out experiments/ddl_agent/results/similarity_test4
+```
+
+数据集里每个样本都带有与查询无关的干扰来源（实习内推群、家人群、社团活动群、其他课程群），
+用于检验动态选源；这些消息不进入 ground truth。
+
+embedding 是**可选**能力：默认不装、不联网也能跑评测。
+
+```bash
+# 安装可选依赖（不进入主 requirements / CI）
+pip install -r requirements-embedding.txt
+
+# 模型与框架缓存默认写到 F 盘；可显式指定
+set DDL_EMBEDDING_CACHE=F:\models\sentence-transformers
+set DDL_EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
+```
+
+首次运行会下载多语种小模型；**离线环境**把整个缓存目录拷到目标机器，或让 `DDL_EMBEDDING_CACHE`
+指向已有目录即可。模型缺失、下载失败或加载异常时，评测自动退回纯词法，报告的
+`similarity.available` 为 `false` 并给出 `fallback_reason`，不会中断流程。
+真实模型用例默认跳过，设置 `RUN_EMBEDDING_TESTS=1` 才执行。
+
+逐条 proposal 符合度、RQ4 消融与三种相似度的前后对比数字见
+[docs/proposal-compliance.md](docs/proposal-compliance.md)。
+所有数字来自合成数据；真机只做过单机、单账号自聊会话的只读读取验证
+（`docs/real-device-test-report.md`），真实群聊、QQ / Outlook 与用户研究尚未验证。
+
 ## 环境与安装
 
 - Python 3.10 或更高版本（具体兼容性取决于依赖版本）
 - Android 手机，开启开发者选项和 USB 调试
-- Android Platform Tools（`adb` 已加入 PATH）
+- Android Platform Tools（`adb` 已加入 PATH；未加入时可用 `ADB_BINARY` 指向 adb 可执行文件，或直接复用 `uiautomator2` 自带的 adb，`adb_utils.py` 会自动兜底）
 - 可用的模型 API 密钥
 
 ```bash
 git clone https://github.com/peter-lgxj/phone_ddl_agent.git
 cd phone_ddl_agent
 pip install -r requirements.txt
+# 需要可复现环境时改用锁定版本（在目标机器上重新生成）：
+# pip install -r requirements-lock.txt
 ```
 
-用 `adb devices` 确认手机已连接并完成授权。将 `.env.example` 复制为 `.env`，填写所使用服务的密钥。默认执行模型为 `qwen`，规划模型为 `qwen3`，均读取 `DASHSCOPE_API_KEY`。其他模型与接口配置见 `config.py`。
+`requirements-lock.txt` 是本项目在 Windows + Python 3.12 下实际解析出的完整版本清单（含传递依赖），仅作为参考基线；实验室机器或 GPU 环境请重新 `pip freeze`。
+
+用 `adb devices` 确认手机已连接并完成授权。将 `.env.example` 复制为 `.env`，填写所使用服务的密钥。默认执行模型与规划模型都是 `deepseek`（`deepseek-flash`，读 `DEEPSEEK_API_KEY`）；执行模型可切回 `qwen`（`qwen-vl-max`，读 `DASHSCOPE_API_KEY`）。其他模型与接口配置见 `config.py`。
+
+首次运行默认使用 RapidOCR，会下载对应的 ONNX 模型（需要联网，体积较小）；只有显式设置 `OCR_ENGINE=easyocr` 时才会使用 EasyOCR 及其模型。截图定位还依赖 uiautomator2 在手机上安装的自动化组件。
 
 `.env`、任务运行记录和手机界面导出文件不提交到仓库。
 
@@ -37,21 +116,345 @@ streamlit run frontend.py
 
 Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mobile_agent` 的 Conda 环境。
 
+可选 Streamlit 界面（`streamlit run frontend.py`）读取 `agent_state.json` 展示每步状态，属于调试用途；`streamlit` 不在必需依赖里，未安装就不用该入口。
+
+## 配置
+
+模型与行为开关集中在 `config.py`，`.env` 只放密钥：
+
+| 配置项 | 说明 |
+|---|---|
+| `ACTIVE_PROVIDER` | 执行模型（视觉），默认 `deepseek` → `deepseek-flash`，需要 `DEEPSEEK_API_KEY`；可设 `qwen` / `zhipu` / `openai` / `local` |
+| `PLANNER_PROVIDER` | 规划/语义模型，默认 `deepseek`（`deepseek-flash`），单任务与多应用模式都读这一项；可切回 `qwen3` |
+| `MAX_STEPS` / `STEP_RETRIES` | 最大步数（默认 30，可用同名环境变量覆盖）与单步失败重试次数 |
+| `LLM_TEMPERATURE` | 决策与观察调用温度，默认 0.0，保证重复实验可比 |
+| `ENABLE_SEMANTIC_ANALYSIS` | 语义分析（每步一次纯文本请求），默认关闭；置 1 可开启消融对比 |
+| `COMPLETION_CHECK` | 完成判断：`decision`（默认，读决策响应里的 `task_done`）/ `every_step`（旧行为，每步额外一次带图请求）/ `off` |
+| `OCR_MODE` | OCR 调用策略：`on_demand`（默认，仅 tap 时跑并吸附落点）/ `always`（旧行为，每步预跑）/ `off` |
+| `OCR_SNAP_MODE` | 吸附路径：`tree_first`（默认，控件树优先、OCR 兜底）/ `ocr_only` / `tree_only` |
+| `OCR_ENGINE` | OCR 引擎：`rapidocr`（默认，ONNX CPU 实测 1.2–1.5s/张）/ `easyocr`（旧实现，12.7–23s/张） |
+| `OCR_SCALE` | OCR 输入图缩放比例，默认 0.5；检测框按 `1/scale` 映射回原图，tap 坐标仍是设备坐标 |
+| `OCR_SNAP_MAX_DISTANCE` | 吸附半径（像素），默认 80；超出则保留模型原始坐标 |
+| `OBSERVE_SETTLE_SECONDS` | 动作后等待界面稳定的秒数，默认 1.0 |
+| `HISTORY_IMAGE_WINDOW` / `HISTORY_TEXT_STEPS` | 历史上下文窗口：带最近几张原图（默认 1，当前屏幕始终带图）、更早步骤最多列几条文字摘要（默认 8）；均可用同名环境变量覆盖 |
+| `IMAGE_PREPROCESS` | 截图预处理总开关（默认开）；置 0 时原样发送 PNG |
+| `IMAGE_JPEG_QUALITY` | JPEG 质量，默认 85；置 0 保留 PNG |
+| `IMAGE_MAX_SIDE` | 等比缩放的边长上限，默认 0（不缩放）。**缩放会破坏坐标一致性，见下节** |
+| `IMAGE_ENHANCE` | 对比度/锐化增强，默认关；不改变几何尺寸 |
+| `ARTIFACT_DIR` | 每步截图与动作记录目录，默认 `runs/` |
+| `WECHAT_INPUT_RESOURCE_ID` | 微信输入框 resource-id，随版本变化，置空即跳过该分支 |
+
+可切换的 provider 见 `config.PROVIDERS`；`qwen3` / `minimax` 是纯文本 provider，不能用作 `ACTIVE_PROVIDER`。
+
+规划器默认用 DeepSeek：`base_url=https://api.deepseek.com`（不要加 `/v1`）、模型 `deepseek-flash`、密钥读 `.env` 的 `DEEPSEEK_API_KEY`。规划器只发文字，不接收截图；实测简单任务约 2 秒、三应用任务约 3.5 秒返回可解析 JSON。若开启 `thinking`（通过 `extra_body` 传 `{"thinking": {"type": "enabled"}}`）会返回 `reasoning_content` 并产生 reasoning token，当前默认关闭以降低延迟；实测开关两种模式返回的 `content` 都是合法 JSON。
+
+## DeepSeek 视觉能力（实测）
+
+官方文档写的是 `deepseek-v4-flash-vision-exp` 已下线、旧名请求由 DeepSeek-V4.1-Flash-1017（即 `deepseek-flash`）承接，字面读起来像是纯文本模型。**实测与该表述不一致：`deepseek-flash` 能正常接收并理解 `image_url`。**
+
+- 控制图法：现场生成含随机编号的图片（`ORDER NO: ZX-739146`、`CNY 4287.35` 等），模型逐字读对，可排除「不报错但忽略图片」。
+- 真实桌面截图（1707×1067）：10.4s，`prompt_tokens=1012`，准确描述图标、窗口与正文段落。
+- 多图：单请求 3 张图（各有唯一编号），三张全部按顺序答对，因此 `support_multi_image=True`。
+- 端到端：走 `ScreenAgent._think_and_act` 的真实调用路径，5.9s 返回 `{"action_type": "tap", "x": 540, "y": 1441, ...}`，字段完整、坐标与真值差 1px。
+
+结论：`deepseek-flash` 可作为执行（视觉）模型；本文档保留「官方文档表述与实测不一致」这条记录，后续如服务端行为变化需重新验证。
+
+### 图片限制与 thinking
+
+- **每张图最多 1024 token**：服务端会把图片缩放到约 1300×1300 等效后再计费，实测 1707×1067 的截图 `prompt_tokens=1012`，已贴近上限。**客户端缩图省不到 token**。
+- **`detail` 语义**：`low` 会压到 512×512（手机界面小字会糊，不要用于执行模型）；`high` / `original` / `auto` 保留原图。实测控制图 `detail=low` 的 `prompt_tokens=240` vs `detail=high` 的 `631`，代价是细节丢失。
+- 图片可放在 user / system / tool 消息；assistant 消息带图会 400；单请求最多 600 张。本项目一次只发 1–3 张，不涉及上限。
+- **thinking 开关**（`extra_body`）：同一张截图四种设置的动作完全一致（都是 `home`，JSON 均合法），但耗时与 reasoning token 差异明显：
+
+  | 设置 | 耗时 | completion_tokens | reasoning_tokens |
+  |---|---|---|---|
+  | `thinking` disabled | 1.42s | 60 | 0 |
+  | `reasoning_effort=low` | 2.01s | 139 | 102 |
+  | 默认（不传） | 3.51s | 404 | 363 |
+  | `thinking` enabled | 3.19s | 296 | 258 |
+
+  质量无差异，因此 provider 默认 `{"thinking": {"type": "disabled"}}`，省时间也省费用。
+
+## 截图预处理与坐标一致性
+
+截图后、发请求前会依次做：编码优化（PNG→JPEG）→ 可选等比缩放 → 可选轻量增强。实现见 `image_preprocess.py`，全部由 `config.py` 的 `IMAGE_*` 开关控制。
+
+**为什么默认不缩放**：实测客户端缩图不会减少 token（服务端本来就封顶 1024/图），但会让模型返回的坐标脱离发送图坐标系，反算后误差远超可接受范围：
+
+| 档位 | 上传字节 | 发送尺寸 | prompt_tokens | 订单号识别 | 坐标误差 |
+|---|---|---|---|---|---|
+| 原图 PNG | 78,302 | 1080×1920 | 1075 | 正确 | 0 px |
+| JPEG q85 | 82,052 | 1080×1920 | 1075 | 正确 | 10 px |
+| JPEG q85 + 长边 1300 | 48,165 | 731×1300 | 680 | 正确 | **375 px** |
+| JPEG q85 + 长边 1000 | 34,052 | 562×1000 | 451 | 正确 | **691 px** |
+
+（测试图为模拟手机结算页，红按钮真值中心 `(540, 1440)`。缩放档的原始坐标既不是发送图坐标系也不是原图坐标系，反算后偏差数百像素。）
+
+坐标本身有抖动：同一原图重复 3 次，PNG 误差 210/0/5 px，JPEG q85 为 10/146/38 px；格式不是主因，缩放才是。因此默认 `IMAGE_MAX_SIDE=0`，只做 JPEG 转码。
+
+**体积收益**：真实桌面截图 PNG 730 KB → JPEG q85 224 KB（30.7%），token 不变（1044）。上传省流量、减少超时，但不省推理成本。
+
+若确需缩放，`image_preprocess.map_action_coords` 会把 `x/y`、`x1/y1`、`x2/y2` 按 `scale_x/scale_y` 反算、四舍五入并裁到屏幕范围；每步的 `step_NNN.json` 会记录 `image`（原始/发送尺寸与比例）和 `model_action`（模型原始坐标），可事后核对。未缩放时该函数原样返回，不引入偏移。
+
+## 单步耗时与优化
+
+真机读取实测（OPPO PLJ110 / Android 16 / 1080×2374，微信自聊会话，10 步）：修复前 81.42s（8.14s/步），开启滚动观察与 OCR 后 105.59s（10.56s/步），其中 OCR 26.27s。完整记录见 `docs/real-device-test-report.md`；这是单次结果，不作为稳定性能指标。
+
+| 阶段 | 耗时 | 说明 |
+|---|---|---|
+| 截图 | 0.2–0.9s | `uiautomator2` 截图 |
+| OCR | 0 或 1.2–1.5s | 按需模式只在 tap 步触发；RapidOCR + `OCR_SCALE=0.5` 实测 |
+| 决策请求 | 1.7–2.6s | DeepSeek，带历史图 + 当前图 |
+| 语义分析 | ≈2s | 仅开启时发生，纯文本 |
+| 执行动作 | 1.9–3.0s | 含 `tap`/`swipe` 固定等待、`open_app` 约 2.5s |
+| 观察请求 | 4.0–6.1s | 含 1.0s 稳定等待 + 截图 + 带图请求 |
+| 完成检测 | ≈2.5s | 旧行为每步一次带图请求 |
+| 循环间隔 | 0.5s | 固定 |
+
+优化前每步最多 **4 次模型请求**（决策 / 语义 / 观察 / 完成检测），其中 3 次带图。当前改动：
+
+1. 完成判断并入决策响应（`task_done` 字段），默认不再单独发完成检测请求；
+2. 语义分析默认关闭（`ENABLE_SEMANTIC_ANALYSIS=0`）；
+3. 补上 vision 请求的 `extra_body`，确保 `thinking` 真正关闭（此前只有规划请求带了该参数）；
+4. `type_text` 在输入框已聚焦时直接写入，避免重复点击与再次 YOLO 兜底；
+5. OCR 改为按需（`OCR_MODE=on_demand`）：决策前不跑，只有模型给出 `tap` 时才跑；并改为「控件树优先、OCR 兜底」（`OCR_SNAP_MODE=tree_first`），控件树命中时完全不跑 OCR；
+6. OCR 引擎换成 RapidOCR（`OCR_ENGINE=rapidocr`，ONNX Runtime，跳过方向分类），并默认按 `OCR_SCALE=0.5` 缩小后再识别：1080×2374 真机截图实测 1.2–1.5s（不缩放约 1.3–1.6s；机器并行负载高时两者都会到 5–8s）。EasyOCR 路径保留，可切回对照；
+7. 每步 `step_NNN.json` 新增 `timings`（screenshot/ocr_pre/ocr/ocr_triggered/ocr_reason/snap_source/snap_tree/snap_ocr/ocr_snap/preprocess/semantic/decision/decide_total/execute/observe/completion），便于统计触发率与省下的时间。
+
+按上表估算：每步请求数 4 → **2**；不触发定位的步骤约 **8–10s**，tap 步控件树命中时约 **8–10s**，退到 OCR 时约 **10–12s**。以上为按阶段耗时推算；整步耗时以真机单次实测为准（见上方报告链接），不作为稳定性能指标。
+
+`OCR_SCALE` 取舍（同一批图片实测，二次调用、机器空闲）：
+
+| scale | 缩放后尺寸 | 耗时 | 设置页元素 | 结算页元素 | 关键字段（￥128.00/订单号/确认支付） | 中心点偏差 |
+|---|---|---|---|---|---|---|
+| 1.0 | 1080×2374 | 1.3–1.6s | 23 | 14 | 全对 | 基准 |
+| 0.75 | 810×1780 | 1.2–1.4s | 25 | 14 | 全对 | 均值 1.2–4.4px，最大 32px |
+| **0.5（默认）** | 540×1187 | **1.2–1.5s** | 24 | 14 | 全对 | 均值 1.4–2.9px，最大 32px |
+| 0.35 | 378×831 | 1.3–1.5s | 23 | 14 | 全对 | 均值 1.4px，最大 3px |
+
+结论：在本机这批图上，0.5 没有出现漏字，`￥128.00`、订单号、按钮文字均正确，坐标偏差均值 1.4–2.9px（个别长文本行因 bbox 中心变化到 32px，仍在 80px 吸附半径内）。选 0.5 而不是 0.35，是给更小字号/低对比度界面留余量；若某些 App 小字识别率下降，把 `OCR_SCALE` 调回 1.0 即可。
+
+按需定位的触发与路径（`ocr_locator.should_trigger_ocr` + `OCR_SNAP_MODE`）：
+
+- 触发条件：`OCR_MODE=on_demand` 且动作为 `tap`；其余动作（`open_app`/`back`/`home`/`wait`/`swipe`/`type`/`send`/`finish`）完全不跑。
+- `tree_first`（默认）：先 dump 控件树，用 text / resource-id / content-desc 匹配；命中就用元素中心。树里没有可匹配元素或距离超阈值时，再退到 OCR。
+- `ocr_only` / `tree_only`：强制只走一条路径，便于对照。
+- 吸附只在距最近元素中心 ≤ `OCR_SNAP_MAX_DISTANCE`（默认 80px）或落在 bbox 内时发生，否则保留模型原始坐标；实际路径与耗时写进 `timings.snap_source`（`tree`/`ocr`/`none`）、`snap_tree`、`snap_ocr`。
+
+
+
+## 本地视觉模型（Qwen3-VL-8B-Instruct GGUF）
+
+> **暂缓**：6 GB 显存跑 8B Q4 + mmproj 只能把视觉编码器留在 CPU（带图约 75–80 秒/次），当前执行模型改用云端 `deepseek-flash`。相关文件已删除，如需要请重新下载。
+
+用于不依赖云端视觉 API 的离线执行。权重、mmproj、llama.cpp 运行时与 HF 缓存全部放在仓库外的 F 盘目录（示例 `F:\work\hku\7608llm\2026-11-17\qwen3vl-local\`），并显式设置 `HF_HOME`，不写用户目录、不进 git。
+
+### 硬件与参数取舍
+
+本机为 RTX 3060 Laptop（6 GB 显存）。Q4_K_M 权重 5,027,784,800 字节（约 4.68 GiB），mmproj F16 1,159,029,824 字节（约 1.08 GiB），两者合计已超过 6 GB，**不可能全部放进显存**。因此：
+
+- 文本层全部卸载到 GPU：`-ngl 36`
+- 视觉编码器留在 CPU：`--no-mmproj-offload`
+- KV cache 量化：`--cache-type-k q8_0 --cache-type-v q8_0`
+- 上下文：`-c 8192`
+- 实测稳定占用约 **5.3 GB / 6.1 GB**（`nvidia-smi` 5367 MiB），无 OOM
+
+代价是视觉编码走 CPU：带一张 1707×1067 截图的请求约 **76–78 秒**；纯文本请求约 10 秒级。若把 mmproj 也放回 GPU，显存不足会 OOM；降低 `-ngl` 可留出余量但文本生成变慢。
+
+### 文件与下载
+
+从同一个 HF 仓库取权重与视觉投影（缺 mmproj 模型看不了图）：
+
+```bash
+# 目标目录示例（仓库外）
+mkdir -p /f/work/hku/7608llm/2026-11-17/qwen3vl-local/models
+
+curl -L -o Qwen3VL-8B-Instruct-Q4_K_M.gguf \
+  https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3VL-8B-Instruct-Q4_K_M.gguf
+curl -L -o mmproj-Qwen3VL-8B-Instruct-F16.gguf \
+  https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-8B-Instruct-F16.gguf
+```
+
+llama.cpp 使用 `b12470` 的 Windows CUDA 12.4 预编译包：`llama-b12470-bin-win-cuda-12.4-x64.zip` + `cudart-llama-bin-win-cuda-12.4-x64.zip`，解压到同一目录（本机 `runtime\llama-extract\`）。显式设置缓存目录：
+
+```powershell
+$env:HF_HOME = "F:\work\hku\7608llm\2026-11-17\qwen3vl-local\hf-cache"
+$env:HF_HUB_CACHE = "$env:HF_HOME\hub"
+```
+
+### 启动与切换
+
+一键启动（前台运行，端口 8080）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_local_vlm.ps1
+```
+
+脚本参数可调：`-Port`、`-NGpuLayers`、`-Ctx`、`-Threads`、`-ModelDir`、`-LlamaDir`。服务提供 OpenAI 兼容接口：
+
+```bash
+curl http://127.0.0.1:8080/v1/models
+# 模型别名：qwen3-vl-8b-instruct；支持 multimodal（image_url base64）
+```
+
+切换执行模型（不用改代码）：
+
+```powershell
+$env:ACTIVE_PROVIDER = "local"   # 或 "qwen" 切回云端
+python run.py
+```
+
+`config.PROVIDERS["local"]` 默认 `base_url=http://127.0.0.1:8080/v1`，可用 `LOCAL_VLM_BASE_URL`、`LOCAL_VLM_MODEL` 覆盖；`llama-server` 不校验密钥，`LOCAL_VLM_API_KEY` 仅需非空（默认 `local`）。
+
+真实请求验证（本机实测）：一张真实桌面截图 → 视觉描述正确；按执行提示词返回 `{"action_type": "home", "params": {}, "observation": "返回桌面"}`，JSON 可解析。带图请求 prompt eval 约 76 秒（CPU 视觉编码），生成约 1–2 秒。未在 Android 真机上跑过，仅验证了模型服务与图片协议。
+
+### 上下文窗口（6 GB 卡为什么要限制）
+
+每张截图都会转成数百到上千个视觉 token，多轮任务里把历史原图全带上会同时抬高上下文与显存。默认策略：`HISTORY_IMAGE_WINDOW=1` 只带最近 1 张历史原图，当前屏幕始终带图；更早的步骤压成文字摘要（动作类型、坐标/输入文字、观察结论），由 `HISTORY_TEXT_STEPS` 控制条数。
+
+调大 `HISTORY_IMAGE_WINDOW` 的代价：视觉 token 与显存占用上升，6 GB 卡更容易 OOM，单步耗时也会增加；建议先在当前设备上逐步加 1 并观察 `nvidia-smi` 与请求耗时。
+
 ## 项目结构
 
-- `screen_agent.py`：屏幕理解与操作循环
-- `task_planner.py` / `multi_agent.py`：任务拆解与多应用协调
-- `phone_controller.py` / `app_launcher.py`：手机控制与应用启动
-- `ocr_locator.py` / `input_detector.py`：OCR 和输入框检测
-- `memory.py` / `ui_state.py`：任务记忆与界面状态
-- `app.py` / `templates/`：Flask 网页界面
-- `config.py` / `.env.example`：模型配置和密钥模板
+- 核心链路：`screen_agent.py`（屏幕理解与操作循环）、`phone_controller.py`（ADB/uiautomator2 操作）、`ocr_locator.py`（OCR + 控件树定位）、`input_detector.py`（YOLO 输入框兜底）、`app_launcher.py`（应用启动）
+- 记忆与状态：`memory.py`（步骤记录）、`ui_state.py`（Streamlit 状态）
+- 规划：`task_planner.py`（子任务拆解与重规划，含 `context_needed` 信息传递）、`multi_agent.py`（多应用编排）
+- 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
+- 配置：`config.py`、`.env.example`
+- 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
+- 测试与工程化：`tests/`（229 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
+- 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
-输入框检测使用的 `models/input_box.pt` 权重未随代码提供，使用相关功能前需自行准备。`config.json` 为保留的旧版配置；当前模型配置以 `config.py` 为准。
+输入框定位优先使用 uiautomator2 的控件树（`EditText` 等）；`models/input_box.pt` 是 YOLO 视觉兜底权重。
+
+### 输入框检测权重（可选）
+
+权重不随本仓库提供（`.gitignore` 忽略了 `models/` 与 `*.pt`，二进制不会进版本库）。需要视觉兜底时从组长的模型仓库获取：
+
+```bash
+mkdir -p models
+curl -L -o models/input_box.pt \
+  https://raw.githubusercontent.com/peter-lgxj/gui_yolo_model/main/runs/detect/runs/input_box5/weights/best.pt
+```
+
+- 来源：`peter-lgxj/gui_yolo_model` 的 `runs/detect/runs/input_box5/weights/best.pt`（5.4 MB）
+- 目标路径：`models/input_box.pt`，与 `config.INPUT_BOX_MODEL` 一致，不需要改代码
+- 可选校验（git blob sha1，与模型仓库一致）：
+
+  ```bash
+  git hash-object models/input_box.pt
+  # 期望 2f5adef8fe64be1898363e8d38b5098ff4c62c2a
+  ```
+
+- 该权重是单类别 `input_box` 的 v1 模型；模型仓库的 `dataset_v2`（`input_box` + `search_icon`）尚无对应权重
+- 模型仓库未附 LICENSE，公开分发或转存前请先与作者确认
+- 置信度差异：`input_detector.py` 默认 `conf=0.3`，模型仓库的 `test_detector.py` 用 `0.5`；真机误检多时可上调
+- 无权重或加载失败时自动降级到 uiautomator2 控件树（`EditText`）检测，不会中断任务
+
+## 实验
+
+`experiments/tasks.json` 收录 `test.md` 的 20 个任务（含 App、理论步数、难度等级），runner 按等级自动决定重复次数（`repeat_by_level`，当前 L1/L2 为 3 次、L3 为 2 次；**L3 最终次数是 `test.md` 4.2 的待定项**，当前值只是实现默认，可用 `--repeat` 强制统一）：
+
+```bash
+# 执行任务集（需要真机与密钥）
+python experiments/run_experiment.py --tasks experiments/tasks.json --mode single
+
+# 聚合 TSR / 多 App TSR / SE / AT / ST / CS
+python experiments/metrics.py experiments/results/<run_dir>
+
+# 消融：关闭语义分析层
+python experiments/run_experiment.py --tasks experiments/tasks.json --no-semantic --tag no_semantic
+
+# 强制每个任务只跑 3 次（覆盖按等级规则）
+python experiments/run_experiment.py --tasks experiments/tasks.json --repeat 3
+
+# 多设备：指定 adb serial（等价于设置 ANDROID_SERIAL）
+python experiments/run_experiment.py --tasks experiments/tasks.json --serial emulator-5554
+
+# 失败重放：只重跑上次失败/超时/崩溃的任务
+python experiments/run_experiment.py --tasks experiments/tasks.json \
+  --only-failed experiments/results/<run_dir>/results.jsonl
+
+# 只跑指定等级 / 指定任务号（不影响按等级的重复次数规则）
+python experiments/run_experiment.py --tasks experiments/tasks.json --levels L1,L2
+python experiments/run_experiment.py --tasks experiments/tasks.json --task-ids T01,T05
+
+# AT 口径可切换：--at-mode 选样本（all/success/best），--at-aggregate 选跨任务聚合
+python experiments/metrics.py experiments/results/<run_dir> --at-mode success
+python experiments/metrics.py experiments/results/<run_dir> --at-aggregate total_per_task
+```
+
+AT 的两种跨任务聚合（`--at-aggregate`）：
+
+- `task_mean`（默认）：先算每个任务的尝试平均耗时，再对任务等权平均；与旧结果一致
+- `total_per_task`：所有纳入统计的 attempt 总耗时 ÷ 任务数
+
+每任务尝试次数相同时两者相等；尝试次数不等（超时、失败重放、缺失判定）时会分叉。`--at-mode` 决定哪些 attempt 纳入统计，两者可组合。
+
+结果默认写到 `experiments/results/`（已在 `.gitignore` 中）。筛选条件（`levels` / `task_ids` / `only_failed`）会写进 `manifest.json` 与每条 `results.jsonl` 的 `filters` 字段，事后能看出"只跑了某几个任务"。runner 会在每个任务前回桌面并 force-stop 本任务涉及的已知应用（`--no-reset` 可关闭），`manifest.json` 记录 git SHA、执行/规划模型全名、温度、任务集哈希与设备信息。
+
+baseline 接入：三个 wrapper 已按上游实际入口构造命令，也都可以用环境变量覆盖完整命令。协议是 stdin 一行 JSON（`task` 必填，`apps` 可选）→ stdout 一行 JSON（`summary/steps/elapsed/returncode/upstream_status`），退出码透传。
+
+**命令按上游文档构造，未实跑**：本机无真机，也没有安装这三套系统的依赖/密钥；下面的入口、参数与输出格式来自上游仓库代码核对，接入前请按上游 README 完成环境准备。
+
+```bash
+python experiments/run_experiment.py --baseline openautoglm \
+  --baseline-command "python experiments/baselines/openautoglm_wrapper.py"
+```
+
+- **Open-AutoGLM**（`zai-org/Open-AutoGLM`）
+  - 环境变量：`OPEN_AUTOGLM_DIR`；可选 `OPEN_AUTOGLM_MAX_STEPS`
+  - 默认命令：`python main.py [--device-id $ANDROID_SERIAL] [--max-steps N] "<task>"`
+  - 任务位置参数是最后一个参数（不是 `--task`）；模型服务用上游的 `--base-url/--model/--apikey` 或 `PHONE_AGENT_*` 环境变量
+  - 输出：每步打印 `💭 思考：` / `🎯 动作：`，结束时打印 `Result: <message>`（超步数为 `Result: Max steps reached`）
+  - 步骤数按 `🎯` 行统计；`upstream_status` 只区分 `finished` / `max_steps`，不当作成功判定
+- **Mobile-Agent-v2**（`X-PLUG/MobileAgent` 的 `Mobile-Agent-v2/`）
+  - 环境变量：`MOBILE_AGENT_V2_DIR`；可选 `MOBILE_AGENT_V2_CMD`
+  - 默认命令：`python run.py`。上游没有命令行参数，任务与 API 配置写在 run.py 顶部（`instruction` / `adb_path` / `API_url` / `token` / `qwen_api`）；仍为空时 wrapper 会直接报错提示
+  - 输出：每步 `### Decision ###` 块（Thought/Action/Operation），截图在 `screenshot/`；动作 `Stop` 结束
+  - 步骤数按 ` Decision ` 标题行统计；`upstream_status=stopped` 仅表示出现 Stop
+- **AppAgent**（`TencentQQGYLab/AppAgent`，原 `mnotgod96/AppAgent` 已迁移）
+  - 环境变量：`APPAGENT_DIR`；应用名取 stdin JSON 的 `apps[0]` 或 `APPAGENT_APP`；可选 `APPAGENT_CMD` / `APPAGENT_STDIN`
+  - 默认命令：`python run.py --app <app>`；上游是交互式输入，默认把 `APPAGENT_STDIN`（缺省 `y\n<task>\n`）喂给子进程，对应「无文档库 + 单设备」的提示顺序；环境不同请自行设置
+  - 输出：每轮 `Round <n>`，日志在 `tasks/task_<app>_<时间戳>/log_*.txt`；结束文案为 `Task completed successfully` / `Task finished due to reaching max rounds` / `Task finished unexpectedly`
+  - 步骤数按 `Round ` 行统计；`upstream_status` 记录对应结束文案，仍不当作成功判定
+
+`BASELINE_STEP_MARKER` 可覆盖步骤标记（多个候选标记用默认值，无需设置）。`success` 仍由人工判定，baseline 的 `upstream_status` 只作为复盘线索写进 `baseline_raw`。协议层已有离线假上游测试。
+
+任务成功与否仍需人工判定：可写 `results.jsonl` 的 `success` 字段，或同目录 `judgement.json`。注意任务级布尔 `{"T01": true}` 只能算 TSR，要算 CS 必须逐次判定 `{"T01": [true, false, true]}`。每任务的原始执行证据在 `runs/<时间戳>/`。
+
+CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
+
+## 已知限制（部分真机验证）
+
+- 单机、单账号、微信「文件传输助手」自聊会话做过一次只读读取与端到端抽取验证（`docs/real-device-test-report.md`）；真实课程群、QQ / Outlook App、图片型 DDL、点击与输入、跨 App 信息传递仍未在真实环境跑通。
+- 依赖版本：`requirements-lock.txt` 是在 Windows + Python 3.12 的虚拟环境里实际解析得到的；换机器（尤其 GPU/系统不同）需重新 `pip freeze` 替换。
+- 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）的命令、输出解析与配置要求已按上游代码写实，协议用假上游测过；但三个真实系统仍未在本机安装、未接真机联调，命令未实跑。
+- 任务前重置只做「回桌面 + force-stop 已知包名」，**无法自动清除应用内草稿、聊天输入框、剪贴板与输入法状态**；`reset` 字段会区分 `stopped` / `failed` / `not_installed` / `not_mapped`。
+- `run.py`、`app.py`、`frontend.py`、实验 runner 共用 `runs/.device.lock`：锁覆盖「reset + 整个任务执行期」，拿不到锁的入口会直接报错/记为失败，不会在别人操作手机时 force-stop。锁文件记录 token + pid，释放时校验归属；僵尸锁只在持有进程已退出时回收。
+- 需要 Python 3.10+（使用了 `dict | None` 等注解，3.8/3.9 导入即报错）。
+
+## 开发与测试
+
+```bash
+pip install -r requirements-dev.txt
+
+pytest -q          # 单元测试：动作容错、指标聚合、任务集校验、配置加载、baseline 协议
+ruff check .       # 只启用能发现真实错误的规则（E9/F63/F7/F82）
+```
+
+CI（`.github/workflows/ci.yml`）会做语法编译、任务集 JSON 校验、runner dry-run、ruff 与 pytest。uiautomator2/easyocr/ultralytics 已改为延迟导入，CI 不需要安装它们即可导入 `screen_agent` 并执行全部单元测试（错误导入会直接失败，而不是 skip）。
+
+另有一个 `locked-deps` job 在 **ubuntu + Python 3.12** 上按 `requirements-lock.txt` 完整安装一遍并做导入冒烟，避免锁文件长期没人验证。锁文件是在 Windows + Python 3.12 下 `pip freeze` 得到的**版本锁（未带 hash）**；Linux/Windows 的 wheel 集不同，若某版本在 Linux 缺 wheel，该 job 会直接失败。将来若用 `pip-compile --generate-hashes`（或 `uv pip compile --generate-hashes`）生成 hash 锁，替换文件后 job 会自动改用 `pip install --require-hashes`，无需改 workflow。
 
 ## 注意事项
 
-执行任务会操作真实手机，请在测试设备上验证流程，并关注涉及消息发送、下单和支付的操作。上传前仅进行 Python 语法检查，尚未在连接手机和模型 API 的环境中验证完整流程。
+执行任务会操作真实手机，请在测试设备上验证流程，并关注涉及消息发送、下单和支付的操作。
+
+Web 界面的 `SECRET_KEY` 与 CORS 可用环境变量 `FLASK_SECRET_KEY`、`CORS_ALLOWED_ORIGINS` 覆盖，默认值只适合本机调试。
+
+截图会经模型 API 上传至对应服务商；涉及聊天记录等隐私内容时请自行评估。
 
 ## 许可证
 

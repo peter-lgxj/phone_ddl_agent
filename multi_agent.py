@@ -13,8 +13,10 @@ import json
 import time
 import subprocess
 
-from task_planner import TaskPlanner, TaskPlan, SubTask
-from screen_agent import ScreenAgent
+from task_planner import TaskPlanner, TaskPlan, SubTask, build_exec_goal, unfinished_subtasks
+from screen_agent import ScreenAgent, make_run_dir
+from device_lock import device_lock
+from adb_utils import ADB
 from memory import TaskMemory
 import config
 
@@ -45,49 +47,47 @@ class SubTaskScreenAgent(ScreenAgent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.last_summary = ""
+        self._sub_index   = 0
 
     def run(self, task: str) -> str:
-        """执行单个子任务，返回结果摘要"""
+        """执行单个子任务，返回结果摘要（共用基类的重试与证据归档）"""
         memory = TaskMemory(task)
+        self.last_memory = memory   # 供实验脚本统计实际步数
+
+        # 每个子任务单独一个证据目录，避免多次执行互相覆盖
+        self._sub_index += 1
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        self.run_dir = make_run_dir(f"{stamp}_sub{self._sub_index}")
 
         import ui_state
         ui_state.init_state(task)
 
         for step in range(1, self.max_steps + 1):
             print(f"\n{C.BLUE}  ┌─ Step {step} {'─'*34}{C.RESET}")
-
-            action = self._think_and_act(memory)
-            print(f"{C.PURPLE}  │ 💭 {action.get('thought', '')}{C.RESET}")
-            print(f"{C.GREEN}  │ ▶  {action.get('description', '')}  [{action.get('action_type')}]{C.RESET}")
-
-            finished = self._execute(action)
-            observation = "子任务完成" if finished else self._observe(action, memory)
-            print(f"{C.AMBER}  │ 👁  {observation}{C.RESET}")
+            try:
+                finished, done, summary = self._execute_step(step, memory)
+            except Exception as e:
+                self.last_summary = f"第 {step} 步失败：{e}"
+                self.last_status = "failed"
+                raise
             print(f"{C.DIM}  └{'─'*40}{C.RESET}")
 
-            memory.add_step(
-                thought=action.get("thought", ""),
-                action=action,
-                observation=observation,
-            )
-
-            if finished:
-                summary = action.get("summary", "子任务完成")
+            if finished or done:
+                summary = summary or "子任务完成"
                 self.last_summary = summary
+                self.last_status = "done"
                 memory.save(path=f"task_log_sub{len(memory.steps)}.json")
-                return summary
-
-            if step >= 3 and self._check_task_done(memory):
-                summary = f"子任务完成：{memory.get_last_observation()}"
-                self.last_summary = summary
-                memory.save(path=f"task_log_sub{len(memory.steps)}.json")
+                memory.save(path=str(self.run_dir / "task_log.json"))
                 return summary
 
             time.sleep(0.5)
 
         summary = f"达到最大步数，最后状态：{memory.get_last_observation()}"
         self.last_summary = summary
-        memory.save()
+        # 超步数不算完成，交给上层标记 failed/timeout
+        self.last_status = "timeout"
+        memory.save(path=f"task_log_sub{len(memory.steps)}.json")
+        memory.save(path=str(self.run_dir / "task_log.json"))
         return summary
 
 
@@ -103,20 +103,25 @@ class MultiAppAgent:
              用于 Flask-SocketIO 集成（app.py 里传入 socketio.emit）
     """
 
-    def __init__(self, emit_fn=None):
+    def __init__(self, emit_fn=None, exec_agent=None):
         self.planner    = TaskPlanner()
-        self.exec_agent = SubTaskScreenAgent(max_steps=config.MAX_STEPS)
+        # 允许注入执行器（Web 端需要子类化以推送步骤事件），避免重复构造
+        self.exec_agent = exec_agent or SubTaskScreenAgent(max_steps=config.MAX_STEPS)
         self.emit_fn    = emit_fn or (lambda e, d: None)
         self.log_path   = "multi_task_log.json"
+        self.total_steps = 0   # 本次多应用任务累计执行的子任务步数
+        self.last_status = "idle"   # done / failed / timeout，供 runner 判负
+        self.sub_run_dirs: list[str] = []   # 每个子任务的证据目录，供实验 runner 落盘
 
     def _emit(self, event: str, data: dict):
         try:
             self.emit_fn(event, data)
-        except Exception:
-            pass
+        except Exception as e:
+            # 事件推送失败不应影响任务执行，但必须留下线索
+            print(f"{C.DIM}  ⚠️  事件推送失败({event})：{e}{C.RESET}")
 
     def _go_home(self):
-        subprocess.run(["adb", "shell", "input", "keyevent", "3"], capture_output=True)
+        subprocess.run([ADB, "shell", "input", "keyevent", "3"], capture_output=True)
         time.sleep(1)
 
     def _save_log(self, plan: TaskPlan):
@@ -130,6 +135,9 @@ class MultiAppAgent:
         print(f"{C.DIM}📄  多任务日志已保存：{self.log_path}{C.RESET}")
 
     def run(self, task: str):
+        # 每次任务重新收集子任务证据目录，避免同一 agent 复用时串到上一次
+        self.sub_run_dirs = []
+
         print(f"\n{C.CYAN}{C.BOLD}{'═'*56}{C.RESET}")
         print(f"{C.CYAN}{C.BOLD}  🚀  多应用任务启动{C.RESET}")
         print(f"{C.CYAN}  📝  {task}{C.RESET}")
@@ -137,6 +145,17 @@ class MultiAppAgent:
 
         # ── 规划 ─────────────────────────────────
         plan = self.planner.plan(task)
+
+        warned = 0
+
+        def flush_warnings():
+            """依赖被自动过滤/断环时在真机日志里可见"""
+            nonlocal warned
+            for w in plan.warnings[warned:]:
+                print(f"{C.AMBER}  ⚠️  依赖修正：{w}{C.RESET}")
+            warned = len(plan.warnings)
+
+        flush_warnings()
 
         if not plan.subtasks:
             print(f"{C.RED}  ❌  规划器未生成任何子任务{C.RESET}")
@@ -146,7 +165,8 @@ class MultiAppAgent:
         self._emit('plan_ready', {
             'analysis':  getattr(plan, 'analysis', ''),
             'subtasks':  [
-                {'index': t.index, 'goal': t.goal, 'app': t.app}
+                {'index': t.index, 'goal': t.goal, 'app': t.app,
+                 'context_needed': t.context_needed}
                 for t in plan.subtasks
             ]
         })
@@ -158,13 +178,16 @@ class MultiAppAgent:
         # ── 循环执行 ─────────────────────────────
         max_loops = len(plan.subtasks) * 2
         loop_count = 0
+        task_done = False
 
         while not plan.is_all_done() and loop_count < max_loops:
             loop_count += 1
 
             candidates = plan.pending_tasks()
             if not candidates:
-                print(f"{C.AMBER}  ⚠️  无可执行子任务（依赖未满足）{C.RESET}")
+                stuck = [t for t in plan.subtasks if t.status == "pending"]
+                print(f"{C.AMBER}  ⚠️  {len(stuck)} 个子任务的依赖无法满足"
+                      f"（{', '.join(f'[{t.index}]' for t in stuck)}），本轮结束将判定为未完成{C.RESET}")
                 break
 
             current = candidates[0]
@@ -185,17 +208,35 @@ class MultiAppAgent:
 
             self._go_home()
 
+            exec_goal = build_exec_goal(current)
+            if current.context_needed:
+                print(f"{C.DIM}  🔗  注入上下文：{current.context_needed}{C.RESET}")
+
             try:
-                result = self.exec_agent.run(current.goal)
+                result = self.exec_agent.run(exec_goal)
                 current.result = result
-                current.status = "done"
-                print(f"\n{C.GREEN}  ✅  子任务 [{current.index}] 完成{C.RESET}")
+                # 只有真正完成才标 done；超步数为 timeout，异常为 failed
+                current.status = getattr(self.exec_agent, "last_status", None) or "failed"
+                if current.status == "done":
+                    print(f"\n{C.GREEN}  ✅  子任务 [{current.index}] 完成{C.RESET}")
+                else:
+                    print(f"\n{C.AMBER}  ⚠️  子任务 [{current.index}] 未完成（{current.status}）{C.RESET}")
                 print(f"{C.GREEN}     {result}{C.RESET}")
             except Exception as e:
                 current.result = f"执行出错：{e}"
                 current.status = "failed"
                 print(f"\n{C.RED}  ❌  子任务 [{current.index}] 出错：{e}{C.RESET}")
                 import traceback; traceback.print_exc()
+            finally:
+                # 无论成功失败都累计步数，供实验统计
+                memory = getattr(self.exec_agent, "last_memory", None)
+                self.total_steps += len(memory.steps) if memory else 0
+                # 记录本子任务的证据目录：每个子任务都能在 runs/ 下定位到
+                sub_dir = getattr(self.exec_agent, "run_dir", None)
+                if sub_dir:
+                    current.run_dir = str(sub_dir)
+                    if str(sub_dir) not in self.sub_run_dirs:
+                        self.sub_run_dirs.append(str(sub_dir))
 
             # 推送子任务结果
             self._emit('subtask_done', {
@@ -206,6 +247,7 @@ class MultiAppAgent:
 
             # ── 重规划 ─────────────────────────
             task_done, summary = self.planner.replan(plan, current)
+            flush_warnings()
 
             # 收集重规划变化并推送
             pending_goals = {
@@ -225,18 +267,27 @@ class MultiAppAgent:
                 print(f"  🎉  整体任务已完成！")
                 print(f"{'═'*56}{C.RESET}")
                 print(f"\n{summary}")
-                self._save_log(plan)
-                return
+                # 不直接 return：统一走下面的失败检查，避免最后一步超时/失败被记成完成
+                break
 
-        # 结束
+        # 结束：failed/timeout 一律算未完成；非显式完成时，pending（含 max_loops 耗尽）也算
+        unfinished = unfinished_subtasks(plan, task_done)
         print(f"\n{C.CYAN}{'═'*56}{C.RESET}")
-        if plan.is_all_done():
-            print(f"{C.GREEN}  ✅  所有子任务执行完毕{C.RESET}")
+        if not unfinished:
+            print(f"{C.GREEN}  ✅  所有子任务完成{C.RESET}")
+            self.last_status = "done"
         else:
-            print(f"{C.AMBER}  ⚠️  部分子任务未完成{C.RESET}")
+            print(f"{C.AMBER}  ⚠️  {len(unfinished)} 个子任务未完成{C.RESET}")
+            self.last_status = ("timeout" if all(t.status == "timeout" for t in unfinished)
+                                else "failed")
         print(f"{C.CYAN}{'═'*56}{C.RESET}")
         print(plan.summary())
         self._save_log(plan)
+
+        # test.md：任一子任务失败/超步数即整体失败，不能让 runner 记成正常结束
+        if unfinished:
+            detail = "；".join(f"[{t.index}] {t.goal} -> {t.status}" for t in unfinished)
+            raise RuntimeError(f"{len(unfinished)} 个子任务未完成：{detail}")
 
 
 # ══════════════════════════════════════════════
@@ -251,5 +302,11 @@ if __name__ == "__main__":
     _sep()
     task = input(f"{C.BOLD}请输入任务：{C.RESET}").strip()
     if task:
-        agent = MultiAppAgent()
-        agent.run(task)
+        # 与 run.py / app.py / frontend.py / 实验 runner 共用 runs/.device.lock；
+        # with 退出时（含异常）由 device_lock 的 finally 释放，不会留下死锁
+        with device_lock(timeout=60) as locked:
+            if not locked:
+                print(f"{C.RED}设备正被其它任务占用（另一个 Web/CLI/实验任务在运行），请稍后重试{C.RESET}")
+                raise SystemExit(1)
+            agent = MultiAppAgent()
+            agent.run(task)

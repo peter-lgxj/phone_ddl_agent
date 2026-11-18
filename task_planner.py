@@ -12,25 +12,9 @@ from openai import OpenAI
 import config
 
 
-PLANNER_PROVIDERS = {
-    "deepseek": {
-        "api_key":  config.PROVIDERS.get("deepseek", {}).get("api_key", ""),
-        "base_url": "https://api.deepseek.com/v1",
-        "model":    "deepseek-chat",
-    },
-    "qwen": {
-        "api_key":  config.PROVIDERS.get("qwen", {}).get("api_key", ""),
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model":    "qwen-max",
-    },
-    "openai": {
-        "api_key":  config.PROVIDERS.get("openai", {}).get("api_key", ""),
-        "base_url": "https://api.openai.com/v1",
-        "model":    "gpt-4o",
-    },
-}
-
-ACTIVE_PLANNER = getattr(config, "PLANNER_PROVIDER", "qwen")
+# 规划模型直接复用 config.PROVIDERS：原先这里维护了一份独立的 provider 表，
+# 只有 deepseek/qwen/openai，而 config.PLANNER_PROVIDER 默认是 qwen3，
+# 结果规划器静默回落到 qwen-max，与 README 及配置声明的模型不一致。
 
 
 # ══════════════════════════════════════════════
@@ -38,17 +22,22 @@ ACTIVE_PLANNER = getattr(config, "PLANNER_PROVIDER", "qwen")
 # ══════════════════════════════════════════════
 
 class SubTask:
-    def __init__(self, index: int, goal: str, app: str = "", depends_on=None):
-        self.index      = index
-        self.goal       = goal
-        self.app        = app
-        self.depends_on = depends_on or []
-        self.status     = "pending"
-        self.result     = ""
+    def __init__(self, index: int, goal: str, app: str = "", depends_on=None,
+                 context_needed: str = ""):
+        self.index          = index
+        self.goal           = goal
+        self.app            = app
+        self.depends_on     = depends_on or []
+        self.context_needed = context_needed   # 需要从前序任务带入的信息（由重规划填充）
+        self.status         = "pending"
+        self.result         = ""
+        self.run_dir        = ""   # 本次子任务的证据目录（由 MultiAppAgent 执行后回填）
 
     def to_dict(self):
         return {"index": self.index, "goal": self.goal, "app": self.app,
-                "status": self.status, "result": self.result}
+                "context_needed": self.context_needed,
+                "status": self.status, "result": self.result,
+                "run_dir": self.run_dir}
 
     def __repr__(self):
         return f"[{self.index}]({self.app}) {self.goal} <{self.status}>"
@@ -60,18 +49,60 @@ class TaskPlan:
         self.subtasks   = subtasks
         self.analysis   = analysis
         self.start_time = time.time()
+        self.warnings   = []
+        self._sanitize_dependencies()
+
+    def _sanitize_dependencies(self):
+        """过滤不存在的依赖索引，并去掉成环的依赖边。
+        模型给的 depends_on 可能是任意整数，不校验会导致 pending 永远无法满足。
+        """
+        indexes = {t.index for t in self.subtasks}
+        for t in self.subtasks:
+            kept = []
+            for d in t.depends_on:
+                if d not in indexes:
+                    self.warnings.append(f"子任务 {t.index} 依赖不存在的子任务 {d}，已忽略")
+                elif d == t.index:
+                    self.warnings.append(f"子任务 {t.index} 依赖自身，已忽略")
+                elif d not in kept:
+                    kept.append(d)
+            t.depends_on = kept
+
+        graph = {t.index: list(t.depends_on) for t in self.subtasks}
+        visiting, finished = set(), set()
+
+        def dfs(node):
+            if node in finished:
+                return True
+            if node in visiting:
+                return False
+            visiting.add(node)
+            for dep in list(graph.get(node, [])):
+                if not dfs(dep):
+                    graph[node].remove(dep)
+                    self.warnings.append(f"检测到环形依赖 {node}->{dep}，已忽略该依赖")
+            visiting.discard(node)
+            finished.add(node)
+            return True
+
+        for node in list(graph):
+            dfs(node)
+        for t in self.subtasks:
+            t.depends_on = list(graph[t.index])
 
     def pending_tasks(self):
-        done_idx = {t.index for t in self.subtasks if t.status == "done"}
+        done_idx = {t.index for t in self.subtasks if t.status in ("done", "skipped")}
         return [t for t in self.subtasks
                 if t.status == "pending"
                 and all(d in done_idx for d in t.depends_on)]
 
     def is_all_done(self):
-        return all(t.status in ("done", "failed") for t in self.subtasks)
+        # failed/timeout 不是 done，否则循环会提前退出并把失败当完成
+        return all(t.status in ("done", "skipped") for t in self.subtasks)
 
     def summary(self):
-        icons = {"pending": "⏳", "running": "🔄", "done": "✅", "failed": "❌"}
+        icons = {"pending": "⏳", "running": "🔄", "done": "✅",
+                 "failed": "❌", "timeout": "⏱", "skipped": "⏭"}
         lines = [f"任务：{self.raw_task}", ""]
         for t in self.subtasks:
             lines.append(f"  {icons.get(t.status,'?')} [{t.index}]({t.app}) {t.goal}")
@@ -84,6 +115,22 @@ class TaskPlan:
 # ══════════════════════════════════════════════
 #  规划器
 # ══════════════════════════════════════════════
+
+def build_exec_goal(subtask: "SubTask") -> str:
+    """把前序任务提供的信息显式拼进子任务目标，避免执行层再从零推断"""
+    if not subtask.context_needed:
+        return subtask.goal
+    return (f"{subtask.goal}\n\n"
+            f"【前序任务提供的信息（可直接作为事实使用）】\n{subtask.context_needed}")
+
+
+def unfinished_subtasks(plan: "TaskPlan", task_done: bool = False) -> list:
+    """整体任务是否未完成：failed/timeout 一律算，pending 在非显式完成时也算"""
+    bad = [t for t in plan.subtasks if t.status in ("failed", "timeout")]
+    if task_done:
+        return bad
+    return bad + [t for t in plan.subtasks if t.status == "pending"]
+
 
 class TaskPlanner:
 
@@ -170,7 +217,8 @@ class TaskPlanner:
       "index": 与原计划一致的数字,
       "app": "App名称",
       "goal": "更新后的目标（如有关键信息请直接写入）",
-      "depends_on": []
+      "depends_on": [],
+      "context_needed": "前序结果中需要带入本任务的关键信息（没有则填空字符串）"
     }}
   ]
 }}
@@ -182,10 +230,16 @@ class TaskPlanner:
 """
 
     def __init__(self):
-        cfg = PLANNER_PROVIDERS.get(ACTIVE_PLANNER, PLANNER_PROVIDERS["qwen"])
-        self.client = OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"])
-        self.model  = cfg["model"]
-        print(f"📋  规划器：{ACTIVE_PLANNER} / {self.model}")
+        name = getattr(config, "PLANNER_PROVIDER", config.ACTIVE_PROVIDER)
+        provider = config.PROVIDERS.get(name)
+        if provider is None:
+            print(f"  ⚠️  未找到规划 provider「{name}」，回退到 {config.ACTIVE_PROVIDER}")
+            name = config.ACTIVE_PROVIDER
+            provider = config.PROVIDERS[name]
+        self.provider_name = name
+        self.client = OpenAI(api_key=provider["api_key"], base_url=provider["base_url"])
+        self.model  = provider["model"]
+        print(f"📋  规划器：{self.provider_name} / {self.model}")
 
     def _call_llm(self, user_msg: str, system: str = None) -> str:
         msgs = []
@@ -229,6 +283,7 @@ class TaskPlanner:
                 goal=item["goal"],
                 app=item.get("app", ""),
                 depends_on=item.get("depends_on", []),
+                context_needed=item.get("context_needed", ""),
             )
             subtasks.append(st)
             print(f"  📌  [{st.index}]({st.app}) {st.goal}")
@@ -246,6 +301,10 @@ class TaskPlanner:
         remaining = [t for t in plan.subtasks if t.status == "pending"]
 
         if not remaining:
+            bad = [t for t in plan.subtasks if t.status in ("failed", "timeout")]
+            if bad:
+                detail = "；".join(f"[{t.index}] {t.goal} -> {t.status}" for t in bad)
+                return False, f"{len(bad)} 个子任务失败或超时，不能视为完成：{detail}\n{plan.summary()}"
             return True, f"所有子任务已完成。\n{plan.summary()}"
 
         completed_text = "\n".join(
@@ -254,7 +313,8 @@ class TaskPlanner:
         ) or "（无）"
 
         remaining_text = json.dumps(
-            [{"index": t.index, "app": t.app, "goal": t.goal} for t in remaining],
+            [{"index": t.index, "app": t.app, "goal": t.goal,
+              "context_needed": t.context_needed} for t in remaining],
             ensure_ascii=False, indent=2
         )
 
@@ -295,12 +355,15 @@ class TaskPlanner:
                 if t.status != "pending":
                     continue
                 if t.index in updated_map:
-                    new_goal = updated_map[t.index].get("goal", t.goal)
-                    new_app  = updated_map[t.index].get("app", t.app)
-                    if new_goal != t.goal or new_app != t.app:
+                    item = updated_map[t.index]
+                    new_goal = item.get("goal", t.goal)
+                    new_app  = item.get("app", t.app)
+                    new_ctx  = item.get("context_needed", t.context_needed)
+                    if new_goal != t.goal or new_app != t.app or new_ctx != t.context_needed:
                         print(f"  ✏️  更新[{t.index}]({new_app})：{new_goal}")
                         t.goal = new_goal
                         t.app  = new_app
+                        t.context_needed = new_ctx
 
             for item in updated:
                 if item["index"] not in existing:
@@ -309,10 +372,13 @@ class TaskPlanner:
                         goal=item["goal"],
                         app=item.get("app", ""),
                         depends_on=item.get("depends_on", []),
+                        context_needed=item.get("context_needed", ""),
                     )
                     plan.subtasks.append(new_st)
                     print(f"  ➕  新增[{new_st.index}]({new_st.app})：{new_st.goal}")
 
+            # 模型可能返回不存在的依赖或成环依赖，重新校验后再决定是否还有 pending
+            plan._sanitize_dependencies()
             plan.subtasks.sort(key=lambda t: t.index)
 
         return False, ""

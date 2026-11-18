@@ -1,10 +1,19 @@
-Flask
-Flask-SocketIO
-streamlit
-Pillow
-uiautomator2
-openai
-zhipuai
-easyocr
-ultralytics
-python-dotenv
+# 运行时依赖
+# 说明：这里只给最低版本，未做精确锁定。论文实验前请在可用环境里执行
+# `pip freeze > requirements-lock.txt` 固定实际版本，保证重复实验一致。
+Flask>=3.0
+Flask-SocketIO>=5.3
+openai>=1.0
+uiautomator2>=3.0
+Pillow>=10.0
+python-dotenv>=1.0
+openpyxl>=3.1
+PyYAML>=6.0
+easyocr>=1.7
+rapidocr_onnxruntime>=1.3
+opencv-python>=4.8
+# ultralytics 会带入 torch / torchvision，安装体积较大
+ultralytics>=8.0
+
+# 可选：Streamlit 调试界面（frontend.py），不需要可跳过
+# streamlit>=1.30

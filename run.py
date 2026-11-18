@@ -1,5 +1,8 @@
 import subprocess
+import sys
 import time
+from adb_utils import ADB
+from device_lock import device_lock
 from screen_agent import ScreenAgent
 import config
 # 打开微信，找到包航的对话，阅读他的最后一条聊天记录，并帮我回复他
@@ -7,7 +10,7 @@ import config
 def clear_background_apps():
     """清空手机后台所有运行中的 App"""
     print("正在清空后台程序...")
-    subprocess.run(["adb", "shell", "input", "keyevent", "187"])
+    subprocess.run([ADB, "shell", "input", "keyevent", "187"])
     time.sleep(1.5)
     from phone_controller import PhoneController
     phone = PhoneController()
@@ -18,7 +21,10 @@ def clear_background_apps():
             print(f"已点击：{text}")
             time.sleep(1)
             return
-    phone.device.swipe(540, 1200, 540, 200, duration=0.3)
+    width, height = phone.device.window_size()
+    # 从屏幕中部往上滑，坐标按分辨率比例计算，避免写死 1080x2400
+    phone.device.swipe(width // 2, int(height * 0.5), width // 2, int(height * 0.1),
+                       duration=0.3)
     time.sleep(0.5)
     for text in ["全部清除", "清除全部", "一键清理", "Clear all"]:
         btn = phone.device(text=text)
@@ -31,12 +37,16 @@ def clear_background_apps():
 
 
 def run_agent(task: str):
-    """清空后台，然后执行任务"""
-    # clear_background_apps()
-    subprocess.run(["adb", "shell", "input", "keyevent", "3"])
-    time.sleep(1)
-    agent = ScreenAgent(max_steps=config.MAX_STEPS)  # 从 config 读，不再传 api_key
-    agent.run(task)
+    """清空后台，然后执行任务（与 Web/实验 runner 共用设备锁）"""
+    with device_lock(timeout=60) as locked:
+        if not locked:
+            print("设备正被其它任务占用，请稍后重试")
+            sys.exit(1)
+        # clear_background_apps()
+        subprocess.run([ADB, "shell", "input", "keyevent", "3"])
+        time.sleep(1)
+        agent = ScreenAgent(max_steps=config.MAX_STEPS)  # 从 config 读，不再传 api_key
+        agent.run(task)
 
 
 if __name__ == "__main__":

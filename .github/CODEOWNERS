@@ -1,0 +1,49 @@
+# CODEOWNERS 建议稿
+#
+# 用法：复制到仓库 .github/CODEOWNERS（或 CODEOWNERS），按实际协作者 handle 修改。
+# 注意：
+#   1. CODEOWNERS 只有在分支保护开启、且 owner 有写权限时才真正生效。
+#   2. 当前 main 为 protected=false（2026-11-15 快照），需要 admin 先配置保护规则。
+#   3. 不要把全部目录指给同一个人；口径相关目录必须由实验负责人审。
+#   4. 以下 handle 来自仓库可确认的协作者（peter-lgxj / calmmmiu / bach-lester），使用前核对。
+
+# 默认：核心维护者
+*                                   @peter-lgxj
+
+# 实验口径：任务集、指标、runner、判分标准
+/experiments/                       @peter-lgxj @bach-lester
+/test.md                            @peter-lgxj @bach-lester
+
+# 核心执行链路
+/screen_agent.py                    @peter-lgxj
+/phone_controller.py                @peter-lgxj
+/ocr_locator.py                     @peter-lgxj
+/input_detector.py                  @peter-lgxj
+/app_launcher.py                    @peter-lgxj
+/memory.py                          @peter-lgxj
+
+# 规划与多应用
+/task_planner.py                    @peter-lgxj @calmmmiu
+/multi_agent.py                     @peter-lgxj @calmmmiu
+
+# 并发与入口
+/device_lock.py                     @peter-lgxj
+/app.py                             @peter-lgxj
+/run.py                             @peter-lgxj
+/frontend.py                        @peter-lgxj
+/start.bat                          @peter-lgxj
+
+# 配置与依赖
+/config.py                          @peter-lgxj
+/requirements.txt                   @peter-lgxj
+/requirements-lock.txt              @peter-lgxj
+/.env.example                       @peter-lgxj
+/pyproject.toml                     @peter-lgxj
+
+# 测试与 CI
+/tests/                             @peter-lgxj @bach-lester
+/.github/                           @peter-lgxj @bach-lester
+
+# 文档
+/README.md                          @peter-lgxj
+/docs/                              @peter-lgxj

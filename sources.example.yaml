@@ -1,0 +1,39 @@
+# DDL 监控配置示例。复制为 sources.yaml 后可直接编辑，或全部用自然语言命令生成：
+#   python -m ddl_agent.monitor.cli add "监控微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次"
+#
+# 手机来源全部通过现有手机智能体读屏，未经真机验证。
+version: 1
+schedule: every 6h
+interval_minutes: 360
+output_dir: output
+state_dir: state
+# 直接写入手机系统日历：可选，默认关闭，需真机验证后再启用
+write_phone_calendar: false
+sources:
+  - id: wechat-21级课程群
+    app: wechat
+    kind: group
+    target: 21级课程群
+    source_type: student_chat
+    enabled: true
+    lookback_days: 14
+    nl_text: 监控微信「21级课程群」，每6小时一次
+    parse_note: app=wechat; kind=group; target=21级课程群; lookback=14d
+  - id: qq-机器学习课程群
+    app: qq
+    kind: group
+    target: 机器学习课程群
+    source_type: student_chat
+    enabled: true
+    lookback_days: 14
+    nl_text: 监控 QQ「机器学习课程群」
+    parse_note: app=qq; kind=group; target=机器学习课程群; lookback=14d
+  - id: outlook-收件箱
+    app: outlook
+    kind: inbox
+    target: 收件箱
+    source_type: official_email
+    enabled: true
+    lookback_days: 14
+    nl_text: 监控 Outlook 收件箱
+    parse_note: app=outlook; kind=inbox; target=收件箱; lookback=14d

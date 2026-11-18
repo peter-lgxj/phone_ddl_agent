@@ -1,16 +1,26 @@
-import uiautomator2 as u2
 import subprocess
 import time
 from PIL import Image
 import io
+import config
 
 
 class PhoneController:
     """手机控制器：基于 uiautomator2，支持中文输入"""
 
     def __init__(self,locator):
+        # 延迟导入：没有 uiautomator2 时本模块仍可被导入（CI 单测需要）
+        import uiautomator2 as u2
+
         # 自动连接 USB 设备
-        self.device = u2.connect()
+        try:
+            self.device = u2.connect()
+        except Exception as e:
+            raise RuntimeError(
+                "无法连接手机：请确认已安装 adb 并加入 PATH、手机已开启开发者选项与 USB 调试、"
+                "`adb devices` 能看到已授权设备。"
+                f"（原始错误：{e}）"
+            ) from e
         self.locator=locator
         print(f"已连接设备：{self.device.info.get('productName', '未知')}")
 
@@ -33,21 +43,27 @@ class PhoneController:
         print(f"滑动：({x1},{y1}) → ({x2},{y2})")
         time.sleep(0.8)
 
-    # def type_text(self, text: str):
-    #     """
-    #     输入文字，完美支持中文。
-    #     原理：uiautomator2 内部用 jsonrpc 调用设备端 agent 完成输入。
-    #     """
-    #     self.device.send_keys(text, clear=False)
-    #     print(f"输入文字：{text}")
-    #     time.sleep(0.5)
-    
     def type_text(self, text: str):
-        """输入文字，自动激活输入框，支持中文"""
-        
-        # 先尝试点击激活输入框
+        """
+        输入文字，自动激活输入框，支持中文。
+        只负责输入，不自动发送——发送由智能体的 send 动作单独完成，
+        以免与动作序列里的 send 叠加导致重复发送或重复回车。
+        """
+
+        # 已聚焦在输入框时直接写入：避免重复点击（tap_input_box 内含 0.8s 等待，YOLO 兜底更慢）
+        focused = self.device(focused=True, className="android.widget.EditText")
+        if bool(focused.exists):
+            try:
+                focused.set_text(text)
+                print(f"输入文字(已聚焦)：{text}")
+                time.sleep(0.3)
+                return
+            except Exception as e:
+                print(f"输入文字(已聚焦)失败：{e}")
+
+        # 未聚焦才点击激活
         self.tap_input_box()
-        time.sleep(0.5)
+        time.sleep(0.3)
         
         # 依次尝试几种写入方式
         # 方式1：标准 EditText
@@ -58,8 +74,8 @@ class PhoneController:
                 print(f"输入文字(EditText)：{text}")
                 time.sleep(0.5)
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"输入文字(EditText)失败：{e}")
 
         # 方式2：focused 状态的控件（当前获得焦点的输入框）
         try:
@@ -69,8 +85,8 @@ class PhoneController:
                 print(f"输入文字(focused)：{text}")
                 time.sleep(0.5)
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"输入文字(focused)失败：{e}")
 
         # 方式3：send_keys 兜底
         self.device.send_keys(text, clear=False)
@@ -79,7 +95,7 @@ class PhoneController:
 
 
     def tap_input_box(self) -> bool:
-        """智能查找并点击输入框"""
+        """智能查找并点击输入框：控件（XML）优先，YOLO 作为兜底"""
         # 方式1：标准 EditText
         try:
             box = self.device(className="android.widget.EditText")
@@ -88,22 +104,43 @@ class PhoneController:
                 print("点击输入框(EditText)")
                 time.sleep(0.8)
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"点击输入框(EditText)失败：{e}")
 
-        # 方式2：微信输入框特殊类名
+        # 方式2：微信输入框特殊类名（resource-id 随微信版本变化，可在 config 中置空关闭）
+        if config.WECHAT_INPUT_RESOURCE_ID:
+            try:
+                box = self.device(className="android.widget.LinearLayout",
+                                resourceId=config.WECHAT_INPUT_RESOURCE_ID)
+                if box.exists:
+                    box.click()
+                    print("点击输入框(微信)")
+                    time.sleep(0.8)
+                    return True
+            except Exception as e:
+                print(f"点击输入框(微信)失败：{e}")
+
+        # 方式3：YOLO 视觉检测兜底
+        # 权重（config.INPUT_BOX_MODEL）缺失或加载失败时只提示并返回 False，
+        # 不能把 FileNotFoundError 抛到任务循环里导致整个任务中断。
         try:
-            box = self.device(className="android.widget.LinearLayout", 
-                            resourceId="com.tencent.mm:id/b4z")
-            if box.exists:
-                box.click()
-                print("点击输入框(微信)")
-                time.sleep(0.8)
-                return True
-        except Exception:
-            pass
+            if not hasattr(self, "_input_detector"):
+                from input_detector import InputDetector
+                self._input_detector = InputDetector()
+            self.screenshot("screen_for_detection.png")
+            detected = self._input_detector.find_best("screen_for_detection.png")
+        except Exception as e:
+            print(f"YOLO 输入框检测不可用（{e}）")
+            return False
 
-        print("未找到输入框控件")
+        if detected:
+            cx, cy = detected["center"]
+            print(f"YOLO 检测到输入框，置信度:{detected['confidence']}  坐标:({cx},{cy})")
+            self.device.click(cx, cy)
+            time.sleep(0.8)
+            return True
+
+        print("未找到输入框控件，YOLO 也未检测到输入框")
         return False
 
     def press_back(self):
@@ -139,8 +176,9 @@ class PhoneController:
         
 
     def is_keyboard_shown(self) -> bool:
+        from adb_utils import ADB
         result = subprocess.run(
-            ["adb", "shell", "dumpsys", "input_method"],
+            [ADB, "shell", "dumpsys", "input_method"],
             capture_output=True,
             encoding="utf-8",
             errors="ignore"
@@ -148,86 +186,6 @@ class PhoneController:
         return "mInputShown=true" in result.stdout
 
 
-    def tap_input_box(self) -> bool:
-        """用 YOLO 检测输入框位置并点击"""
-        # 懒加载，第一次调用时初始化
-        if not hasattr(self, '_input_detector'):
-            from input_detector import InputDetector
-            self._input_detector = InputDetector()
-
-        # 截当前屏幕用于检测
-        self.screenshot("screen_for_detection.png")
-
-        box = self._input_detector.find_best("screen_for_detection.png")
-        if box:
-            cx, cy = box["center"]
-            print(f"YOLO 检测到输入框，置信度:{box['confidence']}  坐标:({cx},{cy})")
-            self.device.click(cx, cy)
-            time.sleep(0.8)
-            return True
-
-        print("YOLO 未检测到输入框")
-        return False
-
-    
-    def type_text(self, text):
-        
-        """输入文字，自动激活输入框，输入完自动发送"""
-        # 确保键盘已弹出
-        if not self.is_keyboard_shown():
-            self.tap_input_box()
-            time.sleep(0.5)
-            
-        # time.sleep(1)
-        # self.tap(404, 2342)
-        # time.sleep(0.5)
-        self.device.send_keys(text, clear=False)
-        print(f"输入文字：{text}")
-        time.sleep(0.5)
-        self._auto_send2(text)
-        time.sleep(0.5)
-        # 输入完自动发送
-        self._auto_send()
-
-    def _auto_send2(self,text):
-        elements=self.locator.detect("screen_current.png")
-        # print(elements)
-        try:
-            for el in elements:
-                if el["text"] == text:
-                    x,y=el['center'][0], el['center'][1]
-                elif el["type"] == "input":
-                    x,y=el['center'][0], el['center'][1]
-            self.tap(x,y)
-            time.sleep(1)
-            self.tap(674, 2343)
-            time.sleep(1)
-        except Exception as e:
-            print(e)
-        
-        
-    def _auto_send(self):
-        """输入完成后自动发送：优先找发送按钮，找不到用 ADB 回车"""
-        import subprocess
-        time.sleep(0.1)
-        try:
-            for label in ["Send", "发送"]:
-                btn = self.device(text=label)
-                if btn.exists:
-                    btn.click()
-                    print(f"自动发送：点击'{label}'按钮")
-                    time.sleep(0.8)
-                    return
-        except Exception:
-            pass
-
-        # 找不到按钮，用 ADB 回车
-        subprocess.run(["adb", "shell", "input", "keyevent", "66"])
-        print("自动发送：ADB 回车")
-        time.sleep(1.5)
-
-
-    
     def tap_send_button(self):
         """发送消息，优先找 Send 按钮，找不到用回车"""
         try:
@@ -239,8 +197,8 @@ class PhoneController:
                     print(f"点击发送按钮：{text}")
                     time.sleep(0.8)
                     return
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"查找发送按钮失败：{e}")
 
         # 找不到按钮才用回车
         self.device.press("enter")
