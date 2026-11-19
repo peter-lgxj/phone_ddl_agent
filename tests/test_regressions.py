@@ -27,6 +27,7 @@ def no_sleep(monkeypatch):
 
 def make_agent(monkeypatch, tmp_path, decide, execute, observe):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config, "MERGED_OBSERVE", False)
     ui_state.init_state("测试任务")   # 真实 run() 也先初始化状态文件
     agent = object.__new__(screen_agent.ScreenAgent)
     agent.phone = DummyPhone()

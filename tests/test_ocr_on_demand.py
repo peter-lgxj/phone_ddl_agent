@@ -1,5 +1,6 @@
 """按需 OCR：触发条件、坐标吸附、以及 _think_and_act 的两条分支。"""
 import json
+from types import SimpleNamespace
 
 from PIL import Image
 
@@ -184,8 +185,11 @@ class FakeCompletions:
         self.calls = 0
 
     def create(self, **kwargs):
+        content = self.content
+        if isinstance(content, list):
+            content = content[min(self.calls, len(content) - 1)]
         self.calls += 1
-        return FakeResponse(self.content)
+        return FakeResponse(content)
 
 
 class FakeClient:
@@ -450,19 +454,63 @@ def test_open_app_skips_ocr(tmp_path, monkeypatch):
     assert timings["ocr_triggered"] is False and timings["ocr"] == 0.0
 
 
-def test_default_step_makes_two_llm_calls(tmp_path, monkeypatch):
-    """默认 COMPLETION_CHECK=decision：决策 1 次 + 观察 1 次，没有额外完成/语义请求。"""
+def test_default_merged_step_makes_one_llm_call(tmp_path, monkeypatch):
+    """默认 MERGED_OBSERVE=1：一次带图请求同时返回 observation 与 action。"""
+    agent = make_agent(tmp_path, monkeypatch,
+                       {"observation": "页面仍在加载",
+                        "action_type": "wait", "description": "等待加载"},
+                       tree_elements=[], ocr_elements=[])
+    monkeypatch.setattr(screen_agent.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(config, "COMPLETION_CHECK", "decision")
+    monkeypatch.setattr(config, "MERGED_OBSERVE", True)
+    monkeypatch.setattr(config, "ENABLE_SEMANTIC_ANALYSIS", False)
+    ui_state.init_state("计数")
+
+    memory = TaskMemory("等待页面")
+    agent._execute_step(1, memory)
+
+    assert agent.client.chat.completions.calls == 1
+    assert memory.get_last_observation() == "页面仍在加载"
+
+
+def test_old_two_stage_makes_two_llm_calls(tmp_path, monkeypatch):
+    """关闭合并观察后回到旧行为：决策 1 次 + 观察 1 次。"""
     agent = make_agent(tmp_path, monkeypatch,
                        {"action_type": "wait", "description": "等待加载"},
                        tree_elements=[], ocr_elements=[])
     monkeypatch.setattr(screen_agent.time, "sleep", lambda *_: None)
     monkeypatch.setattr(config, "COMPLETION_CHECK", "decision")
+    monkeypatch.setattr(config, "MERGED_OBSERVE", False)
     monkeypatch.setattr(config, "ENABLE_SEMANTIC_ANALYSIS", False)
     ui_state.init_state("计数")
 
     agent._execute_step(1, TaskMemory("等待页面"))
 
     assert agent.client.chat.completions.calls == 2
+
+
+def test_merged_invalid_json_falls_back_to_two_stage(tmp_path, monkeypatch):
+    """合并响应不合法时回退两段式，动作只执行一次。"""
+    action_json = json.dumps({"action_type": "wait", "description": "等待加载"},
+                             ensure_ascii=False)
+    agent = make_agent(tmp_path, monkeypatch,
+                       {"action_type": "wait", "description": "等待加载"},
+                       tree_elements=[], ocr_elements=[])
+    agent.client = FakeClient(["不是 JSON", "页面已加载", action_json])
+    monkeypatch.setattr(screen_agent.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(config, "COMPLETION_CHECK", "decision")
+    monkeypatch.setattr(config, "MERGED_OBSERVE", True)
+    monkeypatch.setattr(config, "ENABLE_SEMANTIC_ANALYSIS", False)
+    ui_state.init_state("计数")
+
+    executed = []
+    monkeypatch.setattr(agent, "_execute", lambda a: executed.append(a) or False)
+    agent._execute_step(1, TaskMemory("等待页面"))
+
+    # 1 次失败的合并请求 + 回退的 observe + decide
+    assert agent.client.chat.completions.calls == 3
+    assert len(executed) == 1
+    assert agent._last_step_timings["merged_fallback"] is True
 
 
 def test_every_step_completion_adds_one_llm_call(tmp_path, monkeypatch):
@@ -478,3 +526,40 @@ def test_every_step_completion_adds_one_llm_call(tmp_path, monkeypatch):
     agent._execute_step(3, TaskMemory("等待页面"))
 
     assert agent.client.chat.completions.calls == 3
+
+
+def test_adaptive_settle_stops_when_screen_stable(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config, "OBSERVE_SETTLE_SECONDS", 1.0)
+    monkeypatch.setattr(config, "OBSERVE_SETTLE_MODE", "adaptive")
+    monkeypatch.setattr(config, "OBSERVE_SETTLE_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(screen_agent.time, "sleep", lambda *_: None)
+    agent = object.__new__(screen_agent.ScreenAgent)
+
+    class Phone:
+        calls = 0
+
+        def screenshot(self, save_path="screen.png"):
+            self.calls += 1
+            # 前两帧不同，第三帧开始稳定
+            shade = 0 if self.calls >= 3 else self.calls * 40
+            Image.new("RGB", (32, 32), (shade, shade, shade)).save(save_path)
+
+    agent.phone = Phone()
+    elapsed = agent._settle_screen()
+
+    assert agent.phone.calls >= 3
+    assert elapsed < 1.0
+
+
+def test_fixed_settle_waits_full_duration(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config, "OBSERVE_SETTLE_SECONDS", 0.5)
+    monkeypatch.setattr(config, "OBSERVE_SETTLE_MODE", "fixed")
+    sleeps = []
+    monkeypatch.setattr(screen_agent.time, "sleep", lambda s: sleeps.append(s))
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent.phone = SimpleNamespace()
+
+    assert agent._settle_screen() == 0.5
+    assert sleeps == [0.5]

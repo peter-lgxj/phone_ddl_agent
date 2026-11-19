@@ -164,6 +164,19 @@ class OCRLocator:
         """只跑 OCR（不取控件树），供「OCR 兜底」路径使用"""
         return self._ocr_detect(image_path)
 
+    def warmup(self) -> None:
+        """提前加载模型，避免第一步把 7s 加载时间算进 OCR 耗时。"""
+        if self._engine_name == "easyocr":
+            if self.reader is None:
+                import easyocr
+                self.reader = easyocr.Reader(["ch_sim", "en"], gpu=False)
+            return
+        if self._rapid_reader is None:
+            from rapidocr_onnxruntime import RapidOCR
+            self._rapid_reader = RapidOCR()
+        import numpy as np
+        self._rapid_reader(np.zeros((32, 32, 3), dtype=np.uint8), use_cls=False)
+
     # ------------------------------------------------------------------ #
     #  XML 通道 (已修改为使用 uiautomator2)
     # ------------------------------------------------------------------ #

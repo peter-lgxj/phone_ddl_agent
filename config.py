@@ -149,6 +149,21 @@ OCR_SCALE = float(os.getenv("OCR_SCALE", "0.5"))
 
 # 动作执行后等待界面稳定的秒数（再截图观察）
 OBSERVE_SETTLE_SECONDS = float(os.getenv("OBSERVE_SETTLE_SECONDS", "1.0"))
+# settle 策略：adaptive（默认，截图哈希连续两次相同就提前返回，最多等 OBSERVE_SETTLE_SECONDS）
+# / fixed（旧行为，固定等待满）
+OBSERVE_SETTLE_MODE = os.getenv("OBSERVE_SETTLE_MODE", "adaptive")
+OBSERVE_SETTLE_POLL_SECONDS = float(os.getenv("OBSERVE_SETTLE_POLL_SECONDS", "0.15"))
+
+# 观察并入决策：默认开。一次带图请求同时返回 observation 与 action，
+# 默认 COMPLETION_CHECK=decision 时每步 1 次视觉请求（旧行为 2 次）。
+# 合并响应 JSON 不合法时本步回退旧的两段式（observe + decide），动作仍只执行一次。
+MERGED_OBSERVE = os.getenv("MERGED_OBSERVE", "1").strip().lower() not in (
+    "0", "false", "off", ""
+)
+# 启动时预热 OCR 模型（RapidOCR 首次加载约 7s，挪到启动阶段）
+OCR_PREHEAT = os.getenv("OCR_PREHEAT", "1").strip().lower() not in (
+    "0", "false", "off", ""
+)
 
 # 滚动观察时是否额外跑 OCR：模型只给概括时，仍能把屏幕文字带进 observation。
 # 开关默认开启，只对 OBSERVE_OCR_ACTIONS 中的动作生效，不影响点击/输入等场景。
