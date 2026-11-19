@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>手机 DDL 日历</title>
+  <style>
+    :root{font-family:system-ui,"Microsoft YaHei",sans-serif;color:#17233b;background:#f4f7fb}
+    *{box-sizing:border-box}body{margin:0}header{background:#17233b;color:white;padding:22px max(20px,calc((100% - 1100px)/2))}
+    header h1{margin:0 0 5px;font-size:24px}header p{margin:0;color:#cbd5e1;font-size:14px}
+    main{max-width:1100px;margin:24px auto;padding:0 16px}.card{background:white;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin-bottom:16px}
+    h2{font-size:17px;margin:0 0 14px}form{display:flex;gap:8px;flex-wrap:wrap}input{flex:1;min-width:260px;border:1px solid #cbd5e1;border-radius:8px;padding:10px;font:inherit}
+    button{border:0;border-radius:8px;background:#2563eb;color:white;padding:10px 16px;font:inherit;cursor:pointer}button:disabled{opacity:.5;cursor:wait}
+    #sources{padding-left:20px;line-height:1.8}#message{white-space:pre-wrap;color:#475569}#message.error{color:#b91c1c}
+    .toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.muted{color:#64748b;font-size:14px}
+    iframe{width:100%;height:720px;border:1px solid #e2e8f0;border-radius:10px;background:white}
+  </style>
+</head>
+<body>
+<header><h1>手机 DDL 日历</h1><p>通过手机智能体读取指定会话，整理截止时间并在日历中查看</p></header>
+<main>
+  <section class="card"><h2>1. 添加手机来源</h2>
+    <form id="source-form"><input id="source-text" required placeholder="例如：监控微信「课程群」，最近14天，每6小时一次" aria-label="来源描述"><button>添加来源</button></form>
+    <ul id="sources"></ul>
+  </section>
+  <section class="card"><div class="toolbar"><h2>2. 扫描并整理 DDL</h2><button id="scan">开始扫描</button></div>
+    <p class="muted">扫描时请保持手机解锁、USB 调试已授权。每个来源会用手机智能体打开相应 App。</p><div id="message" role="status"></div>
+  </section>
+  <section class="card"><div class="toolbar"><h2>3. 日历</h2><a href="/ddl/calendar" target="_blank" rel="noopener">在新窗口打开</a></div>
+    <div id="empty" class="muted">完成扫描后，日历会显示在这里。</div><iframe id="calendar" title="DDL 日历" hidden></iframe>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let calendarLoaded = false;
+let lastCycle = null;
+async function api(url, options) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || '请求失败');
+  return data;
+}
+function showError(error) { $('message').textContent = error.message; $('message').className = 'error'; }
+async function refresh() {
+  try {
+    const data = await api('/api/ddl');
+    $('sources').replaceChildren();
+    data.sources.forEach(source => {
+      const li = document.createElement('li');
+      li.textContent = `${source.app} / ${source.target} · 最近 ${source.lookback_days} 天 `;
+      const remove = document.createElement('button');
+      remove.textContent = '删除'; remove.type = 'button'; remove.disabled = data.running;
+      remove.addEventListener('click', async () => {
+        try { await api('/api/ddl/sources/' + encodeURIComponent(source.id), {method:'DELETE'}); await refresh(); }
+        catch(error) { showError(error); }
+      });
+      li.append(remove);
+      $('sources').append(li);
+    });
+    $('scan').disabled = data.running;
+    if (data.running) $('message').textContent = '正在使用手机扫描，请稍候…';
+    else if (data.error) showError(new Error(data.error));
+    else if (data.result) {
+      const r = data.result;
+      $('message').className = '';
+      $('message').textContent = `扫描完成：新增 ${r.inserted}，更新 ${r.updated}，跳过 ${r.skipped}。` +
+        (r.errors.length ? `\n需检查：${r.errors.join('；')}` : '');
+    }
+    if (data.calendar_ready) {
+      $('empty').hidden = true; $('calendar').hidden = false;
+      const cycle = data.result && data.result.cycle_id;
+      if (!calendarLoaded || (cycle && cycle !== lastCycle)) {
+        $('calendar').src = '/ddl/calendar?t=' + Date.now(); calendarLoaded = true; lastCycle = cycle;
+      }
+    }
+  } catch(error) { showError(error); }
+}
+$('source-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  try {
+    await api('/api/ddl/sources', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('source-text').value})});
+    $('source-text').value = ''; $('message').className = ''; $('message').textContent = '来源已添加。'; await refresh();
+  } catch(error) { showError(error); }
+});
+$('scan').addEventListener('click', async () => {
+  try { await api('/api/ddl/scan', {method:'POST'}); await refresh(); }
+  catch(error) { showError(error); }
+});
+refresh(); setInterval(refresh, 3000);
+</script>
+</body></html>

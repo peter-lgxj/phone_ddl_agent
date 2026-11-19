@@ -37,6 +37,12 @@ def test_swipe_without_coordinates_is_skipped(agent):
     assert agent.phone.calls == []
 
 
+def test_swipe_accepts_model_x1_y1_fields(agent):
+    agent._execute({"action_type": "swipe", "x1": 499, "y1": 100,
+                    "x2": 499, "y2": 744})
+    assert agent.phone.calls == [("swipe", (499, 100, 499, 744), {})]
+
+
 def test_tap_parses_string_coordinates(agent):
     agent._execute({"action_type": "tap", "x": "135", "y": 720})
     assert agent.phone.calls == [("tap", (135, 720), {})]

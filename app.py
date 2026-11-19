@@ -8,8 +8,10 @@ from flask_socketio import SocketIO, emit
 
 from device_lock import device_lock
 from adb_utils import ADB
+from ddl_agent.web import blueprint as ddl_blueprint
 
 app = Flask(__name__)
+app.register_blueprint(ddl_blueprint)
 # 默认值仅用于本地调试；对外暴露时请通过环境变量覆盖
 app.config['SECRET_KEY'] = os.getenv("FLASK_SECRET_KEY", "mobile_agent_secret")
 socketio = SocketIO(
