@@ -68,7 +68,18 @@ def test_history_text_keeps_action_params_and_observation(tmp_path, monkeypatch)
     assert "x=101" in text
     assert "第2步" in text and "text=文本2" in text
     assert "第2步观察结果" in text
-    assert "第6步" not in text  # 已由原图承载
+    assert "第6步" in text  # 截图不包含已执行的动作，必须保留对应文字
+
+
+def test_history_text_window_keeps_last_eight_steps_even_with_images(tmp_path, monkeypatch):
+    memory = _memory(10)
+    agent = _agent(tmp_path)
+    monkeypatch.setattr(config, "HISTORY_TEXT_STEPS", 8)
+
+    text = agent._build_history_text(memory, {9, 10})
+    assert "第2步" not in text
+    assert "第3步" in text
+    assert "第10步" in text
 
 
 def test_history_text_window_zero_no_error(tmp_path, monkeypatch):

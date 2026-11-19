@@ -134,7 +134,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 | `OCR_SCALE` | OCR 输入图缩放比例，默认 0.5；检测框按 `1/scale` 映射回原图，tap 坐标仍是设备坐标 |
 | `OCR_SNAP_MAX_DISTANCE` | 吸附半径（像素），默认 80；超出则保留模型原始坐标 |
 | `OBSERVE_SETTLE_SECONDS` | 动作后等待界面稳定的秒数，默认 1.0 |
-| `HISTORY_IMAGE_WINDOW` / `HISTORY_TEXT_STEPS` | 历史上下文窗口：带最近几张原图（默认 1，当前屏幕始终带图）、更早步骤最多列几条文字摘要（默认 8）；均可用同名环境变量覆盖 |
+| `HISTORY_IMAGE_WINDOW` / `HISTORY_TEXT_STEPS` | 历史上下文窗口：带最近 2 张历史截图和当前截图；最近 8 步的动作与观察另以短文字保留，防止重复操作；均可用同名环境变量覆盖 |
 | `IMAGE_PREPROCESS` | 截图预处理总开关（默认开）；置 0 时原样发送 PNG |
 | `IMAGE_JPEG_QUALITY` | JPEG 质量，默认 85；置 0 保留 PNG |
 | `IMAGE_MAX_SIDE` | 等比缩放的边长上限，默认 0（不缩放）。**缩放会破坏坐标一致性，见下节** |
@@ -282,35 +282,35 @@ $env:HF_HUB_CACHE = "$env:HF_HOME\hub"
 
 ### 启动与切换
 
-一键启动（前台运行，端口 8080）：
+一键启动（前台运行，端口 18080）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\start_local_vlm.ps1
 ```
 
-脚本参数可调：`-Port`、`-NGpuLayers`、`-Ctx`、`-Threads`、`-ModelDir`、`-LlamaDir`。服务提供 OpenAI 兼容接口：
+脚本参数可调：`-Port`、`-NGpuLayers`、`-Ctx`、`-ImageMinTokens`、`-ImageMaxTokens`、`-Threads`、`-ModelDir`、`-LlamaDir`。服务提供 OpenAI 兼容接口：
 
 ```bash
-curl http://127.0.0.1:8080/v1/models
-# 模型别名：qwen3-vl-8b-instruct；支持 multimodal（image_url base64）
+curl http://127.0.0.1:18080/v1/models
+# 模型别名：qwen3-vl-8b-local；支持 multimodal（image_url base64）
 ```
 
 切换执行模型（不用改代码）：
 
 ```powershell
-$env:ACTIVE_PROVIDER = "local"   # 或 "qwen" 切回云端
+$env:ACTIVE_PROVIDER = "local_8b"   # 当前默认值；或 "qwen" 切回云端
 python run.py
 ```
 
-`config.PROVIDERS["local"]` 默认 `base_url=http://127.0.0.1:8080/v1`，可用 `LOCAL_VLM_BASE_URL`、`LOCAL_VLM_MODEL` 覆盖；`llama-server` 不校验密钥，`LOCAL_VLM_API_KEY` 仅需非空（默认 `local`）。
+`config.PROVIDERS["local_8b"]` 默认 `base_url=http://127.0.0.1:18080/v1`，可用 `LOCAL_8B_BASE_URL`、`LOCAL_8B_MODEL` 覆盖；`llama-server` 不校验密钥。
 
 真实请求验证（本机实测）：一张真实桌面截图 → 视觉描述正确；按执行提示词返回 `{"action_type": "home", "params": {}, "observation": "返回桌面"}`，JSON 可解析。带图请求 prompt eval 约 76 秒（CPU 视觉编码），生成约 1–2 秒。未在 Android 真机上跑过，仅验证了模型服务与图片协议。
 
-### 上下文窗口（6 GB 卡为什么要限制）
+### 上下文窗口与显存
 
-每张截图都会转成数百到上千个视觉 token，多轮任务里把历史原图全带上会同时抬高上下文与显存。默认策略：`HISTORY_IMAGE_WINDOW=1` 只带最近 1 张历史原图，当前屏幕始终带图；更早的步骤压成文字摘要（动作类型、坐标/输入文字、观察结论），由 `HISTORY_TEXT_STEPS` 控制条数。
+每张截图都会转成数百到上千个视觉 token，多轮任务里把历史原图全带上会同时抬高上下文与显存。默认策略：`HISTORY_IMAGE_WINDOW=2` 带最近 2 张历史截图，当前屏幕始终带图；最近 8 步另保留简短的动作与观察文字，因为截图本身无法说明已经执行过哪些动作。服务端用 q8_0 KV 缓存，图片视觉 token 范围默认限制为 768–1024，以控制三张图的上下文和显存占用。文字条数由 `HISTORY_TEXT_STEPS` 控制。
 
-调大 `HISTORY_IMAGE_WINDOW` 的代价：视觉 token 与显存占用上升，6 GB 卡更容易 OOM，单步耗时也会增加；建议先在当前设备上逐步加 1 并观察 `nvidia-smi` 与请求耗时。
+调大 `HISTORY_IMAGE_WINDOW` 的代价：视觉 token 与显存占用上升，单步耗时也会增加；可观察 `nvidia-smi` 与请求耗时。若界面小字识别下降，可把 `-ImageMinTokens` 和 `-ImageMaxTokens` 调回 1024 或更高。
 
 ## 项目结构
 
