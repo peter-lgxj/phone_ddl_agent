@@ -135,6 +135,9 @@ def format_ocr_observation(elements: list[dict]) -> str:
     return "\n".join(lines)
 
 
+READ_ONLY_BLOCKED_ACTIONS = {"send", "press_enter", "type"}
+
+
 class ScreenAgent:
 
     ACTIONS = """
@@ -151,7 +154,7 @@ class ScreenAgent:
 - finish(summary)：任务完成
 """
 
-    def __init__(self, max_steps: int = None):
+    def __init__(self, max_steps: int = None, read_only: bool | None = None):
         provider_name = config.ACTIVE_PROVIDER
         provider      = config.PROVIDERS[provider_name]
 
@@ -190,6 +193,9 @@ class ScreenAgent:
         self.phone    = PhoneController(self.ocr)
         self.launcher = AppLauncher(self.phone)
         self.max_steps = max_steps or config.MAX_STEPS
+        self.read_only = (
+            getattr(config, "READ_ONLY_MODE", True) if read_only is None else read_only
+        )
         self.run_dir   = None
         self.last_status = "idle"   # done / timeout / failed / idle
         self._observe_valid = False  # 当前 screen_observe.png 是否是本步真实截图
@@ -690,6 +696,13 @@ class ScreenAgent:
 
     def _execute(self, action: dict) -> bool:
         t = action.get("action_type", "wait")
+
+        if self.read_only and t in READ_ONLY_BLOCKED_ACTIONS:
+            reason = f"只读模式拒绝动作「{t}」：读屏任务不允许发言或改动输入内容"
+            action["blocked"] = True
+            action["blocked_reason"] = reason
+            print(f"  ⛔  {reason}")
+            return False
 
         if t == "open_app":
             self.launcher.launch(action.get("app_name", ""))

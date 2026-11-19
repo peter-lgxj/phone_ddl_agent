@@ -13,6 +13,9 @@ class AppLauncher:
         "钉钉":     "com.alibaba.android.rimet",
         "飞书":     "com.ss.android.lark",
 
+        # 邮件
+        "Outlook":  "com.microsoft.office.outlook",
+
         # 外卖 / 购物
         "美团":     "com.sankuai.meituan",
         "饿了么":   "me.ele",

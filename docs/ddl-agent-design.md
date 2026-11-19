@@ -157,7 +157,7 @@ class MessageSource(Protocol):
 
 | 实现 | 状态 | 说明 |
 |---|---|---|
-| `MobileAppSource`（微信 / QQ / Outlook） | **主路径；真机只读读取已验证一次** | 通过 ScreenAgent 在 App 内搜索/滚动定位目标会话，读取屏幕消息；未覆盖真实课程群/第三方会话 |
+| `MobileAppSource`（微信 / QQ / Outlook） | **主路径；仅微信自聊会话做过一次真机只读验证** | 通过 ScreenAgent 在 App 内搜索/滚动定位目标会话，读取屏幕消息。微信已验证一次；QQ 与 Outlook 目前只有包名映射和代码路径，**未做真机读屏验证**；三者都未覆盖真实课程群/第三方会话 |
 | `LocalEmlConnector` | 离线测试替身 | 读取 `*.eml` 目录；无手机时跑通全链路 |
 | `LocalChatConnector` | 离线测试替身 | 读取聊天归档 JSON；无手机时跑通全链路 |
 | `GraphMailConnector` | 不在主路径 | 将来可选实现的代码骨架；当前不启用、不测试、不作为交付能力 |

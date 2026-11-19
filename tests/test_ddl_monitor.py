@@ -354,6 +354,17 @@ def test_mobile_source_builds_search_task_and_reads_steps():
     assert messages[0].source_name == "21级课程群"
 
 
+def test_mobile_source_forces_read_only_on_production_agent():
+    source = MonitorSource(id="qq-a", app="qq", kind="group", target="2026 计算机班级群",
+                           source_type="student_chat")
+    agent = FakeAgent(["COMP7608 HW1 deadline 2026-11-20 23:59"])
+    mobile = MobileAppSource(source, agent=agent, use_device_lock=False, now=NOW)
+
+    mobile.fetch()
+
+    assert agent.read_only is True
+
+
 def test_mobile_source_raises_when_target_missing():
     source = MonitorSource(id="wechat-a", app="wechat", kind="group", target="不存在的群",
                            source_type="student_chat")

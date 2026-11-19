@@ -245,6 +245,7 @@ def make_agent(tmp_path, monkeypatch, action, tree_elements=None, ocr_elements=N
     agent._last_model_action = None
     agent._last_decision_timings = {}
     agent._last_step_timings = {}
+    agent.read_only = False
     return agent
 
 
