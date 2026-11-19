@@ -20,6 +20,11 @@
 
 ## 一键启动（Windows）
 
+网页入口：用 `D:\anaconda\envs\mobile_agent\python.exe app.py` 启动后打开
+`http://127.0.0.1:5000/ddl`，在页面中用自然语言添加微信、QQ 或 Outlook 手机来源，
+点击“开始扫描”，完成后可直接查看日历。首页也提供“DDL 日历”入口。
+扫描需要已连接并授权的手机；没有手机时仍可查看已生成的日历。
+
 1. 首次使用，先告诉 agent 要监控什么（自然语言，会写入 `sources.yaml`）：
 
    ```bash
