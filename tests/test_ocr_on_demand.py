@@ -7,6 +7,7 @@ import config
 import input_detector
 import ocr_locator
 import screen_agent
+import ui_state
 from memory import TaskMemory
 
 
@@ -197,7 +198,7 @@ class StubPhone:
         self.path = path
 
     def screenshot(self, save_path="screen.png"):
-        Image.new("RGB", (1080, 2374), (30, 30, 30)).save(self.path)
+        Image.new("RGB", (1080, 2374), (30, 30, 30)).save(save_path)
 
 
 class StubOCR:
@@ -305,6 +306,7 @@ def test_search_icon_uses_yolo_when_tree_and_ocr_have_no_label(tmp_path, monkeyp
     assert (action["x"], action["y"]) == (897, 193)
     assert agent._last_decision_timings["snap_source"] == "yolo"
     assert agent.ocr.ocr_calls == 1
+    assert agent.client.chat.completions.calls == 1  # 定位只加本地候选，不增加 LLM 请求
 
 
 def test_input_detector_does_not_choose_search_icon_as_input():
@@ -445,3 +447,33 @@ def test_open_app_skips_ocr(tmp_path, monkeypatch):
     assert agent.ocr.format_calls == 0
     timings = agent._last_decision_timings
     assert timings["ocr_triggered"] is False and timings["ocr"] == 0.0
+
+
+def test_default_step_makes_two_llm_calls(tmp_path, monkeypatch):
+    """默认 COMPLETION_CHECK=decision：决策 1 次 + 观察 1 次，没有额外完成/语义请求。"""
+    agent = make_agent(tmp_path, monkeypatch,
+                       {"action_type": "wait", "description": "等待加载"},
+                       tree_elements=[], ocr_elements=[])
+    monkeypatch.setattr(screen_agent.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(config, "COMPLETION_CHECK", "decision")
+    monkeypatch.setattr(config, "ENABLE_SEMANTIC_ANALYSIS", False)
+    ui_state.init_state("计数")
+
+    agent._execute_step(1, TaskMemory("等待页面"))
+
+    assert agent.client.chat.completions.calls == 2
+
+
+def test_every_step_completion_adds_one_llm_call(tmp_path, monkeypatch):
+    """切回旧行为 every_step 时，每步会多一次带图的完成判断请求。"""
+    agent = make_agent(tmp_path, monkeypatch,
+                       {"action_type": "wait", "description": "等待加载"},
+                       tree_elements=[], ocr_elements=[])
+    monkeypatch.setattr(screen_agent.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(config, "COMPLETION_CHECK", "every_step")
+    monkeypatch.setattr(config, "ENABLE_SEMANTIC_ANALYSIS", False)
+    ui_state.init_state("计数")
+
+    agent._execute_step(3, TaskMemory("等待页面"))
+
+    assert agent.client.chat.completions.calls == 3

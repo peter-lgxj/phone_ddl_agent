@@ -1,4 +1,4 @@
-# 手机智能体（Phone Agent）
+﻿# 手机智能体（Phone Agent）
 
 使用视觉语言模型理解 Android 手机屏幕，通过 ADB 和 uiautomator2 执行操作；支持任务规划、多应用任务、OCR 定位与网页交互界面。
 
@@ -231,6 +231,8 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 
 按上表估算：每步请求数 4 → **2**；不触发定位的步骤约 **8–10s**，tap 步控件树命中时约 **8–10s**，退到 OCR 时约 **10–12s**。以上为按阶段耗时推算；整步耗时以真机单次实测为准（见上方报告链接），不作为稳定性能指标。
 
+本轮的「目标定位 / 搜索图标」改动只增加本地 YOLO 与 OCR 候选，**不改变每步 LLM 请求次数**：默认仍是决策 1 次 + 观察 1 次；完成判断仍并入决策响应（`COMPLETION_CHECK=decision`），语义分析默认关闭。`tests/test_ocr_on_demand.py` 用假客户端断言了默认每步 2 次、`every_step` 3 次。
+
 `OCR_SCALE` 取舍（同一批图片实测，二次调用、机器空闲）：
 
 | scale | 缩放后尺寸 | 耗时 | 设置页元素 | 结算页元素 | 关键字段（￥128.00/订单号/确认支付） | 中心点偏差 |
@@ -334,7 +336,7 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（248 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 测试与工程化：`tests/`（250 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
