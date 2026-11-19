@@ -1,5 +1,6 @@
 import json
 import base64
+import hashlib
 import os
 import shutil
 import time
@@ -190,6 +191,13 @@ class ScreenAgent:
         self.text_extra_body = planner_cfg.get("extra_body")
 
         self.ocr      = OCRLocator()
+        if getattr(config, "OCR_PREHEAT", True):
+            started = time.perf_counter()
+            try:
+                self.ocr.warmup()
+                print(f"OCR 预热完成：{time.perf_counter() - started:.1f}s")
+            except Exception as e:
+                print(f"  ⚠️  OCR 预热失败，首次 OCR 时再加载：{e}")
         self.phone    = PhoneController(self.ocr)
         self.launcher = AppLauncher(self.phone)
         self.max_steps = max_steps or config.MAX_STEPS
@@ -260,7 +268,8 @@ class ScreenAgent:
             return "（更早步骤已省略，仅保留最近原图）"
         return format_steps_compact(older[-limit:])
 
-    def _build_prompt(self, memory, history_images, history_text, ocr_result, semantic_analysis) -> str:
+    def _build_prompt(self, memory, history_images, history_text, ocr_result,
+                      semantic_analysis, merged: bool = False) -> str:
         """构建单步决策 prompt；关掉语义分析时不再出现任何【语义分析】引用"""
         known_apps = "、".join(AppLauncher.KNOWN_APPS.keys())
 
@@ -292,6 +301,17 @@ class ScreenAgent:
             f"    - 第{len(history_images) + 1}张：当前屏幕（本次需要决策）"
         )
         image_section = "\n".join(image_lines)
+
+        merged_section = ""
+        observation_schema = ""
+        if merged:
+            merged_section = """
+    ## 本步同时完成观察
+    当前截图是上一步动作执行后的界面（第 1 步是初始界面）。先用 observation 描述截图里
+    与任务相关的关键事实（页面/会话名、消息发送者与时间、是否找到目标等），再给出下一步 action。
+    observation 只写截图事实，不要编造；找不到就写“未看到”。
+"""
+            observation_schema = '    "observation": "当前截图事实描述（本步动作执行前）",\n'
         sent_width, sent_height = (getattr(self, "_last_image_meta", None) or {}).get(
             "sent_size", [1080, 2400]
         )
@@ -315,7 +335,7 @@ class ScreenAgent:
 
     ## 已执行的历史步骤（原图只保留最近若干张，更早步骤为文字摘要）
     {history_text}
-{semantic_section}
+{semantic_section}{merged_section}
     ## 当前屏幕 OCR 识别结果
     {ocr_section}
 
@@ -344,7 +364,7 @@ class ScreenAgent:
 
     ## 只返回 JSON：
     {{
-    "thought": "当前截图显示...，下一步应该...",
+{observation_schema}    "thought": "当前截图显示...，下一步应该...",
     "action_type": "open_app/tap/tap_input_box/type/send/press_enter/swipe/back/home/wait/finish",
     "app_name": "（open_app时填）",
     "x": 数字,
@@ -427,8 +447,11 @@ class ScreenAgent:
     #  决策：文字模型先分析 → VL 模型看图行动
     # ══════════════════════════════════════════════════════════
 
-    def _think_and_act(self, memory: TaskMemory) -> dict:
+    def _think_and_act(self, memory: TaskMemory, merged: bool = False) -> dict | None:
         timings = {}
+        self._last_merged_parse_failed = False
+        self._last_merged_observation = ""
+        self._last_merged_ocr_text = ""
         started = time.time()
         self.phone.screenshot("screen_current.png")
         timings["screenshot"] = round(time.time() - started, 2)
@@ -438,6 +461,19 @@ class ScreenAgent:
         ocr_result = ""
         if ocr_mode == "always":
             ocr_result = self.ocr.format_for_prompt("screen_current.png")
+        # 合并观察时，上一步若为滚动动作，仍然把当前屏幕 OCR 原文并入 observation
+        if merged and memory.steps:
+            prev_type = str((memory.steps[-1].get("action") or {}).get("action_type") or "").lower()
+            if (getattr(config, "OBSERVE_OCR_ENABLED", False)
+                    and prev_type in getattr(config, "OBSERVE_OCR_ACTIONS", {"swipe", "scroll"})):
+                try:
+                    elements = self.ocr.detect_ocr("screen_current.png")
+                    text = format_ocr_observation(elements)
+                    self._last_merged_ocr_text = text
+                    if text:
+                        ocr_result = (ocr_result + "\n[上一动作后的 OCR]\n" + text).strip()
+                except Exception as e:
+                    print(f"  ⚠️  合并观察 OCR 失败，保留模型描述：{e}")
         timings["ocr_pre"] = round(time.time() - started, 2)
         timings["ocr"] = timings["ocr_pre"]
         timings["ocr_triggered"] = ocr_mode == "always"
@@ -478,7 +514,7 @@ class ScreenAgent:
         timings["semantic"] = round(time.time() - started, 2)
 
         prompt = self._build_prompt(memory, history_images, history_text,
-                                    ocr_result, semantic_analysis)
+                                    ocr_result, semantic_analysis, merged=merged)
 
         content.append({"type": "text", "text": prompt})
 
@@ -504,7 +540,26 @@ class ScreenAgent:
                 print(f"  ⚠️  JSON 修复成功")
             except json.JSONDecodeError:
                 print(f"  ⚠️  解析失败：{raw}")
+                if merged:
+                    # 合并响应不合法：本步回退旧的两段式，先不执行任何动作
+                    self._last_merged_parse_failed = True
+                    self._last_decision_timings = timings
+                    return None
                 action = {"action_type": "wait", "description": "解析异常，等待重试"}
+
+        if merged:
+            if (not isinstance(action, dict) or "observation" not in action
+                    or not action.get("action_type")):
+                print(f"  ⚠️  合并响应缺少 observation/action，回退两段式")
+                self._last_merged_parse_failed = True
+                self._last_decision_timings = timings
+                return None
+            self._last_merged_observation = str(action.pop("observation") or "").strip()
+            if (self._last_merged_ocr_text
+                    and self._last_merged_ocr_text not in self._last_merged_observation):
+                self._last_merged_observation = (
+                    f"{self._last_merged_observation}\n[OCR]\n{self._last_merged_ocr_text}"
+                ).strip()
 
         # 缩放过才反算；未缩放时 map_action_coords 原样返回，不引入偏移
         mapped = image_preprocess.map_action_coords(action, image_meta)
@@ -637,9 +692,42 @@ class ScreenAgent:
             # Windows 上被前端读取时会 PermissionError；清理失败不应终止任务
             print(f"│  ⚠️  旧观察截图无法删除（{e}），完成检测前会再次尝试")
 
+    def _settle_screen(self) -> float:
+        """等待界面稳定：adaptive 时截图哈希连续两次相同就返回，最多等上限。"""
+        max_wait = float(getattr(config, "OBSERVE_SETTLE_SECONDS", 1.0))
+        if max_wait <= 0:
+            return 0.0
+        started = time.perf_counter()
+        if getattr(config, "OBSERVE_SETTLE_MODE", "adaptive") != "adaptive":
+            time.sleep(max_wait)
+            return max_wait
+
+        poll = max(float(getattr(config, "OBSERVE_SETTLE_POLL_SECONDS", 0.15)), 0.02)
+        previous = None
+        try:
+            while time.perf_counter() - started < max_wait:
+                self.phone.screenshot("screen_settle.png")
+                with open("screen_settle.png", "rb") as f:
+                    digest = hashlib.md5(f.read()).hexdigest()
+                if digest == previous:
+                    break
+                previous = digest
+                time.sleep(poll)
+        except Exception as e:
+            print(f"  ⚠️  自适应 settle 失败，回退固定等待：{e}")
+            remaining = max_wait - (time.perf_counter() - started)
+            if remaining > 0:
+                time.sleep(remaining)
+        finally:
+            try:
+                os.remove("screen_settle.png")
+            except OSError:
+                pass
+        return round(time.perf_counter() - started, 2)
+
     def _observe(self, last_action: dict, memory: TaskMemory) -> str:
         """执行动作后截图，VL 模型描述结果；滚动类动作再叠加 OCR 文本。"""
-        time.sleep(float(getattr(config, "OBSERVE_SETTLE_SECONDS", 1.0)))
+        self._settle_screen()
         self._clear_observe_shot()   # 先删旧图：截图失败时不会留下过期画面
         self._last_observe_ocr_seconds = 0.0
         self.phone.screenshot("screen_observe.png")
@@ -858,8 +946,32 @@ class ScreenAgent:
         done 表示完成检测判定已完成，summary 为结束说明。
         """
         timings = dict(getattr(self, "_last_decision_timings", {}) or {})
+        merged_active = (
+            getattr(config, "MERGED_OBSERVE", True)
+            and getattr(config, "COMPLETION_CHECK", "decision") == "decision"
+        )
+        self._last_observation_scope = "pre_action" if merged_active else "post_action"
         started = time.time()
-        action = self._decide(step, memory)
+        if merged_active:
+            action = self._decide(step, memory, merged=True)
+            if action is None:
+                # 合并响应不合法：本步回退旧的两段式（先观察当前屏幕，再决策）
+                timings["merged_fallback"] = True
+                print("│  ↩️  合并观察回退为两段式")
+                prev_action = dict(memory.steps[-1].get("action") or {}) if memory.steps else {}
+                try:
+                    observation = self._observe(prev_action, memory)
+                    self._observe_valid = True
+                except Exception as e:
+                    observation = f"观察失败（回退两段式，未执行动作）：{e}"
+                    self._clear_observe_shot()
+                    print(f"│  ⚠️  {observation}")
+                action = self._decide(step, memory, merged=False)
+            else:
+                observation = self._last_merged_observation or "（合并响应未提供观察）"
+                self._observe_valid = True
+        else:
+            action = self._decide(step, memory)
         timings["decide_total"] = round(time.time() - started, 2)
 
         # 动作只执行一次，不随观察/完成检测失败而重放
@@ -868,6 +980,31 @@ class ScreenAgent:
         started = time.time()
         finished = self._execute(action)
         timings["execute"] = round(time.time() - started, 2)
+
+        if merged_active:
+            timings["observe"] = 0.0
+            if finished:
+                observation = "任务完成"
+            else:
+                # 合并模式下这一步没有独立的观察请求；等待界面稳定，供下一步截图
+                started = time.time()
+                timings["settle"] = self._settle_screen()
+            print(f"│  👁   {observation}")
+            ui_state.update_observation(observation)
+            memory.add_step(
+                thought=action.get("thought", ""),
+                action=action,
+                observation=observation
+            )
+            done = False
+            started = time.time()
+            if not finished and step >= 3 and action.get("task_done"):
+                done = True
+                print("│  🔍  决策模型标记任务完成")
+            timings["completion"] = round(time.time() - started, 2)
+            self._last_step_timings = timings
+            self._archive_step(step, action, observation)
+            return self._step_summary(finished, done, action, memory)
 
         if finished:
             observation = "任务完成"
@@ -913,6 +1050,10 @@ class ScreenAgent:
         self._last_step_timings = timings
         self._archive_step(step, action, observation)
 
+        return self._step_summary(finished, done, action, memory)
+
+    @staticmethod
+    def _step_summary(finished, done, action, memory):
         if action.get("summary"):
             summary = action["summary"]
         elif finished:
@@ -925,12 +1066,16 @@ class ScreenAgent:
             summary = ""
         return finished, done, summary
 
-    def _decide(self, step: int, memory: TaskMemory) -> dict:
+    def _decide(self, step: int, memory: TaskMemory, merged: bool = False) -> dict | None:
         """只对决策调用重试：此时还没有任何设备副作用"""
         last_error = None
         for attempt in range(1, config.STEP_RETRIES + 2):
             try:
-                action = self._think_and_act(memory)
+                action = (self._think_and_act(memory, merged=True) if merged
+                          else self._think_and_act(memory))
+                if action is None and merged:
+                    # 合并响应不合法不在此重试；交给 _execute_step 回退两段式
+                    return None
                 print(f"│  💭  {action.get('thought', '')}")
                 print(f"│  ▶   {action.get('description', '')}  [{action.get('action_type')}]")
                 # Streamlit 控制台读的就是这个状态文件，之前只在 init_state 写过一次，
@@ -955,7 +1100,8 @@ class ScreenAgent:
         if self.run_dir is None:
             return
         try:
-            record = {"step": step, "action": action, "observation": observation}
+            record = {"step": step, "action": action, "observation": observation,
+                      "observation_scope": getattr(self, "_last_observation_scope", "post_action")}
             if getattr(self, "_last_image_meta", None):
                 # 记录本次发送图的规格与缩放比例，便于事后核对坐标
                 record["image"] = self._last_image_meta
@@ -973,7 +1119,9 @@ class ScreenAgent:
             for src, suffix in (("screen_current.png", "current"),
                                 ("screen_observe.png", "observe")):
                 # finish 没有执行动作，screen_observe.png 是上一步的，归档会造成证据错位
-                if suffix == "observe" and action.get("action_type") == "finish":
+                if suffix == "observe" and (
+                        action.get("action_type") == "finish"
+                        or getattr(self, "_last_observation_scope", "") == "pre_action"):
                     continue
                 if os.path.exists(src):
                     shutil.copy(src, self.run_dir / f"step_{step:03d}_{suffix}.png")

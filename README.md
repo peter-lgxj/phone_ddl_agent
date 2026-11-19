@@ -137,6 +137,10 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 | `LLM_TEMPERATURE` | 决策与观察调用温度，默认 0.0，保证重复实验可比 |
 | `ENABLE_SEMANTIC_ANALYSIS` | 语义分析（每步一次纯文本请求），默认关闭；置 1 可开启消融对比 |
 | `COMPLETION_CHECK` | 完成判断：`decision`（默认，读决策响应里的 `task_done`）/ `every_step`（旧行为，每步额外一次带图请求）/ `off` |
+| `MERGED_OBSERVE` | 观察并入决策，默认开；正常每步 1 次带图请求，响应不合法时本步回退两段式 |
+| `OCR_PREHEAT` | 启动时预热 RapidOCR，默认开 |
+| `OBSERVE_SETTLE_MODE` | `adaptive`（默认，界面稳定即返回）/ `fixed`（固定等满 `OBSERVE_SETTLE_SECONDS`） |
+| `OBSERVE_SETTLE_POLL_SECONDS` | 自适应 settle 的截图轮询间隔，默认 0.15s |
 | `OCR_MODE` | OCR 调用策略：`on_demand`（默认，仅 tap 时跑并吸附落点）/ `always`（旧行为，每步预跑）/ `off` |
 | `OCR_SNAP_MODE` | 候选来源：`tree_first`（默认，控件树、YOLO 与 OCR 合并后按目标匹配）/ `ocr_only` / `tree_only` |
 | `OCR_ENGINE` | OCR 引擎：`rapidocr`（默认，ONNX CPU 实测 1.2–1.5s/张）/ `easyocr`（旧实现，12.7–23s/张） |
@@ -228,11 +232,14 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 4. `type_text` 在输入框已聚焦时直接写入，避免重复点击与再次 YOLO 兜底；
 5. OCR 改为按需（`OCR_MODE=on_demand`）：决策前不跑，只有模型给出 `tap` 时才跑；并改为「控件树优先、OCR 兜底」（`OCR_SNAP_MODE=tree_first`），控件树命中时完全不跑 OCR；
 6. OCR 引擎换成 RapidOCR（`OCR_ENGINE=rapidocr`，ONNX Runtime，跳过方向分类），并默认按 `OCR_SCALE=0.5` 缩小后再识别：1080×2374 真机截图实测 1.2–1.5s（不缩放约 1.3–1.6s；机器并行负载高时两者都会到 5–8s）。EasyOCR 路径保留，可切回对照；
-7. 每步 `step_NNN.json` 新增 `timings`（screenshot/ocr_pre/ocr/ocr_triggered/ocr_reason/snap_source/snap_tree/snap_yolo/snap_ocr/ocr_snap/preprocess/semantic/decision/decide_total/execute/observe/completion），便于统计触发率与省下的时间；`timings.ocr` 已包含控件树、YOLO 与 OCR 三段定位耗时，`snap_yolo` 单独记录 YOLO 段。
+7. **观察并入决策（`MERGED_OBSERVE=1`，默认开）**：一次带图请求同时返回 `observation` 与 `action`；`step_NNN.json` 的 observation 标注 `observation_scope=pre_action`，表示它来自合并响应、描述本步动作执行前的屏幕。响应缺少 `observation` / `action_type` 或 JSON 不合法时，本步回退旧的两段式（observe + decide），动作仍只执行一次；
+8. **OCR 启动预热（`OCR_PREHEAT=1`，默认开）**：RapidOCR 在 `ScreenAgent` 初始化时加载，不把首次 7s 加载摊到第一步；
+9. **自适应 settle（`OBSERVE_SETTLE_MODE=adaptive`，默认）**：动作后连续两次截图哈希相同就提前返回，最多等 `OBSERVE_SETTLE_SECONDS`；`fixed` 保留旧的固定等待；
+10. 每步 `step_NNN.json` 新增 `timings`（screenshot/ocr_pre/ocr/ocr_triggered/ocr_reason/snap_source/snap_tree/snap_yolo/snap_ocr/ocr_snap/preprocess/semantic/decision/decide_total/execute/observe/settle/completion/merged_fallback），便于统计触发率与省下的时间；`timings.ocr` 已包含控件树、YOLO 与 OCR 三段定位耗时，`snap_yolo` 单独记录 YOLO 段。
 
-按上表估算：每步请求数 4 → **2**；不触发定位的步骤约 **8–10s**，tap 步控件树命中时约 **8–10s**，退到 OCR 时约 **10–12s**。以上为按阶段耗时推算；整步耗时以真机单次实测为准（见上方报告链接），不作为稳定性能指标。
+按上表估算：旧流程每步最多 4 次模型请求；完成判断并入决策、语义分析关闭后为 2 次；`MERGED_OBSERVE=1` 默认再合并观察与决策，**正常每步 1 次带图请求**。整步耗时按旧阶段耗时推算约 **8–10s → 5–7s**（未做真机 A/B，属于估算）；OCR 预热只省启动后的第一步约 6–7s，自适应 settle 每步最多省约 1s。真机单次实测见上方报告链接，不作为稳定性能指标。
 
-本轮的「目标定位 / 搜索图标」改动只增加本地 YOLO 与 OCR 候选，**不改变每步 LLM 请求次数**：默认仍是决策 1 次 + 观察 1 次；完成判断仍并入决策响应（`COMPLETION_CHECK=decision`），语义分析默认关闭。`tests/test_ocr_on_demand.py` 用假客户端断言了默认每步 2 次、`every_step` 3 次。
+合并观察的回退路径：若合并响应不合法，本步总计 3 次请求（1 次失败的合并请求 + 1 次 observe + 1 次 decide），动作仍只执行一次；`COMPLETION_CHECK=every_step` 时不做合并，保持原两段式 + 完成检测，避免退化出额外的 task_done 调用。`tests/test_ocr_on_demand.py` 用假客户端断言了默认每步 1 次、关闭合并时 2 次、回退时动作只执行一次。
 
 `OCR_SCALE` 取舍（同一批图片实测，二次调用、机器空闲）：
 
@@ -337,7 +344,7 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（259 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 测试与工程化：`tests/`（263 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
