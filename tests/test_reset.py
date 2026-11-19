@@ -111,6 +111,11 @@ def test_memo_app_covers_review_devices():
     assert "com.hihonor.notepad" in candidates
 
 
+def test_qq_maps_to_mobile_qq_not_tim():
+    assert rwe.PACKAGE_BY_APP["QQ"] == ["com.tencent.mobileqq"]
+    assert "com.tencent.tim" not in rwe.PACKAGE_BY_APP["QQ"]
+
+
 def test_device_lock_busy_when_owner_alive(monkeypatch, tmp_path):
     lock = tmp_path / ".device.lock"
     lock.write_text(json.dumps({"token": "other", "pid": os.getpid()}), encoding="utf-8")

@@ -107,6 +107,29 @@ def test_parse_levels_rejects_unknown_value():
         rwe.parse_levels("L1,Lx")
 
 
+def test_d04_task_text_override_uses_exact_qq_group(tmp_path):
+    path = tmp_path / "ddl_tasks.json"
+    path.write_text(json.dumps({"tasks": [
+        {"id": "D04", "task": "打开 QQ，进入班级群，找到最近一条作业提交时间通知"},
+        {"id": "D05", "task": "保持原样"},
+    ]}, ensure_ascii=False), encoding="utf-8")
+
+    tasks = rwe.load_tasks(path)
+
+    assert tasks[0]["id"] == "D04"
+    assert "2026 计算机班级群" in tasks[0]["task"]
+    assert "班级群" not in tasks[0]["task"].replace("2026 计算机班级群", "")
+    assert tasks[1]["task"] == "保持原样"
+
+
+def test_task_override_does_not_mutate_source_dict():
+    original = {"id": "D04", "task": "进入班级群"}
+    result = rwe.apply_task_overrides([original])
+
+    assert result[0]["task"] != original["task"]
+    assert original["task"] == "进入班级群"
+
+
 def test_at_aggregate_switch_changes_cross_task_weighting():
     """尝试次数不等时，两种 AT 跨任务口径结果不同；默认仍是先任务内平均"""
     grouped = metrics.group_by_task([
