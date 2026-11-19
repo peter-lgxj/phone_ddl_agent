@@ -8,7 +8,8 @@ from pathlib import Path
 from phone_controller import PhoneController
 from app_launcher import AppLauncher
 from memory import TaskMemory, format_steps_compact
-from ocr_locator import OCRLocator, should_trigger_ocr, snap_action_coords
+from ocr_locator import (OCRLocator, mark_text_in_input_boxes, resolve_action_element,
+                         canonical_action_target, should_trigger_ocr, snap_action_coords)
 import config
 import image_preprocess
 from adb_utils import ADB
@@ -54,6 +55,22 @@ def make_run_dir(name: str) -> Path:
         suffix += 1
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def consecutive_unresolved_targets(steps: list[dict], target: str) -> int:
+    """统计最近连续多少次未定位到同一个目标，用于决定是否回退到坐标点击。"""
+    wanted = canonical_action_target({"target": target})
+    if not wanted:
+        return 0
+    count = 0
+    for item in reversed(steps):
+        action = item.get("action") or {}
+        if (action.get("localization_failed")
+                and canonical_action_target(action) == wanted):
+            count += 1
+        else:
+            break
+    return count
 
 
 def build_observe_question(last_action: dict, memory) -> str:
@@ -124,7 +141,7 @@ class ScreenAgent:
 - open_app(app_name)：打开 App，如"微信"、"美团"、"设置"
 - tap(x, y)：点击屏幕上的按钮、图标、列表项等非输入框元素，坐标来自 OCR
 - tap_input_box()：专门用于点击输入框，内置 AI 视觉定位，比 tap 更准确
-- swipe(x1, y1, x2, y2)：滑动屏幕
+- swipe(x, y, x2, y2)：从 (x,y) 滑动到 (x2,y2)，四个坐标必须提供
 - type(text)：输入文字，必须在 tap_input_box 之后调用
 - send()：发送消息或提交
 - press_enter()：按回车（等同 send）
@@ -269,10 +286,18 @@ class ScreenAgent:
             f"    - 第{len(history_images) + 1}张：当前屏幕（本次需要决策）"
         )
         image_section = "\n".join(image_lines)
+        sent_width, sent_height = (getattr(self, "_last_image_meta", None) or {}).get(
+            "sent_size", [1080, 2400]
+        )
+        swipe_example = (
+            f'{{"action_type":"swipe","x":{sent_width // 2},'
+            f'"y":{sent_height * 3 // 4},"x2":{sent_width // 2},'
+            f'"y2":{sent_height // 3},"task_done":false}}'
+        )
 
         if ocr_result:
             ocr_section = ocr_result
-            coord_rule = "1. tap操作必须使用 OCR 结果里的坐标"
+            coord_rule = "1. tap 坐标根据当前截图估计，可参考 OCR；程序会按目标文字再次吸附"
         else:
             ocr_section = "（本步未预跑 OCR；请依据截图估计元素位置，tap 落点会再做校正）"
             coord_rule = "1. tap 坐标请根据截图中元素的像素位置估计，尽量落在元素中心"
@@ -300,10 +325,13 @@ class ScreenAgent:
     {progress_rule}
     4. 每次只返回一个动作
     5. 可直接打开的 App：{known_apps}
-    6. 需要输入文字固定两步：type → send
-    7. 历史中验证结果包含"输入成功"时，下一步必须 send
-    8. tap 时在 target 填上目标元素的文字（或 resource-id），便于精确落点
+    6. 搜索框输入后，查看搜索结果并选择目标；聊天消息输入后才使用 send
+    7. 历史中验证结果包含"输入成功"只表示文字已输入，不表示搜索或发送已完成
+    8. tap 时 target 只填目标元素的文字本身（如"昊"），元素类型写在 description（如"点击联系人昊"）
     {duty_rule}
+    10. 查找已知名称的联系人、群或内容时，先检查截图顶部的放大镜图标或搜索框。放大镜就是搜索入口；只要它可见且目标不在当前列表，本步必须 tap 搜索入口（target 填"搜索"），下一步输入目标名称。此时禁止用 swipe 翻列表。只有截图中确实没有搜索入口时才允许 swipe。
+    11. 当前发送图尺寸为 {sent_width}x{sent_height}；tap 必须填写 x、y；swipe 必须填写 x、y、x2、y2。坐标均为当前发送图内的整数像素坐标。不要使用 x1/y1 作为起点字段。
+    12. 向上滚动列表的合法示例：{swipe_example}
 
     ## 何时调用 finish
     {finish_rules}
@@ -480,13 +508,16 @@ class ScreenAgent:
             print(f"  🧭 坐标反算：{ {k: action[k] for k in keys if k in action} } -> "
                   f"{ {k: mapped[k] for k in keys if k in mapped} }")
 
-        # 按需定位：控件树优先、OCR 兜底；只在需要精确落点（tap）时触发
+        # tap 后统一收集候选：单个匹配直接吸附，多个匹配按模型坐标就近吸附。
         if should_trigger_ocr(ocr_mode, mapped.get("action_type", "")):
             snap_mode = getattr(config, "OCR_SNAP_MODE", "tree_first")
             max_distance = int(getattr(config, "OCR_SNAP_MAX_DISTANCE", 80))
             snap_source = "none"
             moves = []
+            candidates = []
+            tree_elements = []
             tree_elapsed = ocr_elapsed = 0.0
+            yolo_elapsed = 0.0
             tree_count = ocr_count = 0
             ocr_meta = {}
 
@@ -499,33 +530,59 @@ class ScreenAgent:
                     tree_elements = []
                 tree_elapsed = round(time.time() - started, 2)
                 tree_count = len(tree_elements)
-                if tree_elements:
-                    snapped, moves = snap_action_coords(mapped, tree_elements, max_distance)
-                    if moves:
-                        snap_source = "tree"
-                        mapped = snapped
+                candidates.extend(tree_elements)
 
-            if snap_source == "none" and snap_mode in ("tree_first", "ocr_only"):
+            target = str(mapped.get("target") or "").strip()
+            description = str(mapped.get("description") or "")
+            wants_search = "搜索" in target or "放大镜" in target
+            wants_contact = any(word in description + target
+                                for word in ("联系人", "群聊", "聊天项"))
+            needs_input_boxes = wants_contact and not any(
+                item.get("type") == "input" for item in tree_elements)
+            if (snap_mode == "tree_first"
+                    and getattr(config, "SEARCH_ICON_DETECTION", True)
+                    and (wants_search or needs_input_boxes)):
                 started = time.time()
                 try:
-                    ocr_elements = self.ocr.detect_ocr("screen_current.png")
+                    detector = getattr(self, "_gui_detector", None)
+                    if detector is None:
+                        from input_detector import InputDetector
+                        detector = self._gui_detector = InputDetector()
+                    detections = detector.detect("screen_current.png", conf=0.45)
+                    candidates.extend(item for item in detections
+                                      if (wants_search and item.get("class_name") == "search_icon")
+                                      or (needs_input_boxes and item.get("class_name") == "input_box"
+                                          and item.get("confidence", 0) >= 0.65))
+                except Exception as e:
+                    print(f"  ⚠️  YOLO 元素检测失败，继续走 OCR：{e}")
+                yolo_elapsed = round(time.time() - started, 2)
+
+            if snap_mode in ("tree_first", "ocr_only"):
+                started = time.time()
+                try:
+                    ocr_elements = mark_text_in_input_boxes(
+                        self.ocr.detect_ocr("screen_current.png"), candidates)
                 except Exception as e:
                     print(f"  ⚠️  OCR 失败，保留模型坐标：{e}")
                     ocr_elements = []
                 ocr_elapsed = round(time.time() - started, 2)
                 ocr_count = len(ocr_elements)
+                candidates.extend(ocr_elements)
                 ocr_meta = dict(getattr(self.ocr, "last_meta", {}) or {})
-                if ocr_elements:
-                    snapped, moves = snap_action_coords(mapped, ocr_elements, max_distance)
-                    if moves:
-                        snap_source = "ocr"
-                        mapped = snapped
 
-            timings["ocr"] = round(timings.get("ocr", 0.0) + tree_elapsed + ocr_elapsed, 2)
+            found = resolve_action_element(mapped, candidates, max_distance)
+            if found:
+                snap_source = found[0].get("source", "unknown")
+                mapped, moves = snap_action_coords(mapped, candidates, max_distance)
+
+            timings["ocr"] = round(
+                timings.get("ocr", 0.0) + tree_elapsed + yolo_elapsed + ocr_elapsed, 2
+            )
             timings["ocr_triggered"] = True
             timings["ocr_reason"] = "tap"
             timings["snap_source"] = snap_source
             timings["snap_tree"] = {"elapsed": tree_elapsed, "elements": tree_count}
+            timings["snap_yolo"] = {"elapsed": yolo_elapsed}
             timings["snap_ocr"] = {"elapsed": ocr_elapsed, "elements": ocr_count,
                                    "scale": ocr_meta.get("scale"),
                                    "scaled_size": ocr_meta.get("scaled_size"),
@@ -533,6 +590,29 @@ class ScreenAgent:
             timings["ocr_snap"] = {"moves": moves}
             if moves:
                 print(f"  🎯 {snap_source} 吸附：{moves}")
+            if target and not found:
+                mapped = dict(mapped)
+                timings["target_unresolved"] = target
+                prior = consecutive_unresolved_targets(memory.steps, target)
+                if prior >= 1 and mapped.get("x") is not None and mapped.get("y") is not None:
+                    # 连续两轮都定位不到（常见于返回键、发送键等无文字图标）：
+                    # 不再终止任务，回退到模型给出的坐标继续，保留可恢复路径。
+                    mapped["localization_fallback"] = True
+                    mapped["thought"] = (
+                        f"连续 {prior + 1} 次未匹配到目标「{target}」的文字元素，"
+                        "回退到模型坐标继续尝试。"
+                    )
+                    mapped["description"] = f"目标「{target}」未定位，按原坐标点击"
+                    timings["localization_fallback"] = True
+                    print(f"  ⚠️  {mapped['thought']}")
+                else:
+                    mapped["action_type"] = "wait"
+                    mapped["localization_failed"] = True
+                    mapped["thought"] = (
+                        f"未找到与目标「{target}」文字及类型匹配的元素，避免误点。"
+                    )
+                    mapped["description"] = f"目标「{target}」未定位，保持当前界面并重新观察"
+                    print(f"  ⚠️  {mapped['thought']}")
 
         self._last_decision_timings = timings
         return mapped
@@ -643,11 +723,13 @@ class ScreenAgent:
             y = self._parse_coord(action["y"])
             self.phone.tap(x, y)
         elif t == "swipe":
-            if any(action.get(k) is None for k in ("x", "y", "x2", "y2")):
+            start_x = action.get("x", action.get("x1"))
+            start_y = action.get("y", action.get("y1"))
+            if start_x is None or start_y is None or action.get("x2") is None or action.get("y2") is None:
                 print("  ⚠️  swipe 动作缺少坐标，跳过本步")
                 return False
-            x  = self._parse_coord(action["x"])
-            y  = self._parse_coord(action["y"])
+            x  = self._parse_coord(start_x)
+            y  = self._parse_coord(start_y)
             x2 = self._parse_coord(action["x2"])
             y2 = self._parse_coord(action["y2"])
             self.phone.swipe(x, y, x2, y2)

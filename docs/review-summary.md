@@ -1,7 +1,7 @@
-# PR #1 评审摘要：`fix/p0-run-blockers` → `main`
+﻿# PR #1 评审摘要：`fix/p0-run-blockers` → `main`
 
 面向：peter-lgxj、calmmmiu
-范围：90 个 commit（从 main `967c58a` 起，含本次真机读取与证据校验修复），覆盖 P0 阻塞、P1 正确性、P2 实验支撑与工程化。
+范围：PR #1（squash 合并后 main 上自 `967c58a` 起的 1 个提交），覆盖 P0 阻塞、P1 正确性、P2 实验支撑与工程化。
 
 ---
 
@@ -34,7 +34,7 @@
 - `experiments/run_experiment.py`：重复执行、单/多应用与 baseline 模式、每任务重置、manifest（git SHA/dirty、模型全名、温度、设备信息）
 - `experiments/metrics.py`：TSR、多 App TSR、SE、AT、ST、CS；CS 在判定粒度混合时拒绝计算并给出覆盖率
 - `experiments/baselines/`：stdin/stdout JSON 协议 + 通用子进程适配器 + 三个 wrapper 骨架（**未安装、未联调**）
-- `tests/`：229 passed、2 skipped（跳过的是需要本地 embedding 模型的可选用例）；其余用例不依赖真机/模型；CI 执行 compileall、tasks 校验、dry-run、ruff、pytest
+- `tests/`：250 passed、2 skipped（跳过的是需要本地 embedding 模型的可选用例）；其余用例不依赖真机/模型；CI 执行 compileall、tasks 校验、dry-run、ruff、pytest
 - 依赖：`requirements.txt`（版本下限）+ `requirements-lock.txt`（本机 3.12 解析）+ `requirements-dev.txt`
 - 文档：README 补运行前置、配置表、项目结构、实验用法、权重来源、隐私提示；`test.md` 的 30 步口径与 T19 残留文本已清理
 
@@ -57,7 +57,7 @@
 
 ### 已实跑（本机）
 
-- Python 3.12.14 venv：`pytest` **229 passed、2 skipped**、`ruff` 全绿、`run_experiment.py --dry-run` 通过
+- Python 3.12.14 venv：`pytest` **250 passed、2 skipped**、`ruff` 全绿、`run_experiment.py --dry-run` 通过
 - 真机：OPPO PLJ110 / Android 16 / 1080×2374，微信「文件传输助手」自聊会话，单机、单账号、只读；包括滚动 OCR 观察、timeout 部分结果、端到端抽取，详见 `docs/real-device-test-report.md`
 - GitHub Actions：以本 PR 最新一次 run 为准
 

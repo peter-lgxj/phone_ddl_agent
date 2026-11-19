@@ -2,6 +2,7 @@ import os
 import subprocess
 import xml.etree.ElementTree as ET
 import re
+from difflib import SequenceMatcher
 import warnings
 
 import config as _config
@@ -340,43 +341,109 @@ def nearest_element(point, elements, max_distance):
     return best
 
 
-def element_matches_target(element, target: str) -> bool:
-    """判断元素是否与目标文字/描述匹配（text、resource-id、content-desc）。"""
-    target = (target or "").strip().lower()
+def target_match_score(element, target: str) -> float:
+    """给候选元素的文字、资源 ID 和无障碍描述打分。"""
+    target = re.sub(r"[^\w]+", "", (target or "").lower())
     if not target:
-        return False
+        return 0.0
+    best = 0.0
     for key in ("text", "resource_id", "content_desc"):
-        value = str(element.get(key) or "").strip().lower()
-        if value and (target in value or value in target):
-            return True
-    return False
+        value = re.sub(r"[^\w]+", "", str(element.get(key) or "").lower())
+        if not value:
+            continue
+        if target == value:
+            return 1.0
+        if min(len(target), len(value)) >= 2 and (target in value or value in target):
+            best = max(best, 0.8 + 0.2 * min(len(target), len(value)) / max(len(target), len(value)))
+        elif min(len(target), len(value)) >= 4:
+            ratio = SequenceMatcher(None, target, value).ratio()
+            if ratio >= 0.82:
+                best = max(best, ratio * 0.8)
+    return best
+
+
+def element_matches_target(element, target: str) -> bool:
+    return target_match_score(element, target) > 0
+
+
+def canonical_action_target(action) -> str:
+    """Strip role words from model targets such as 联系人'昊' or 联系人 昊."""
+    target = str(action.get("target") or "").strip()
+    quoted = re.search(r"[‘’'\"“”「」]([^‘’'\"“”「」]+)[‘’'\"“”「」]", target)
+    if quoted:
+        return quoted.group(1).strip()
+    role_prefixes = ("联系人", "群聊", "聊天项", "搜索结果", "搜索图标", "输入框")
+    for prefix in role_prefixes:
+        if target.startswith(prefix):
+            tail = target[len(prefix):].strip(" :：'\"‘’“”「」")
+            return tail or ("搜索" if prefix == "搜索图标" else target)
+    return target
+
+
+def action_element_role_matches(action, element) -> bool:
+    """Use the requested action, not just its text, to distinguish inputs from results."""
+    description = " ".join((str(action.get("description") or ""),
+                            str(action.get("target") or "")))
+    is_input = element.get("type") == "input"
+    if "搜索图标" in description or "放大镜" in description:
+        return element.get("type") == "search_icon" or (
+            element.get("source") == "xml" and element.get("type") == "control")
+    if any(word in description for word in ("联系人", "群聊", "聊天项", "搜索结果")):
+        return not is_input
+    if "输入框" in description or action.get("target_type") == "input_box":
+        return is_input
+    return True
+
+
+def mark_text_in_input_boxes(ocr_elements, tree_elements):
+    """Tag OCR text inside detected input bounds so it cannot mimic a result."""
+    input_boxes = [element["bbox"] for element in tree_elements
+                   if element.get("type") == "input" and element.get("bbox")]
+    tagged = []
+    for element in ocr_elements:
+        center = element.get("center")
+        if center and any(x1 <= center[0] <= x2 and y1 <= center[1] <= y2
+                          for x1, y1, x2, y2 in input_boxes):
+            element = dict(element, type="input")
+        tagged.append(element)
+    return tagged
+
+
+def resolve_action_element(action, elements, max_distance=80):
+    """One text match: use it directly. Multiple: choose nearest to model coords."""
+    x, y = action.get("x"), action.get("y")
+    if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+        return None
+    target = canonical_action_target(action)
+    eligible = [element for element in elements
+                if element.get("center") and action_element_role_matches(action, element)]
+    if target:
+        scored = [(target_match_score(element, target), element) for element in eligible]
+        best_score = max((score for score, _ in scored), default=0.0)
+        matches = [element for score, element in scored if score == best_score and score > 0]
+        if not matches:
+            return None
+        element = min(matches, key=lambda item:
+                      (item["center"][0] - x) ** 2 + (item["center"][1] - y) ** 2)
+        distance = ((element["center"][0] - x) ** 2
+                    + (element["center"][1] - y) ** 2) ** 0.5
+        return element, distance, True
+    found = nearest_element((x, y), eligible, max_distance)
+    if not found:
+        return None
+    element, distance = found
+    return element, distance, False
 
 
 def snap_action_coords(action, elements, max_distance=80):
-    """把 tap 的 x/y 吸附到最近的元素中心；返回 (新 action, 移动记录)。
-
-    给了 target 时优先在文字/resource-id/content-desc 匹配的元素里找；
-    匹配不到合适元素再退回全部元素按距离找。距离超过 max_distance 时不吸附。
-    """
+    """把 tap 解析到候选元素；具名目标按匹配数量选择。"""
     if action.get("action_type") not in OCR_TRIGGER_ACTIONS or not elements:
         return action, []
-    x, y = action.get("x"), action.get("y")
-    if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
-        return action, []
-
-    candidates = elements
-    filtered = False
-    target = str(action.get("target") or "").strip()
-    if target:
-        matched = [el for el in elements if element_matches_target(el, target)]
-        if matched:
-            candidates = matched
-            filtered = True
-
-    found = nearest_element((x, y), candidates, max_distance)
+    found = resolve_action_element(action, elements, max_distance)
     if not found:
         return action, []
-    element, distance = found
+    x, y = action["x"], action["y"]
+    element, distance, filtered = found
     nx, ny = element["center"]
     if (nx, ny) == (x, y):
         return action, []

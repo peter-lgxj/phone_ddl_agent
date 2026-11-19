@@ -1,4 +1,4 @@
-# 手机智能体（Phone Agent）
+﻿# 手机智能体（Phone Agent）
 
 使用视觉语言模型理解 Android 手机屏幕，通过 ADB 和 uiautomator2 执行操作；支持任务规划、多应用任务、OCR 定位与网页交互界面。
 
@@ -20,6 +20,12 @@
 > 不是可切换的第二条读取路径。
 
 ## 一键启动（Windows）
+
+网页入口：运行 `python app.py` 后打开 `http://127.0.0.1:5000/ddl`，可在页面里用自然语言
+添加微信 / QQ / Outlook 手机来源、开始扫描并直接查看日历；首页也有「DDL 日历」入口。
+扫描会占用手机，接口默认只允许本机调用；需要从局域网访问时设置 `DDL_WEB_TOKEN`，
+并在请求头 `X-DDL-Token` 中带上同一个值。真正的设备互斥由扫描线程持有的设备锁保证，
+不会出现「预检通过后被其他窗口抢占」的情况。
 
 1. 首次使用，先告诉 agent 要监控什么（自然语言，会写入 `sources.yaml`）：
 
@@ -131,10 +137,12 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 | `ENABLE_SEMANTIC_ANALYSIS` | 语义分析（每步一次纯文本请求），默认关闭；置 1 可开启消融对比 |
 | `COMPLETION_CHECK` | 完成判断：`decision`（默认，读决策响应里的 `task_done`）/ `every_step`（旧行为，每步额外一次带图请求）/ `off` |
 | `OCR_MODE` | OCR 调用策略：`on_demand`（默认，仅 tap 时跑并吸附落点）/ `always`（旧行为，每步预跑）/ `off` |
-| `OCR_SNAP_MODE` | 吸附路径：`tree_first`（默认，控件树优先、OCR 兜底）/ `ocr_only` / `tree_only` |
+| `OCR_SNAP_MODE` | 候选来源：`tree_first`（默认，控件树、YOLO 与 OCR 合并后按目标匹配）/ `ocr_only` / `tree_only` |
 | `OCR_ENGINE` | OCR 引擎：`rapidocr`（默认，ONNX CPU 实测 1.2–1.5s/张）/ `easyocr`（旧实现，12.7–23s/张） |
 | `OCR_SCALE` | OCR 输入图缩放比例，默认 0.5；检测框按 `1/scale` 映射回原图，tap 坐标仍是设备坐标 |
 | `OCR_SNAP_MAX_DISTANCE` | 吸附半径（像素），默认 80；超出则保留模型原始坐标 |
+| `SEARCH_ICON_DETECTION` | tap 目标为搜索/联系人时是否补 YOLO 候选，默认开；只有权重含 `search_icon` 类别时才产生搜索图标候选 |
+| `GUI_MODEL_PATH` | YOLO 权重路径，默认 `models/input_box.pt`；指向含 `search_icon` 的权重可启用搜索图标视觉候选 |
 | `OBSERVE_SETTLE_SECONDS` | 动作后等待界面稳定的秒数，默认 1.0 |
 | `HISTORY_IMAGE_WINDOW` / `HISTORY_TEXT_STEPS` | 历史上下文窗口：带最近几张原图（默认 1，当前屏幕始终带图）、更早步骤最多列几条文字摘要（默认 8）；均可用同名环境变量覆盖 |
 | `IMAGE_PREPROCESS` | 截图预处理总开关（默认开）；置 0 时原样发送 PNG |
@@ -219,9 +227,11 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 4. `type_text` 在输入框已聚焦时直接写入，避免重复点击与再次 YOLO 兜底；
 5. OCR 改为按需（`OCR_MODE=on_demand`）：决策前不跑，只有模型给出 `tap` 时才跑；并改为「控件树优先、OCR 兜底」（`OCR_SNAP_MODE=tree_first`），控件树命中时完全不跑 OCR；
 6. OCR 引擎换成 RapidOCR（`OCR_ENGINE=rapidocr`，ONNX Runtime，跳过方向分类），并默认按 `OCR_SCALE=0.5` 缩小后再识别：1080×2374 真机截图实测 1.2–1.5s（不缩放约 1.3–1.6s；机器并行负载高时两者都会到 5–8s）。EasyOCR 路径保留，可切回对照；
-7. 每步 `step_NNN.json` 新增 `timings`（screenshot/ocr_pre/ocr/ocr_triggered/ocr_reason/snap_source/snap_tree/snap_ocr/ocr_snap/preprocess/semantic/decision/decide_total/execute/observe/completion），便于统计触发率与省下的时间。
+7. 每步 `step_NNN.json` 新增 `timings`（screenshot/ocr_pre/ocr/ocr_triggered/ocr_reason/snap_source/snap_tree/snap_yolo/snap_ocr/ocr_snap/preprocess/semantic/decision/decide_total/execute/observe/completion），便于统计触发率与省下的时间；`timings.ocr` 已包含控件树、YOLO 与 OCR 三段定位耗时，`snap_yolo` 单独记录 YOLO 段。
 
 按上表估算：每步请求数 4 → **2**；不触发定位的步骤约 **8–10s**，tap 步控件树命中时约 **8–10s**，退到 OCR 时约 **10–12s**。以上为按阶段耗时推算；整步耗时以真机单次实测为准（见上方报告链接），不作为稳定性能指标。
+
+本轮的「目标定位 / 搜索图标」改动只增加本地 YOLO 与 OCR 候选，**不改变每步 LLM 请求次数**：默认仍是决策 1 次 + 观察 1 次；完成判断仍并入决策响应（`COMPLETION_CHECK=decision`），语义分析默认关闭。`tests/test_ocr_on_demand.py` 用假客户端断言了默认每步 2 次、`every_step` 3 次。
 
 `OCR_SCALE` 取舍（同一批图片实测，二次调用、机器空闲）：
 
@@ -237,15 +247,19 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 按需定位的触发与路径（`ocr_locator.should_trigger_ocr` + `OCR_SNAP_MODE`）：
 
 - 触发条件：`OCR_MODE=on_demand` 且动作为 `tap`；其余动作（`open_app`/`back`/`home`/`wait`/`swipe`/`type`/`send`/`finish`）完全不跑。
-- `tree_first`（默认）：先 dump 控件树，用 text / resource-id / content-desc 匹配；命中就用元素中心。树里没有可匹配元素或距离超阈值时，再退到 OCR。
+- `tree_first`（默认）：合并控件树、OCR 文本与（按需）YOLO 候选；有 `target` 时按文字匹配打分，唯一匹配直接吸附，多个匹配按模型坐标选最近的一个；没有 `target` 时才用距离阈值。
 - `ocr_only` / `tree_only`：强制只走一条路径，便于对照。
-- 吸附只在距最近元素中心 ≤ `OCR_SNAP_MAX_DISTANCE`（默认 80px）或落在 bbox 内时发生，否则保留模型原始坐标；实际路径与耗时写进 `timings.snap_source`（`tree`/`ocr`/`none`）、`snap_tree`、`snap_ocr`。
+- 具名目标匹配不到时先保持界面重新观察；连续两次仍匹配不到（常见于无文字图标），回退到模型坐标继续，不会直接终止任务。
+- 无 target 的吸附只在距最近元素中心 ≤ `OCR_SNAP_MAX_DISTANCE`（默认 80px）或落在 bbox 内时发生；实际路径与耗时写进 `timings.snap_source`（`tree`/`ocr`/`yolo`/`none`）、`snap_tree`、`snap_yolo`、`snap_ocr`。
 
 
 
 ## 本地视觉模型（Qwen3-VL-8B-Instruct GGUF）
 
-> **暂缓**：6 GB 显存跑 8B Q4 + mmproj 只能把视觉编码器留在 CPU（带图约 75–80 秒/次），当前执行模型改用云端 `deepseek-flash`。相关文件已删除，如需要请重新下载。
+> **可选配置，非默认**：默认执行模型与规划模型仍是云端 `deepseek`（见 `config.py` 的
+> `ACTIVE_PROVIDER` / `PLANNER_PROVIDER`，离线抽取也默认走 `deepseek`）。本地 8B 仅在显式
+> 设置 `ACTIVE_PROVIDER=local` 时启用，并需要自行下载权重与 mmproj（仓库不包含）；
+> 6 GB 显存只能把视觉编码器留在 CPU，带图约 75–80 秒/次。
 
 用于不依赖云端视觉 API 的离线执行。权重、mmproj、llama.cpp 运行时与 HF 缓存全部放在仓库外的 F 盘目录（示例 `F:\work\hku\7608llm\2026-11-17\qwen3vl-local\`），并显式设置 `HF_HOME`，不写用户目录、不进 git。
 
@@ -322,7 +336,7 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（229 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 测试与工程化：`tests/`（250 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
@@ -348,6 +362,7 @@ curl -L -o models/input_box.pt \
   ```
 
 - 该权重是单类别 `input_box` 的 v1 模型；模型仓库的 `dataset_v2`（`input_box` + `search_icon`）尚无对应权重
+- 搜索图标默认走控件树 / OCR 文本匹配；只有当 `GUI_MODEL_PATH` 指向含 `search_icon` 类别的权重时，YOLO 才会补充搜索图标候选。没有这类权重时搜索入口仍可用，只是少一条视觉兜底
 - 模型仓库未附 LICENSE，公开分发或转存前请先与作者确认
 - 置信度差异：`input_detector.py` 默认 `conf=0.3`，模型仓库的 `test_detector.py` 用 `0.5`；真机误检多时可上调
 - 无权重或加载失败时自动降级到 uiautomator2 控件树（`EditText`）检测，不会中断任务
