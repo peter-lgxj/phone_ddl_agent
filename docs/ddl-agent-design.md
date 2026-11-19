@@ -347,8 +347,8 @@ experiments/ddl_agent/results/   # 评测输出（.gitignore 已忽略）
 - 降级：`sentence_transformers` 未安装、模型未下载、加载异常或离线不可用时，`similarity()` 返回词法分数，
   报告的 `similarity.available=false` 并写入 `fallback_reason`；评测与离线测试继续跑完，不中断。
 - 依赖与缓存：`sentence-transformers` 放在 `requirements-embedding.txt`（可选），不进入主依赖与 CI；
-  模型与框架缓存默认 `F:/models/sentence-transformers`，代码在加载前设置 `HF_HOME`、
-  `SENTENCE_TRANSFORMERS_HOME`、`TORCH_HOME`，避免写到 C 盘用户目录。
+  模型与框架缓存默认 `~/.cache/ddl-agent/sentence-transformers`（可用 `DDL_EMBEDDING_CACHE` 覆盖），代码在加载前设置 `HF_HOME`、
+  `SENTENCE_TRANSFORMERS_HOME`、`TORCH_HOME`，不写死某台机器盘符。
 - 离线环境：把缓存目录整体拷贝到目标机器，或设置 `DDL_EMBEDDING_CACHE` 指向已有目录，并保持模型名一致；
   可用 `--embedding-model` / `--embedding-cache` / `--dedupe-threshold` 在评测命令行覆盖。
 - 真实模型用例默认跳过，设置 `RUN_EMBEDDING_TESTS=1` 才执行。
@@ -499,6 +499,13 @@ Agent-LLM 共 179 次调用、75108 token、约 $0.0349。
 - **实测**：RapidOCR 在 1080×2374 截图上 1.2–1.5s/张；DeepSeek 决策带图约 3.5–5s；固定 settle 默认 1.0s（来自真机报告与阶段测量）。
 - **估算**：合并观察后整步约 5–7s（旧两段式约 8–10s），未做真机 A/B；OCR 预热省首次 6–7s，自适应 settle 每步最多省约 1s。
 - `COMPLETION_CHECK=every_step` 时不启用合并观察，避免额外 task_done 请求与退化。
+
+### 14.8 token 与耗时数据怎么读
+
+- 每步归档 `step_NNN.json`：`usage` 为该步视觉调用汇总（`calls[].kind` = decision/observe/completion），无 usage 时为 `null`；`timings` 为各阶段秒数。
+- 任务结束/达到最大步数时写 `usage_summary.json`：总 token、每步均值、按 provider 分组；`calls_detail` 保留每次调用的 kind、model、usage。
+- 阶段统计脚本：`experiments/summarize_timings.py runs/<run>`；多个目录会输出 mean/P90 对比表，用于 `MERGED_OBSERVE` A/B。
+- 证据导出：`experiments/export_evidence.py runs/<run>` 只保留可公开的数值与哈希，删除截图和原始文本，产物放 `docs/evidence/`。
 
 ## 15. 与 proposal 的明确偏差
 

@@ -1,7 +1,7 @@
 # 启动本地 Qwen3-VL-8B（llama.cpp llama-server，OpenAI 兼容）
 #
-# 【暂缓】6 GB 显存跑 8B Q4 + mmproj 偏紧（视觉编码器只能留 CPU，带图约 75-80 秒/次），
-# 当前执行模型改用云端 deepseek-flash。权重与 mmproj 仍保留在 F 盘，脚本未删除，需要时可复用。
+# 【可选路径】6 GB 显存跑 8B Q4 + mmproj 偏紧（视觉编码器只能留 CPU，带图约 75-80 秒/次），
+# 默认执行模型仍是云端 deepseek-flash。权重、mmproj 与运行时需自行下载或准备。
 #
 # 6 GB 显存（RTX 3060 Laptop）的取舍：
 #   - 文本层全部卸载到 GPU（-ngl 36），实测占用约 5.3 GB
@@ -10,23 +10,28 @@
 # 代价：带图请求约 75-80 秒/次（视觉编码在 CPU）；纯文本请求约 10 秒级。
 #
 # 用法：
-#   powershell -ExecutionPolicy Bypass -File .\start_local_vlm.ps1
+#   powershell -ExecutionPolicy Bypass -File .\start_local_vlm.ps1 -BaseDir D:\qwen3vl-local
 #   powershell -ExecutionPolicy Bypass -File .\start_local_vlm.ps1 -NGpuLayers 28
+# 未指定 -BaseDir 时读取 LOCAL_VLM_HOME，再退回 %LOCALAPPDATA%\qwen3vl-local。
 param(
     [int]$Port = 8080,
     [int]$NGpuLayers = 36,
     [int]$Ctx = 8192,
     [int]$Threads = 12,
+    [string]$BaseDir = "",
     [string]$ModelDir = "",
     [string]$LlamaDir = ""
 )
 
 $ErrorActionPreference = "Stop"
-$BaseDir = "F:\work\hku\7608llm\2026-11-17\qwen3vl-local"
+if (-not $BaseDir) {
+    if ($env:LOCAL_VLM_HOME) { $BaseDir = $env:LOCAL_VLM_HOME }
+    else { $BaseDir = Join-Path $env:LOCALAPPDATA "qwen3vl-local" }
+}
 if (-not $ModelDir) { $ModelDir = Join-Path $BaseDir "models" }
 if (-not $LlamaDir) { $LlamaDir = Join-Path $BaseDir "runtime\llama-extract" }
 
-# 权重与缓存都留在 F 盘，避免写进用户目录
+# 权重与缓存跟随 -BaseDir，避免写死某台机器盘符
 $env:HF_HOME = Join-Path $BaseDir "hf-cache"
 $env:HF_HUB_CACHE = Join-Path $env:HF_HOME "hub"
 

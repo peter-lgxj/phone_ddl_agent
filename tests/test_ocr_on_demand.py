@@ -175,13 +175,15 @@ class FakeChoice:
 
 
 class FakeResponse:
-    def __init__(self, content):
+    def __init__(self, content, usage=None):
         self.choices = [FakeChoice(content)]
+        self.usage = usage
 
 
 class FakeCompletions:
-    def __init__(self, content):
+    def __init__(self, content, usage=None):
         self.content = content
+        self.usage = usage
         self.calls = 0
 
     def create(self, **kwargs):
@@ -189,12 +191,12 @@ class FakeCompletions:
         if isinstance(content, list):
             content = content[min(self.calls, len(content) - 1)]
         self.calls += 1
-        return FakeResponse(content)
+        return FakeResponse(content, self.usage)
 
 
 class FakeClient:
-    def __init__(self, content):
-        self.chat = type("Chat", (), {"completions": FakeCompletions(content)})()
+    def __init__(self, content, usage=None):
+        self.chat = type("Chat", (), {"completions": FakeCompletions(content, usage)})()
 
 
 class StubPhone:
@@ -227,7 +229,7 @@ class StubOCR:
 
 
 def make_agent(tmp_path, monkeypatch, action, tree_elements=None, ocr_elements=None,
-               snap_mode="tree_first"):
+               snap_mode="tree_first", usage=None):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config, "OCR_MODE", "on_demand")
     monkeypatch.setattr(config, "OCR_SNAP_MODE", snap_mode)
@@ -237,7 +239,7 @@ def make_agent(tmp_path, monkeypatch, action, tree_elements=None, ocr_elements=N
     (tmp_path / "screen_current.png").write_bytes(b"")
 
     agent = object.__new__(screen_agent.ScreenAgent)
-    agent.client = FakeClient(json.dumps(action, ensure_ascii=False))
+    agent.client = FakeClient(json.dumps(action, ensure_ascii=False), usage)
     agent.model = "fake-model"
     agent.support_multi_image = False
     agent.extra_body = None
@@ -550,6 +552,50 @@ def test_adaptive_settle_stops_when_screen_stable(tmp_path, monkeypatch):
 
     assert agent.phone.calls >= 3
     assert elapsed < 1.0
+
+
+def test_step_usage_and_task_summary(tmp_path, monkeypatch):
+    usage = SimpleNamespace(prompt_tokens=12, completion_tokens=3, total_tokens=15)
+    agent = make_agent(tmp_path, monkeypatch,
+                       {"observation": "页面已加载",
+                        "action_type": "wait", "description": "等待"},
+                       tree_elements=[], ocr_elements=[], usage=usage)
+    monkeypatch.setattr(screen_agent.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(config, "COMPLETION_CHECK", "decision")
+    monkeypatch.setattr(config, "MERGED_OBSERVE", True)
+    ui_state.init_state("计数")
+    agent.run_dir = tmp_path / "run"
+    agent.run_dir.mkdir()
+
+    memory = TaskMemory("等待页面")
+    agent._execute_step(1, memory)
+
+    record = json.loads((agent.run_dir / "step_001.json").read_text(encoding="utf-8"))
+    assert record["usage"]["prompt_tokens"] == 12
+    assert record["usage"]["completion_tokens"] == 3
+    assert record["usage"]["total_tokens"] == 15
+    summary = agent._usage_summary(1)
+    assert summary["total_tokens"] == 15
+    assert summary["per_step_total_tokens"] == 15
+    assert summary["by_provider"]["deepseek"]["total_tokens"] == 15
+
+
+def test_missing_usage_writes_null(tmp_path, monkeypatch):
+    agent = make_agent(tmp_path, monkeypatch,
+                       {"observation": "页面已加载",
+                        "action_type": "wait", "description": "等待"},
+                       tree_elements=[], ocr_elements=[])
+    monkeypatch.setattr(screen_agent.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(config, "COMPLETION_CHECK", "decision")
+    monkeypatch.setattr(config, "MERGED_OBSERVE", True)
+    ui_state.init_state("计数")
+    agent.run_dir = tmp_path / "run"
+    agent.run_dir.mkdir()
+
+    agent._execute_step(1, TaskMemory("等待页面"))
+
+    record = json.loads((agent.run_dir / "step_001.json").read_text(encoding="utf-8"))
+    assert record["usage"] is None
 
 
 def test_fixed_settle_waits_full_duration(tmp_path, monkeypatch):

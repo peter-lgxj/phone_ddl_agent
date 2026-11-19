@@ -66,8 +66,8 @@ embedding 是**可选**能力：默认不装、不联网也能跑评测。
 # 安装可选依赖（不进入主 requirements / CI）
 pip install -r requirements-embedding.txt
 
-# 模型与框架缓存默认写到 F 盘；可显式指定
-set DDL_EMBEDDING_CACHE=F:\models\sentence-transformers
+# 模型与框架缓存默认在用户目录（~/.cache/ddl-agent/sentence-transformers）；可显式指定
+set DDL_EMBEDDING_CACHE=%USERPROFILE%\.cache\ddl-agent\sentence-transformers
 set DDL_EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
 ```
 
@@ -241,6 +241,44 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 
 合并观察的回退路径：若合并响应不合法，本步总计 3 次请求（1 次失败的合并请求 + 1 次 observe + 1 次 decide），动作仍只执行一次；`COMPLETION_CHECK=every_step` 时不做合并，保持原两段式 + 完成检测，避免退化出额外的 task_done 调用。`tests/test_ocr_on_demand.py` 用假客户端断言了默认每步 1 次、关闭合并时 2 次、回退时动作只执行一次。
 
+### 逐次 token 与耗时怎么读
+
+- 每步 `runs/<run>/step_NNN.json` 的 `usage` 是该步视觉调用的 token 汇总（`calls` 里按 `decision` / `observe` / `completion` 列出，缺 usage 时为 `null`）；`timings` 是各阶段耗时。
+- 任务正常结束或达到最大步数时写 `runs/<run>/usage_summary.json`：总 prompt/completion/total token、每步均值、按 provider 汇总。
+- 阶段耗时汇总（单 run 或多 run 对比）：
+
+```bash
+python experiments/summarize_timings.py runs/20261117-211201
+python experiments/summarize_timings.py runs/merged_off runs/merged_on
+```
+
+输出包含 `decision/observe/ocr/yolo/screenshot/execute/settle` 等阶段的样本数、总计、均值、P50、P90；多目录时追加 `mean / p90` 对比表。
+
+### MERGED_OBSERVE A/B 怎么跑
+
+同一任务分别关闭/开启合并观察，然后对比两个 run：
+
+```powershell
+# 1) 关闭合并（旧两段式）
+$env:MERGED_OBSERVE="0"; python run.py
+# 记录本次生成的 run 目录，例如 runs\20261120-101500-off
+
+# 2) 开启合并
+$env:MERGED_OBSERVE="1"; python run.py
+# 记录 runs\20261120-102000-on
+
+# 3) 对比阶段耗时与 token
+python experiments\summarize_timings.py runs\20261120-101500-off runs\20261120-102000-on
+Get-Content runs\20261120-101500-off\usage_summary.json
+Get-Content runs\20261120-102000-on\usage_summary.json
+```
+
+A/B 时保持同一任务文本、同一设备、同一网络与同一 provider；否则数字不可比。`--json` 可把 `summarize_timings.py` 结果交给其他脚本。
+
+### 脱敏证据
+
+`experiments/export_evidence.py` 从 `runs/` 导出最小可公开集到 `docs/evidence/<run>/`：保留步数、动作类型、阶段耗时、token usage、观察长度与哈希；剔除全屏截图、发送图、原始 observation/action 文本、群名/课程名与 OCR 原文。示例见 `docs/evidence/20261117-211201/`。不要把 `runs/` 整体提交进仓库。
+
 `OCR_SCALE` 取舍（同一批图片实测，二次调用、机器空闲）：
 
 | scale | 缩放后尺寸 | 耗时 | 设置页元素 | 结算页元素 | 关键字段（￥128.00/订单号/确认支付） | 中心点偏差 |
@@ -269,7 +307,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 > 设置 `ACTIVE_PROVIDER=local` 时启用，并需要自行下载权重与 mmproj（仓库不包含）；
 > 6 GB 显存只能把视觉编码器留在 CPU，带图约 75–80 秒/次。
 
-用于不依赖云端视觉 API 的离线执行。权重、mmproj、llama.cpp 运行时与 HF 缓存全部放在仓库外的 F 盘目录（示例 `F:\work\hku\7608llm\2026-11-17\qwen3vl-local\`），并显式设置 `HF_HOME`，不写用户目录、不进 git。
+用于不依赖云端视觉 API 的离线执行。权重、mmproj、llama.cpp 运行时与 HF 缓存放在仓库外，默认 `%LOCALAPPDATA%\qwen3vl-local`（可用 `-BaseDir` 或 `LOCAL_VLM_HOME` 覆盖），不写进 git。
 
 ### 硬件与参数取舍
 
@@ -288,8 +326,8 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 从同一个 HF 仓库取权重与视觉投影（缺 mmproj 模型看不了图）：
 
 ```bash
-# 目标目录示例（仓库外）
-mkdir -p /f/work/hku/7608llm/2026-11-17/qwen3vl-local/models
+# 目标目录示例（仓库外，可按 -BaseDir 调整）
+mkdir -p "$LOCALAPPDATA/qwen3vl-local/models"
 
 curl -L -o Qwen3VL-8B-Instruct-Q4_K_M.gguf \
   https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3VL-8B-Instruct-Q4_K_M.gguf
@@ -300,7 +338,7 @@ curl -L -o mmproj-Qwen3VL-8B-Instruct-F16.gguf \
 llama.cpp 使用 `b12470` 的 Windows CUDA 12.4 预编译包：`llama-b12470-bin-win-cuda-12.4-x64.zip` + `cudart-llama-bin-win-cuda-12.4-x64.zip`，解压到同一目录（本机 `runtime\llama-extract\`）。显式设置缓存目录：
 
 ```powershell
-$env:HF_HOME = "F:\work\hku\7608llm\2026-11-17\qwen3vl-local\hf-cache"
+$env:HF_HOME = "$env:LOCALAPPDATA\qwen3vl-local\hf-cache"
 $env:HF_HUB_CACHE = "$env:HF_HOME\hub"
 ```
 
@@ -312,7 +350,7 @@ $env:HF_HUB_CACHE = "$env:HF_HOME\hub"
 powershell -ExecutionPolicy Bypass -File .\start_local_vlm.ps1
 ```
 
-脚本参数可调：`-Port`、`-NGpuLayers`、`-Ctx`、`-Threads`、`-ModelDir`、`-LlamaDir`。服务提供 OpenAI 兼容接口：
+脚本参数可调：`-Port`、`-NGpuLayers`、`-Ctx`、`-Threads`、`-BaseDir`、`-ModelDir`、`-LlamaDir`。未指定 `-BaseDir` 时依次使用 `LOCAL_VLM_HOME`、`%LOCALAPPDATA%\qwen3vl-local`。服务提供 OpenAI 兼容接口：
 
 ```bash
 curl http://127.0.0.1:8080/v1/models
@@ -344,7 +382,7 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（263 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 测试与工程化：`tests/`（269 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
