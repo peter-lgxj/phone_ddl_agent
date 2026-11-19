@@ -316,19 +316,54 @@ def test_input_detector_does_not_choose_search_icon_as_input():
     assert detector.find_best("screen.png")["center"] == (500, 220)
 
 
-def test_repeated_unresolved_target_stops_after_two_steps():
+def test_consecutive_unresolved_targets_counts_same_target():
     failed = {"action": {"action_type": "wait", "target": "搜索",
                          "localization_failed": True}}
-    assert screen_agent.repeated_unresolved_target([failed]) == ""
-    assert screen_agent.repeated_unresolved_target([failed, failed]) == "搜索"
+    assert screen_agent.consecutive_unresolved_targets([failed], "搜索") == 1
+    assert screen_agent.consecutive_unresolved_targets([failed, failed], "搜索") == 2
     other = {"action": {"action_type": "wait", "target": "联系人",
                         "localization_failed": True}}
-    assert screen_agent.repeated_unresolved_target([failed, other]) == ""
+    assert screen_agent.consecutive_unresolved_targets([failed, other], "搜索") == 0
     variant = {"action": {"action_type": "wait", "target": "联系人'昊'",
                           "localization_failed": True}}
     variant2 = {"action": {"action_type": "wait", "target": "联系人 昊",
                            "localization_failed": True}}
-    assert screen_agent.repeated_unresolved_target([variant, variant2]) == "昊"
+    assert screen_agent.consecutive_unresolved_targets([variant, variant2], "昊") == 2
+
+
+def test_second_unresolved_icon_falls_back_to_model_coords(tmp_path, monkeypatch):
+    agent = make_agent(tmp_path, monkeypatch,
+                       {"action_type": "tap", "x": 66, "y": 77,
+                        "target": "搜索", "description": "点击搜索图标"},
+                       tree_elements=[],
+                       ocr_elements=[{"text": "17:25", "center": (132, 65),
+                                      "bbox": (40, 20, 150, 90), "source": "ocr"}])
+    memory = TaskMemory("搜索聊天")
+    memory.add_step(thought="", action={"action_type": "wait", "target": "搜索",
+                                        "localization_failed": True},
+                    observation="未定位")
+    action = agent._think_and_act(memory)
+
+    assert action["action_type"] == "tap"
+    assert (action["x"], action["y"]) == (66, 77)
+    assert action["localization_fallback"] is True
+    assert agent._last_decision_timings["localization_fallback"] is True
+
+
+def test_unresolved_icon_without_coords_waits_instead_of_aborting(tmp_path, monkeypatch):
+    agent = make_agent(tmp_path, monkeypatch,
+                       {"action_type": "tap", "target": "搜索",
+                        "description": "点击搜索图标"},
+                       tree_elements=[], ocr_elements=[])
+    memory = TaskMemory("搜索聊天")
+    memory.add_step(thought="", action={"action_type": "wait", "target": "搜索",
+                                        "localization_failed": True},
+                    observation="未定位")
+    action = agent._think_and_act(memory)
+
+    assert action["action_type"] == "wait"
+    assert action["localization_failed"] is True
+    assert "localization_fallback" not in action
 
 
 def test_single_contact_result_snaps_despite_wrong_model_coords(tmp_path, monkeypatch):

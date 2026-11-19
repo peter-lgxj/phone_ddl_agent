@@ -93,7 +93,9 @@ API_KEY_ENV = {
 # deepseek 已实测支持图像输入，不在此列
 TEXT_ONLY_PROVIDERS = {"qwen3", "minimax"}
 
-INPUT_BOX_MODEL = "models/input_box.pt"
+# YOLO 权重默认是单类别 input_box 模型；如另有含 search_icon 类别的权重，
+# 可用 GUI_MODEL_PATH 指向它，否则搜索图标只走控件树/OCR 兜底。
+INPUT_BOX_MODEL = os.getenv("GUI_MODEL_PATH", "models/input_box.pt")
 
 # 微信输入框的 resource-id 随版本变化，置空则跳过该分支只走通用控件/YOLO 定位
 WECHAT_INPUT_RESOURCE_ID = "com.tencent.mm:id/b4z"
@@ -119,13 +121,19 @@ COMPLETION_CHECK = os.getenv("COMPLETION_CHECK", "decision")
 
 # OCR 调用策略（1080x2374 上每步全屏 OCR 约 10-14s，是单步最大固定开销）：
 #   on_demand —— 默认：决策前不跑 OCR；仅当模型给出 tap（需要精确落点）时跑一次，
-#                并把落点吸附到最近元素中心（距离超过 OCR_SNAP_MAX_DISTANCE 则不吸附）
+#                根据 target 匹配元素后吸附；没有 target 时才使用吸附半径
 #   always    —— 旧行为：每步决策前都跑 OCR，并把结果写进提示词
 #   off       —— 完全不跑 OCR
 OCR_MODE = os.getenv("OCR_MODE", "on_demand")
-# 吸附半径（像素）：模型坐标与元素中心距离超过该值就不吸附，避免跳到相邻条目
+# 无 target 的 tap 使用此吸附半径；有 target 时，唯一匹配直接吸附，
+# 多个匹配按模型坐标选择最近的候选。
 OCR_SNAP_MAX_DISTANCE = int(os.getenv("OCR_SNAP_MAX_DISTANCE", "80"))
-# 吸附路径：tree_first（默认，控件树优先、OCR 兜底）/ ocr_only / tree_only
+# 是否在 tap 目标为搜索图标/联系人时启用 YOLO 候选；默认开，
+# 但只有加载到含 search_icon 类别的权重时才会产生搜索图标候选。
+SEARCH_ICON_DETECTION = os.getenv("SEARCH_ICON_DETECTION", "1").strip().lower() not in (
+    "0", "false", "off", ""
+)
+# 候选来源：tree_first（默认，控件树与 OCR 合并）/ ocr_only / tree_only
 OCR_SNAP_MODE = os.getenv("OCR_SNAP_MODE", "tree_first")
 # OCR 引擎：rapidocr（默认，ONNX CPU 约 1-2s）/ easyocr（旧实现，保留对照）
 OCR_ENGINE = os.getenv("OCR_ENGINE", "rapidocr")

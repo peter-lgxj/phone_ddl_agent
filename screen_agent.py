@@ -57,15 +57,20 @@ def make_run_dir(name: str) -> Path:
     return path
 
 
-def repeated_unresolved_target(steps: list[dict]) -> str:
-    """Return the target after two consecutive failed localizations."""
-    if len(steps) < 2:
-        return ""
-    recent = [item.get("action") or {} for item in steps[-2:]]
-    if (all(item.get("localization_failed") for item in recent)
-            and canonical_action_target(recent[0]) == canonical_action_target(recent[1])):
-        return canonical_action_target(recent[-1])
-    return ""
+def consecutive_unresolved_targets(steps: list[dict], target: str) -> int:
+    """统计最近连续多少次未定位到同一个目标，用于决定是否回退到坐标点击。"""
+    wanted = canonical_action_target({"target": target})
+    if not wanted:
+        return 0
+    count = 0
+    for item in reversed(steps):
+        action = item.get("action") or {}
+        if (action.get("localization_failed")
+                and canonical_action_target(action) == wanted):
+            count += 1
+        else:
+            break
+    return count
 
 
 def build_observe_question(last_action: dict, memory) -> str:
@@ -534,7 +539,8 @@ class ScreenAgent:
                                 for word in ("联系人", "群聊", "聊天项"))
             needs_input_boxes = wants_contact and not any(
                 item.get("type") == "input" for item in tree_elements)
-            if (getattr(config, "SEARCH_ICON_DETECTION", True)
+            if (snap_mode == "tree_first"
+                    and getattr(config, "SEARCH_ICON_DETECTION", True)
                     and (wants_search or needs_input_boxes)):
                 started = time.time()
                 try:
@@ -569,7 +575,9 @@ class ScreenAgent:
                 snap_source = found[0].get("source", "unknown")
                 mapped, moves = snap_action_coords(mapped, candidates, max_distance)
 
-            timings["ocr"] = round(timings.get("ocr", 0.0) + tree_elapsed + ocr_elapsed, 2)
+            timings["ocr"] = round(
+                timings.get("ocr", 0.0) + tree_elapsed + yolo_elapsed + ocr_elapsed, 2
+            )
             timings["ocr_triggered"] = True
             timings["ocr_reason"] = "tap"
             timings["snap_source"] = snap_source
@@ -584,12 +592,27 @@ class ScreenAgent:
                 print(f"  🎯 {snap_source} 吸附：{moves}")
             if target and not found:
                 mapped = dict(mapped)
-                mapped["action_type"] = "wait"
-                mapped["localization_failed"] = True
-                mapped["thought"] = f"未找到与目标「{target}」文字及类型匹配的元素，避免误点。"
-                mapped["description"] = f"目标「{target}」未定位，保持当前界面并重新观察"
                 timings["target_unresolved"] = target
-                print(f"  ⚠️  {mapped['thought']}")
+                prior = consecutive_unresolved_targets(memory.steps, target)
+                if prior >= 1 and mapped.get("x") is not None and mapped.get("y") is not None:
+                    # 连续两轮都定位不到（常见于返回键、发送键等无文字图标）：
+                    # 不再终止任务，回退到模型给出的坐标继续，保留可恢复路径。
+                    mapped["localization_fallback"] = True
+                    mapped["thought"] = (
+                        f"连续 {prior + 1} 次未匹配到目标「{target}」的文字元素，"
+                        "回退到模型坐标继续尝试。"
+                    )
+                    mapped["description"] = f"目标「{target}」未定位，按原坐标点击"
+                    timings["localization_fallback"] = True
+                    print(f"  ⚠️  {mapped['thought']}")
+                else:
+                    mapped["action_type"] = "wait"
+                    mapped["localization_failed"] = True
+                    mapped["thought"] = (
+                        f"未找到与目标「{target}」文字及类型匹配的元素，避免误点。"
+                    )
+                    mapped["description"] = f"目标「{target}」未定位，保持当前界面并重新观察"
+                    print(f"  ⚠️  {mapped['thought']}")
 
         self._last_decision_timings = timings
         return mapped
@@ -795,15 +818,6 @@ class ScreenAgent:
                 self.last_status = "failed"
                 ui_state.set_status("error", f"第 {step} 步失败：{e}")
                 raise
-
-            target = repeated_unresolved_target(memory.steps)
-            if target:
-                message = f"连续两次未定位目标「{target}」，已停止以避免重复等待"
-                print(f"\n⚠️  {message}")
-                self._save_log(memory)
-                self.last_status = "failed"
-                ui_state.set_status("error", message)
-                return
 
             if finished or done:
                 print(f"\n{'='*52}")
