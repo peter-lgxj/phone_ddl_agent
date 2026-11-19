@@ -7,6 +7,7 @@ import pytest
 
 import device_lock as dl
 import run_experiment as rwe
+from app_launcher import AppLauncher
 
 
 def stub(monkeypatch, installed, force_stop_rc=0, adb_rc=0):
@@ -114,6 +115,14 @@ def test_memo_app_covers_review_devices():
 def test_qq_maps_to_mobile_qq_not_tim():
     assert rwe.PACKAGE_BY_APP["QQ"] == ["com.tencent.mobileqq"]
     assert "com.tencent.tim" not in rwe.PACKAGE_BY_APP["QQ"]
+
+
+def test_outlook_maps_to_microsoft_outlook_only():
+    assert AppLauncher.KNOWN_APPS["Outlook"] == "com.microsoft.office.outlook"
+    assert rwe.PACKAGE_BY_APP["Outlook"] == ["com.microsoft.office.outlook"]
+    # 不能误映射到邮件客户端或 QQ/微信
+    others = {pkg for app, pkgs in rwe.PACKAGE_BY_APP.items() if app != "Outlook" for pkg in pkgs}
+    assert "com.microsoft.office.outlook" not in others
 
 
 def test_device_lock_busy_when_owner_alive(monkeypatch, tmp_path):

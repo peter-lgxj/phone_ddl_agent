@@ -107,6 +107,11 @@ WECHAT_INPUT_RESOURCE_ID = "com.tencent.mm:id/b4z"
 # 最大执行步数：与 test.md 实验规程的 30 步保持一致，可用环境变量覆盖（如 MAX_STEPS=20）
 MAX_STEPS = int(os.getenv("MAX_STEPS", "30"))
 STEP_RETRIES = 2            # 单步失败后的重试次数，避免一次 API 抖动直接判任务失败
+# 生产读屏默认只读：拒绝 send / press_enter / type 等会在群内发言或改动内容的动作。
+# 单独跑任务脚本（run.py / multi_agent.py）时可设 READ_ONLY_MODE=0 关闭。
+READ_ONLY_MODE = os.getenv("READ_ONLY_MODE", "1").strip().lower() not in (
+    "0", "false", "off", ""
+)
 LLM_TEMPERATURE = 0.0       # 决策/观察调用温度，固定后重复实验才可比
 
 # 语义分析：每步额外一次纯文本请求。实测每步约 2s，且多数场景下决策模型已能自行理解历史，

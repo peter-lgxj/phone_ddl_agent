@@ -19,6 +19,7 @@ class DummyPhone:
 def agent():
     obj = object.__new__(screen_agent.ScreenAgent)
     obj.phone = DummyPhone()
+    obj.read_only = False
     return obj
 
 
@@ -55,3 +56,16 @@ def test_type_with_text_calls_controller(agent):
 
 def test_unknown_action_returns_false(agent):
     assert agent._execute({"action_type": "teleport"}) is False
+
+
+@pytest.mark.parametrize("action_type", ["send", "press_enter", "type"])
+def test_read_only_blocks_mutating_actions(action_type):
+    obj = object.__new__(screen_agent.ScreenAgent)
+    obj.phone = DummyPhone()
+    obj.read_only = True
+    action = {"action_type": action_type, "text": "不要发送"}
+
+    assert obj._execute(action) is False
+    assert action["blocked"] is True
+    assert "只读" in action["blocked_reason"]
+    assert obj.phone.calls == []

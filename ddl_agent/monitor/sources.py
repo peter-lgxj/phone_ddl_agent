@@ -43,6 +43,8 @@ class MobileAppSource:
         self.last_status = None
         self.last_fetch_meta = {}
         agent = self._get_agent()
+        # 生产读屏路径强制只读：即使模型给出 send/type/press_enter 也不会执行
+        agent.read_only = True
         task = self._build_task()
 
         if self.use_device_lock:
@@ -101,7 +103,7 @@ class MobileAppSource:
             from screen_agent import ScreenAgent
         except ImportError as exc:
             raise SourceError(f"手机自动化层不可用：{exc}") from exc
-        self.agent = ScreenAgent()
+        self.agent = ScreenAgent(read_only=True)
         return self.agent
 
     def _messages_from_steps(self, agent) -> list[RawMessage]:

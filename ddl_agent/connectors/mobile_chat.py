@@ -42,6 +42,8 @@ class MobileChatConnector:
         self.last_status = None
         self.last_fetch_meta = {}
         agent = self._get_agent()
+        # 生产读屏路径强制只读：即使模型给出 send/type/press_enter 也不会执行
+        agent.read_only = True
         task = (
             f"打开{self.app}，进入与「{self.contact}」的聊天窗口，向上翻阅最近消息，"
             "逐条读出包含截止时间（deadline / due / 截止 / 提交）的消息原文与发送者"
@@ -89,7 +91,7 @@ class MobileChatConnector:
             from screen_agent import ScreenAgent
         except ImportError as exc:
             raise SourceNotConfigured(f"手机自动化层不可用：{exc}") from exc
-        self.agent = ScreenAgent()
+        self.agent = ScreenAgent(read_only=True)
         return self.agent
 
     def _messages_from_steps(self, agent) -> list[RawMessage]:

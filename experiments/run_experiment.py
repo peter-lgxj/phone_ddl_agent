@@ -39,6 +39,7 @@ from device_lock import device_lock  # noqa: E402  同一把锁供 Web/CLI 共�
 PACKAGE_BY_APP = {
     "微信": ["com.tencent.mm"],
     "QQ": ["com.tencent.mobileqq"],  # 手机 QQ；TIM（com.tencent.tim）不在此列
+    "Outlook": ["com.microsoft.office.outlook"],
     "设置": ["com.android.settings"],
     "高德地图": ["com.autonavi.minimap"],
     "淘宝": ["com.taobao.taobao"],
