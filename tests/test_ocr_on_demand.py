@@ -4,6 +4,7 @@ import json
 from PIL import Image
 
 import config
+import input_detector
 import ocr_locator
 import screen_agent
 from memory import TaskMemory
@@ -80,15 +81,83 @@ def test_target_prefers_matching_element_over_closer_one():
     assert snapped["y"] == 1500
 
 
-def test_target_without_match_falls_back_to_nearest():
+def test_exact_target_wins_over_nearer_partial_match():
+    elements = [
+        {"text": "确认", "center": (510, 1440), "source": "ocr"},
+        {"text": "确认支付", "center": (610, 1440), "source": "ocr"},
+    ]
+    snapped, moves = ocr_locator.snap_action_coords(
+        {"action_type": "tap", "x": 510, "y": 1440, "target": "确认支付"},
+        elements, 120)
+    assert (snapped["x"], snapped["y"]) == (610, 1440)
+    assert moves[0]["matched_target"] is True
+
+
+def test_single_contact_match_ignores_model_coordinate_distance():
+    action = {"action_type": "tap", "x": 201, "y": 208, "target": "昊",
+              "description": "点击联系人'昊'以进入聊天界面"}
+    elements = [
+        {"text": "昊", "type": "input", "center": (567, 218),
+         "bbox": (205, 154, 1030, 282), "source": "xml"},
+        {"text": "昊", "type": "control", "center": (214, 505),
+         "bbox": (190, 480, 250, 530), "source": "xml"},
+    ]
+    snapped, moves = ocr_locator.snap_action_coords(action, elements, 80)
+    assert (snapped["x"], snapped["y"]) == (214, 505)
+    assert moves[0]["distance"] > 80
+
+
+def test_nearby_contact_wins_over_same_text_in_search_box():
+    action = {"action_type": "tap", "x": 203, "y": 500, "target": "昊",
+              "description": "点击联系人'昊'以进入聊天界面"}
+    elements = [
+        {"text": "昊", "type": "input", "center": (567, 218),
+         "bbox": (205, 154, 1030, 282), "source": "xml"},
+        {"text": "昊", "type": "control", "center": (214, 505),
+         "bbox": (190, 480, 250, 530), "source": "xml"},
+    ]
+    snapped, moves = ocr_locator.snap_action_coords(action, elements, 80)
+    assert (snapped["x"], snapped["y"]) == (214, 505)
+    assert moves[0]["text"] == "昊"
+
+
+def test_multiple_matching_results_use_nearest_model_coordinate():
+    elements = [
+        {"text": "昊", "type": "control", "center": (214, 505), "source": "xml"},
+        {"text": "昊", "type": "control", "center": (220, 900), "source": "xml"},
+    ]
+    action = {"action_type": "tap", "x": 200, "y": 840,
+              "target": "联系人 昊", "description": "点击联系人 昊"}
+    snapped, _ = ocr_locator.snap_action_coords(action, elements, 80)
+    assert (snapped["x"], snapped["y"]) == (220, 900)
+
+
+def test_ocr_text_inside_search_input_is_tagged_as_input():
+    tree = [{"type": "input", "bbox": (108, 154, 1030, 282)}]
+    ocr = [{"text": "昊", "type": "text", "center": (225, 218)},
+           {"text": "昊", "type": "text", "center": (214, 505)}]
+    tagged = ocr_locator.mark_text_in_input_boxes(ocr, tree)
+    assert [element["type"] for element in tagged] == ["input", "text"]
+    assert ocr[0]["type"] == "text"
+
+
+def test_target_without_match_never_snaps_to_unrelated_text():
     elements = [
         {"text": "取消", "center": (540, 1445), "bbox": (440, 1395, 640, 1495), "source": "xml"},
     ]
     snapped, moves = ocr_locator.snap_action_coords(
         {"action_type": "tap", "x": 520, "y": 1450, "target": "不存在"}, elements, 80)
 
-    assert moves[0]["text"] == "取消" and moves[0]["matched_target"] is False
-    assert (snapped["x"], snapped["y"]) == (540, 1445)
+    assert moves == []
+    assert (snapped["x"], snapped["y"]) == (520, 1450)
+
+
+def test_search_icon_target_does_not_snap_to_clock_text():
+    action = {"action_type": "tap", "x": 66, "y": 77, "target": "搜索"}
+    elements = [{"text": "17:25", "center": (132, 65),
+                 "bbox": (40, 20, 150, 90), "source": "ocr"}]
+    snapped, moves = ocr_locator.snap_action_coords(action, elements, 80)
+    assert snapped is action and moves == []
 
 
 # ── _think_and_act 分支 ───────────────────────────────────
@@ -157,6 +226,7 @@ def make_agent(tmp_path, monkeypatch, action, tree_elements=None, ocr_elements=N
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config, "OCR_MODE", "on_demand")
     monkeypatch.setattr(config, "OCR_SNAP_MODE", snap_mode)
+    monkeypatch.setattr(config, "SEARCH_ICON_DETECTION", False)
     monkeypatch.setattr(config, "IMAGE_PREPROCESS", False)
     monkeypatch.setattr(config, "ENABLE_SEMANTIC_ANALYSIS", False)
     (tmp_path / "screen_current.png").write_bytes(b"")
@@ -177,16 +247,16 @@ def make_agent(tmp_path, monkeypatch, action, tree_elements=None, ocr_elements=N
     return agent
 
 
-def test_tap_hits_tree_first(tmp_path, monkeypatch):
+def test_tap_uses_nearest_combined_candidate(tmp_path, monkeypatch):
     agent = make_agent(tmp_path, monkeypatch,
                        {"action_type": "tap", "x": 520, "y": 1470, "description": "点确认"},
                        tree_elements=ELEMENTS)
     action = agent._think_and_act(TaskMemory("点击确认"))
 
     assert (action["x"], action["y"]) == (540, 1440)
-    assert agent.ocr.tree_calls == 1 and agent.ocr.ocr_calls == 0
+    assert agent.ocr.tree_calls == 1 and agent.ocr.ocr_calls == 1
     timings = agent._last_decision_timings
-    assert timings["snap_source"] == "tree" and timings["ocr_triggered"] is True
+    assert timings["snap_source"] == "ocr" and timings["ocr_triggered"] is True
 
 
 def test_tree_miss_falls_back_to_ocr(tmp_path, monkeypatch):
@@ -198,6 +268,98 @@ def test_tree_miss_falls_back_to_ocr(tmp_path, monkeypatch):
 
     assert (action["x"], action["y"]) == (540, 1440)
     assert agent.ocr.tree_calls == 1 and agent.ocr.ocr_calls == 1
+    assert agent._last_decision_timings["snap_source"] == "ocr"
+
+
+def test_unmatched_named_target_is_not_clicked(tmp_path, monkeypatch):
+    agent = make_agent(tmp_path, monkeypatch,
+                       {"action_type": "tap", "x": 66, "y": 77,
+                        "target": "搜索", "description": "点击搜索图标"},
+                       tree_elements=[],
+                       ocr_elements=[{"text": "17:25", "center": (132, 65),
+                                      "bbox": (40, 20, 150, 90), "source": "ocr"}])
+    action = agent._think_and_act(TaskMemory("搜索聊天"))
+
+    assert action["action_type"] == "wait"
+    assert agent._last_decision_timings["target_unresolved"] == "搜索"
+    assert agent._last_decision_timings["ocr_snap"]["moves"] == []
+
+
+def test_search_icon_uses_yolo_when_tree_and_ocr_have_no_label(tmp_path, monkeypatch):
+    agent = make_agent(tmp_path, monkeypatch,
+                       {"action_type": "tap", "x": 827, "y": 80,
+                        "target": "搜索", "description": "点击搜索图标"},
+                       tree_elements=[], ocr_elements=[])
+    monkeypatch.setattr(config, "SEARCH_ICON_DETECTION", True)
+
+    class StubDetector:
+        def detect(self, image_path, conf):
+            assert image_path == "screen_current.png" and conf == 0.45
+            return [{"text": "搜索", "class_name": "search_icon", "type": "search_icon",
+                     "center": (897, 193), "bbox": (856, 153, 939, 233),
+                     "confidence": 0.614, "source": "yolo"}]
+
+    agent._gui_detector = StubDetector()
+    action = agent._think_and_act(TaskMemory("搜索联系人"))
+    assert action["action_type"] == "tap"
+    assert (action["x"], action["y"]) == (897, 193)
+    assert agent._last_decision_timings["snap_source"] == "yolo"
+    assert agent.ocr.ocr_calls == 1
+
+
+def test_input_detector_does_not_choose_search_icon_as_input():
+    detector = object.__new__(input_detector.InputDetector)
+    detector.detect = lambda *_args, **_kwargs: [
+        {"class_name": "search_icon", "confidence": 0.9, "center": (900, 190)},
+        {"class_name": "input_box", "confidence": 0.6, "center": (500, 220)},
+    ]
+    assert detector.find_best("screen.png")["center"] == (500, 220)
+
+
+def test_repeated_unresolved_target_stops_after_two_steps():
+    failed = {"action": {"action_type": "wait", "target": "搜索",
+                         "localization_failed": True}}
+    assert screen_agent.repeated_unresolved_target([failed]) == ""
+    assert screen_agent.repeated_unresolved_target([failed, failed]) == "搜索"
+    other = {"action": {"action_type": "wait", "target": "联系人",
+                        "localization_failed": True}}
+    assert screen_agent.repeated_unresolved_target([failed, other]) == ""
+    variant = {"action": {"action_type": "wait", "target": "联系人'昊'",
+                          "localization_failed": True}}
+    variant2 = {"action": {"action_type": "wait", "target": "联系人 昊",
+                           "localization_failed": True}}
+    assert screen_agent.repeated_unresolved_target([variant, variant2]) == "昊"
+
+
+def test_single_contact_result_snaps_despite_wrong_model_coords(tmp_path, monkeypatch):
+    tree = [{"text": "昊", "type": "input", "center": (567, 218),
+             "bbox": (108, 154, 1037, 282), "source": "xml"}]
+    ocr = [{"text": "昊", "type": "text", "center": (214, 506),
+            "bbox": (186, 476, 242, 536), "source": "ocr"}]
+    agent = make_agent(tmp_path, monkeypatch,
+                       {"action_type": "tap", "x": 201, "y": 208,
+                        "target": "联系人'昊'", "description": "点击联系人'昊'"},
+                       tree_elements=tree, ocr_elements=ocr)
+    action = agent._think_and_act(TaskMemory("给昊发消息"))
+    assert action["action_type"] == "tap"
+    assert (action["x"], action["y"]) == (214, 506)
+    assert agent._last_decision_timings["snap_source"] == "ocr"
+
+
+def test_contact_result_is_selected_even_when_model_points_at_search_box(tmp_path, monkeypatch):
+    agent = make_agent(tmp_path, monkeypatch,
+                       {"action_type": "tap", "x": 201, "y": 208,
+                        "target": "昊", "description": "点击联系人'昊'以进入聊天界面"},
+                       tree_elements=[{"text": "昊", "type": "input",
+                                       "center": (567, 218),
+                                       "bbox": (205, 154, 1030, 282), "source": "xml"}],
+                       ocr_elements=[{"text": "昊", "type": "text",
+                                      "center": (225, 218), "source": "ocr"},
+                                     {"text": "昊", "type": "text",
+                                      "center": (214, 505), "source": "ocr"}])
+    action = agent._think_and_act(TaskMemory("给昊发送消息"))
+    assert action["action_type"] == "tap"
+    assert (action["x"], action["y"]) == (214, 505)
     assert agent._last_decision_timings["snap_source"] == "ocr"
 
 

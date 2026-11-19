@@ -10,23 +10,29 @@ load_dotenv(Path(__file__).with_name(".env"))
 # ============================================================
 
 # 当前使用的执行模型（视觉模型，用于屏幕理解和操作）
-# 可选：deepseek（默认）/ zhipu / qwen / openai / local
+# 可选：local_8b（默认）/ deepseek / zhipu / qwen / openai / local
 # deepseek 经实测能读图（见 README「DeepSeek 视觉能力」），单请求 3 张图均被正确理解
 # local 指向本机 llama-server（Qwen3-VL-8B GGUF），当前「暂缓」，需要时先启动 8080 服务
 # 可用环境变量 ACTIVE_PROVIDER 临时切换（如 ACTIVE_PROVIDER=qwen python run.py），不用改代码
-ACTIVE_PROVIDER = os.getenv("ACTIVE_PROVIDER", "deepseek")
+ACTIVE_PROVIDER = os.getenv("ACTIVE_PROVIDER", "local_8b")
 
 # 当前使用的规划模型（用于任务分解与语义校正，只发文字不发截图）
 # 可选：deepseek（默认）/ qwen3 / minimax；deepseek 同时具备视觉能力，但规划阶段不使用
 # deepseek 走 https://api.deepseek.com（OpenAI 兼容，不要加 /v1），模型 deepseek-flash
 # 也可切回 qwen3（DashScope 兼容接口，模型 qwen3.5-flash）
-PLANNER_PROVIDER = "deepseek"
+PLANNER_PROVIDER = os.getenv("PLANNER_PROVIDER", "local_8b")
 
 # ============================================================
 #  各平台配置
 # ============================================================
 
 PROVIDERS = {
+    "local_8b": {
+        "api_key": "local",
+        "base_url": os.getenv("LOCAL_8B_BASE_URL", "http://127.0.0.1:18080/v1"),
+        "model": os.getenv("LOCAL_8B_MODEL", "qwen3-vl-8b-local"),
+        "support_multi_image": True,
+    },
     "zhipu": {
         "api_key": os.getenv("ZHIPU_API_KEY", ""),
         "base_url": "https://open.bigmodel.cn/api/paas/v4/",
@@ -80,6 +86,7 @@ PROVIDERS = {
 
 # 各 provider 需要的环境变量名，启动校验时用来给出可执行的提示
 API_KEY_ENV = {
+    "local_8b": "LOCAL_8B_BASE_URL",
     "zhipu":    "ZHIPU_API_KEY",
     "qwen":     "DASHSCOPE_API_KEY",
     "qwen3":    "DASHSCOPE_API_KEY",
@@ -93,7 +100,9 @@ API_KEY_ENV = {
 # deepseek 已实测支持图像输入，不在此列
 TEXT_ONLY_PROVIDERS = {"qwen3", "minimax"}
 
-INPUT_BOX_MODEL = "models/input_box.pt"
+INPUT_BOX_MODEL = os.getenv(
+    "GUI_MODEL_PATH", str(Path(__file__).with_name("models") / "gui_elements.pt")
+)
 
 # 微信输入框的 resource-id 随版本变化，置空则跳过该分支只走通用控件/YOLO 定位
 WECHAT_INPUT_RESOURCE_ID = "com.tencent.mm:id/b4z"
@@ -119,13 +128,17 @@ COMPLETION_CHECK = os.getenv("COMPLETION_CHECK", "decision")
 
 # OCR 调用策略（1080x2374 上每步全屏 OCR 约 10-14s，是单步最大固定开销）：
 #   on_demand —— 默认：决策前不跑 OCR；仅当模型给出 tap（需要精确落点）时跑一次，
-#                并把落点吸附到最近元素中心（距离超过 OCR_SNAP_MAX_DISTANCE 则不吸附）
+#                根据 target 匹配元素后吸附；没有 target 时才使用吸附半径
 #   always    —— 旧行为：每步决策前都跑 OCR，并把结果写进提示词
 #   off       —— 完全不跑 OCR
 OCR_MODE = os.getenv("OCR_MODE", "on_demand")
-# 吸附半径（像素）：模型坐标与元素中心距离超过该值就不吸附，避免跳到相邻条目
+# 无 target 的 tap 使用此吸附半径；有 target 时，唯一匹配直接吸附，
+# 多个匹配按模型坐标选择最近的候选。
 OCR_SNAP_MAX_DISTANCE = int(os.getenv("OCR_SNAP_MAX_DISTANCE", "80"))
-# 吸附路径：tree_first（默认，控件树优先、OCR 兜底）/ ocr_only / tree_only
+SEARCH_ICON_DETECTION = os.getenv("SEARCH_ICON_DETECTION", "1").strip().lower() not in (
+    "0", "false", "off", ""
+)
+# 候选来源：tree_first（默认，控件树与 OCR 合并）/ ocr_only / tree_only
 OCR_SNAP_MODE = os.getenv("OCR_SNAP_MODE", "tree_first")
 # OCR 引擎：rapidocr（默认，ONNX CPU 约 1-2s）/ easyocr（旧实现，保留对照）
 OCR_ENGINE = os.getenv("OCR_ENGINE", "rapidocr")

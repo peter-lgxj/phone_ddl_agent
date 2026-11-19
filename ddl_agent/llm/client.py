@@ -68,11 +68,12 @@ class LLMClient:
     @classmethod
     def from_config(cls, provider: str | None = None,
                     tracker: UsageTracker | None = None) -> "LLMClient | None":
-        provider = provider or os.getenv("DDL_LLM_PROVIDER", "deepseek")
         try:
             import config as root_config  # 手机层的 provider 配置
         except ImportError:
             return None
+
+        provider = provider or os.getenv("DDL_LLM_PROVIDER", root_config.PLANNER_PROVIDER)
 
         spec = root_config.PROVIDERS.get(provider)
         if not spec or not spec.get("api_key"):
