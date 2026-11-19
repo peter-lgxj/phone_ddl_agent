@@ -211,6 +211,8 @@ class ScreenAgent:
         self._last_model_action = None   # 缩放时模型返回的原始坐标（未反算）
         self._last_decision_timings = {}  # 决策各阶段耗时
         self._last_step_timings = {}      # 整步各阶段耗时（写进 step json）
+        self.usage_events = []            # 全部视觉调用 usage，任务结束写汇总
+        self._last_step_usage = []        # 本步 usage 事件（可含决策/观察/完成检测）
         self._last_observe_ocr_seconds = 0.0  # 本步滚动 OCR 耗时（未触发为 0）
 
         print(f"视觉模型：{provider_name} / {self.model}")
@@ -527,6 +529,7 @@ class ScreenAgent:
         )
         timings["decision"] = round(time.time() - started, 2)
         self._last_decision_timings = timings
+        self._record_usage("decision", response)
 
         raw = response.choices[0].message.content.strip()
         raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
@@ -757,6 +760,7 @@ class ScreenAgent:
             ],
             extra_body=getattr(self, "extra_body", None),
         )
+        self._record_usage("observe", response)
         observation = response.choices[0].message.content.strip()
 
         ocr_actions = getattr(config, "OBSERVE_OCR_ACTIONS", {"swipe", "scroll"})
@@ -876,6 +880,7 @@ class ScreenAgent:
             ],
             extra_body=getattr(self, "extra_body", None),
         )
+        self._record_usage("completion", response)
 
         answer = response.choices[0].message.content.strip().upper()
         if "YES" in answer:
@@ -926,6 +931,7 @@ class ScreenAgent:
                 print(f"{'='*52}")
                 print(memory.summary())
                 self._save_log(memory)
+                self._save_usage_summary(memory)
                 ui_state.set_status("finished", summary)
                 self.last_status = "done"
                 return
@@ -935,6 +941,7 @@ class ScreenAgent:
 
         print(f"\n⚠️  已达最大步数 {self.max_steps} 步")
         self._save_log(memory)
+        self._save_usage_summary(memory)
         # 超步数不等于完成：实验统计必须能区分
         self.last_status = "timeout"
         ui_state.set_status("finished", f"达到最大步数 {self.max_steps}")
@@ -946,6 +953,7 @@ class ScreenAgent:
         done 表示完成检测判定已完成，summary 为结束说明。
         """
         timings = dict(getattr(self, "_last_decision_timings", {}) or {})
+        self._last_step_usage = []
         merged_active = (
             getattr(config, "MERGED_OBSERVE", True)
             and getattr(config, "COMPLETION_CHECK", "decision") == "decision"
@@ -1095,6 +1103,112 @@ class ScreenAgent:
         if self.run_dir is not None:
             memory.save(path=str(self.run_dir / "task_log.json"))
 
+    @staticmethod
+    def _usage_from_response(response) -> dict | None:
+        """读取 provider 返回的 usage；字段缺失时返回 None，不抛异常。"""
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return None
+        prompt = getattr(usage, "prompt_tokens", None)
+        completion = getattr(usage, "completion_tokens", None)
+        if prompt is None and completion is None:
+            return None
+        prompt = int(prompt or 0)
+        completion = int(completion or 0)
+        total = getattr(usage, "total_tokens", None)
+        return {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": int(total) if total is not None else prompt + completion,
+        }
+
+    def _record_usage(self, kind: str, response) -> None:
+        event = {
+            "kind": kind,
+            "provider": getattr(config, "ACTIVE_PROVIDER", "unknown"),
+            "model": getattr(self, "model", ""),
+            "usage": self._usage_from_response(response),
+        }
+        if getattr(self, "_last_step_usage", None) is None:
+            self._last_step_usage = []
+        self._last_step_usage.append(event)
+        if getattr(self, "usage_events", None) is None:
+            self.usage_events = []
+        self.usage_events.append(event)
+
+    @staticmethod
+    def _summarize_usage_events(events: list[dict]) -> dict | None:
+        if not events:
+            return None
+        valid = [e["usage"] for e in events if e.get("usage")]
+        if not valid:
+            return None
+        prompt = sum(item["prompt_tokens"] for item in valid)
+        completion = sum(item["completion_tokens"] for item in valid)
+        total = sum(item["total_tokens"] for item in valid)
+        return {
+            "calls": events,
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": total,
+            "missing_usage_calls": len(events) - len(valid),
+        }
+
+    def _usage_summary(self, steps: int) -> dict:
+        events = list(getattr(self, "usage_events", []) or [])
+        valid = [e["usage"] for e in events if e.get("usage")]
+        prompt = sum(item["prompt_tokens"] for item in valid)
+        completion = sum(item["completion_tokens"] for item in valid)
+        total = sum(item["total_tokens"] for item in valid)
+        by_provider: dict[str, dict] = {}
+        for event in events:
+            provider = event.get("provider") or "unknown"
+            bucket = by_provider.setdefault(provider, {
+                "calls": 0, "missing_usage_calls": 0,
+                "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+            })
+            bucket["calls"] += 1
+            usage = event.get("usage")
+            if usage:
+                bucket["prompt_tokens"] += usage["prompt_tokens"]
+                bucket["completion_tokens"] += usage["completion_tokens"]
+                bucket["total_tokens"] += usage["total_tokens"]
+            else:
+                bucket["missing_usage_calls"] += 1
+        denominator = max(int(steps), 1)
+        return {
+            "provider": getattr(config, "ACTIVE_PROVIDER", "unknown"),
+            "model": getattr(self, "model", ""),
+            "steps": int(steps),
+            "calls": len(events),
+            "missing_usage_calls": len(events) - len(valid),
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": total,
+            "per_step_prompt_tokens": round(prompt / denominator, 2),
+            "per_step_completion_tokens": round(completion / denominator, 2),
+            "per_step_total_tokens": round(total / denominator, 2),
+            "by_provider": by_provider,
+            "calls_detail": events,
+        }
+
+    def _save_usage_summary(self, memory: TaskMemory) -> None:
+        if self.run_dir is None:
+            return
+        try:
+            summary = self._usage_summary(len(memory.steps))
+            with open(self.run_dir / "usage_summary.json", "w", encoding="utf-8") as f:
+                json.dump(summary, f, ensure_ascii=False, indent=2)
+            if summary["calls"]:
+                print(
+                    f"  💰 tokens：prompt={summary['prompt_tokens']}, "
+                    f"completion={summary['completion_tokens']}, "
+                    f"total={summary['total_tokens']} "
+                    f"(每步均值 {summary['per_step_total_tokens']})"
+                )
+        except Exception as e:
+            print(f"  ⚠️  usage 汇总写入失败：{e}")
+
     def _archive_step(self, step: int, action: dict, observation: str):
         """把本步动作（含原始坐标）和前后截图写入 run_dir，失败不影响主流程"""
         if self.run_dir is None:
@@ -1110,6 +1224,10 @@ class ScreenAgent:
             if getattr(self, "_last_step_timings", None):
                 # 每阶段耗时，便于事后定位慢在哪一层
                 record["timings"] = self._last_step_timings
+            # usage 缺失时明确写 null，而不是省略字段
+            record["usage"] = self._summarize_usage_events(
+                getattr(self, "_last_step_usage", []) or []
+            )
             with open(self.run_dir / f"step_{step:03d}.json", "w", encoding="utf-8") as f:
                 json.dump(record, f, ensure_ascii=False, indent=2)
             sent_path = image_preprocess.sent_filename("screen_current.png", self._last_image_meta)

@@ -203,7 +203,7 @@ python -m ddl_agent.evaluation.run_eval --similarity-ablation --split test \
 
 同一批 test 样本、同一套原始消息、其余模块全开，只替换去重相似度。
 模型为本地 `sentence-transformers` 的 `paraphrase-multilingual-MiniLM-L12-v2`，
-缓存目录 `F:/models/sentence-transformers`（未写入 C 盘）。
+缓存目录默认 `~/.cache/ddl-agent/sentence-transformers`（可用 `DDL_EMBEDDING_CACHE` 覆盖）。
 
 | 策略 | 精确 | 召回 | 重复率 | 精度 | 无关行 | 文档通过率 | embedding 可用 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -232,8 +232,8 @@ python -m ddl_agent.evaluation.run_eval --similarity-ablation --split test \
 
 - `sentence-transformers` 是可选依赖，放在 `requirements-embedding.txt`，不进入主 `requirements.txt`/CI，
   避免 CI 为评测去装 torch。
-- 模型默认下载到 `F:/models/sentence-transformers`；代码在加载前设置 `HF_HOME`、`SENTENCE_TRANSFORMERS_HOME`、
-  `TORCH_HOME`，避免写到 C 盘用户目录。
+- 模型默认下载到 `~/.cache/ddl-agent/sentence-transformers`（可用 `DDL_EMBEDDING_CACHE` 覆盖）；代码在加载前设置 `HF_HOME`、`SENTENCE_TRANSFORMERS_HOME`、
+  `TORCH_HOME`，不写死机器盘符。
 - 离线环境：先把模型目录整体拷贝到目标机器，或设置 `DDL_EMBEDDING_CACHE` 指向已有缓存，并保持模型名一致；
   加载失败的异常会写入报告的 `fallback_reason`，评测继续用词法跑完，不中断。
 - 真实模型用例默认跳过；设置 `RUN_EMBEDDING_TESTS=1` 才执行。CI 与离线测试不依赖模型文件。

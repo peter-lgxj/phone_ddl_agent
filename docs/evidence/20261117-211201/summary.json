@@ -1,0 +1,83 @@
+{
+  "run": "20261117-211201",
+  "steps": 1,
+  "stages": {
+    "decision": {
+      "samples": 0,
+      "total": 0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p90": 0.0
+    },
+    "observe": {
+      "samples": 0,
+      "total": 0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p90": 0.0
+    },
+    "ocr": {
+      "samples": 0,
+      "total": 0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p90": 0.0
+    },
+    "screenshot": {
+      "samples": 0,
+      "total": 0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p90": 0.0
+    },
+    "execute": {
+      "samples": 0,
+      "total": 0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p90": 0.0
+    },
+    "settle": {
+      "samples": 0,
+      "total": 0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p90": 0.0
+    },
+    "preprocess": {
+      "samples": 0,
+      "total": 0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p90": 0.0
+    },
+    "semantic": {
+      "samples": 0,
+      "total": 0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p90": 0.0
+    },
+    "completion": {
+      "samples": 0,
+      "total": 0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p90": 0.0
+    },
+    "yolo": {
+      "samples": 0,
+      "total": 0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p90": 0.0
+    }
+  },
+  "step_total": {
+    "total": 0.0,
+    "mean": 0.0,
+    "p50": 0.0,
+    "p90": 0.0
+  },
+  "source_run": "20261117-211201"
+}

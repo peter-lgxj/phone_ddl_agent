@@ -18,14 +18,15 @@ DEFAULT_DEADLINE_MINUTE = 59
 # 去重相似度阈值：>= 阈值且课程相同才合并
 DEDUPE_THRESHOLD = 0.78
 
-# 本地语义相似度（sentence-transformers）。模型与缓存默认放 F 盘，避免占用 C 盘。
+# 本地语义相似度（sentence-transformers）。默认放在用户缓存目录，避免写死某台机器盘符。
 # 可用环境变量覆盖：DDL_EMBEDDING_MODEL / DDL_EMBEDDING_CACHE
 EMBEDDING_MODEL = os.getenv(
     "DDL_EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2"
 )
-EMBEDDING_CACHE_DIR = os.getenv(
-    "DDL_EMBEDDING_CACHE", "F:/models/sentence-transformers"
+DEFAULT_EMBEDDING_CACHE = os.path.join(
+    os.path.expanduser("~"), ".cache", "ddl-agent", "sentence-transformers"
 )
+EMBEDDING_CACHE_DIR = os.getenv("DDL_EMBEDDING_CACHE", DEFAULT_EMBEDDING_CACHE)
 # 短文本的 embedding 余弦分数整体偏低，单独给一个可配阈值；词法仍用 DEDUPE_THRESHOLD
 EMBEDDING_THRESHOLD = float(os.getenv("DDL_EMBEDDING_THRESHOLD", "0.6"))
 DEDUPE_TOKEN_WEIGHT = 0.6
