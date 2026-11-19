@@ -207,7 +207,7 @@ class ScreenAgent:
         返回 [{"step": n, "label": "...", "b64": "...", "mime": "..."}]，数量不超过窗口值。
         优先用证据目录里归档的 step_NNN_observe.png；没有归档时退回 screen_observe.png。
         """
-        window = max(0, int(getattr(config, "HISTORY_IMAGE_WINDOW", 2)))
+        window = max(0, int(getattr(config, "HISTORY_IMAGE_WINDOW", 1)))
         if not self.support_multi_image or window == 0 or not memory.steps:
             return []
 
@@ -237,14 +237,17 @@ class ScreenAgent:
         return images
 
     def _build_history_text(self, memory: TaskMemory, image_steps: set[int]) -> str:
-        """最近步骤都保留简短动作与观察；截图无法表达已执行的动作。"""
+        """没有原图可带的历史步骤压成文字摘要，保留动作类型、关键参数与观察结论"""
         if not memory.steps:
             return "尚未执行任何操作，刚刚开始。"
 
         limit = max(0, int(getattr(config, "HISTORY_TEXT_STEPS", 8)))
+        older = [s for s in memory.steps if s.get("step") not in image_steps]
         if limit == 0:
-            return "（文字摘要窗口为 0）"
-        return format_steps_compact(memory.steps[-limit:])
+            return "（历史原图已省略；文字摘要窗口为 0）"
+        if not older:
+            return "（更早步骤已省略，仅保留最近原图）"
+        return format_steps_compact(older[-limit:])
 
     def _build_prompt(self, memory, history_images, history_text, ocr_result, semantic_analysis) -> str:
         """构建单步决策 prompt；关掉语义分析时不再出现任何【语义分析】引用"""
@@ -299,7 +302,7 @@ class ScreenAgent:
     ## 总体任务
     {memory.task}
 
-    ## 已执行的历史步骤（最近步骤的动作与观察；原图只保留最近若干张）
+    ## 已执行的历史步骤（原图只保留最近若干张，更早步骤为文字摘要）
     {history_text}
 {semantic_section}
     ## 当前屏幕 OCR 识别结果
