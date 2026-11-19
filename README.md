@@ -371,6 +371,8 @@ curl -L -o models/input_box.pt \
 
 `experiments/tasks.json` 收录 `test.md` 的 20 个任务（含 App、理论步数、难度等级），runner 按等级自动决定重复次数（`repeat_by_level`，当前 L1/L2 为 3 次、L3 为 2 次；**L3 最终次数是 `test.md` 4.2 的待定项**，当前值只是实现默认，可用 `--repeat` 强制统一）：
 
+> 外部数据集 `测试数据集\微Q邮\ddl_tasks.json` 的 D04 原文只写「进入班级群」，手机上有多个 QQ 群时可能进错群。`run_experiment.py` 在加载任务后按 `task_id` 覆盖为「进入『2026 计算机班级群』」，**不改数据集原文件**；其他任务原样保留。QQ 单群冒烟可用根目录的 `sources.qq.example.yaml`（复制为 `sources.qq.yaml`），它只扫这一个群，输出/状态目录独立，不影响默认 `sources.yaml`。
+
 ```bash
 # 执行任务集（需要真机与密钥）
 python experiments/run_experiment.py --tasks experiments/tasks.json --mode single

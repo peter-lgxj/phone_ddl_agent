@@ -1,0 +1,21 @@
+# QQ 单群冒烟配置（最小版）。复制为 sources.qq.yaml 后使用：
+#   python -m ddl_agent.monitor.cli --config sources.qq.yaml run --once --engine llm
+#
+# 只用于 D04 冒烟：只扫手机 QQ 的「2026 计算机班级群」，单轮运行。
+# 输出与状态目录独立，不会覆盖默认 sources.yaml 的 output/ 与 state/。
+version: 1
+schedule: every 6h
+interval_minutes: 360
+output_dir: output/qq-smoke
+state_dir: state/qq-smoke
+write_phone_calendar: false
+sources:
+  - id: qq-2026-jsj-bjq
+    app: qq
+    kind: group
+    target: 2026 计算机班级群
+    source_type: student_chat
+    enabled: true
+    lookback_days: 14
+    nl_text: 监控 QQ「2026 计算机班级群」
+    parse_note: D04 冒烟；群名必须与手机 QQ 完全一致（2026 与 计算机 之间有一个半角空格）

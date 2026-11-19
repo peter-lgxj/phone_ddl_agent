@@ -33,6 +33,8 @@ python -m ddl_agent.monitor.cli edit wechat-21级课程群 --target "22级课程
 | `enabled` | 是否参与本轮检索 |
 | `lookback_days` | 只看最近 N 天的消息 |
 
+QQ 单群冒烟可直接复制 `sources.qq.example.yaml` 为 `sources.qq.yaml`：它只包含「2026 计算机班级群」一个来源，`output_dir` / `state_dir` 独立，不会影响默认 `sources.yaml`。用于 D04 的最小配置与单轮运行方式见该文件顶部注释。
+
 ## 2. 运行
 
 ### 2.1 双击启动（推荐）

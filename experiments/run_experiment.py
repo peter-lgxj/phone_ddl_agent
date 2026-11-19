@@ -38,6 +38,7 @@ from device_lock import device_lock  # noqa: E402  同一把锁供 Web/CLI 共�
 # 已知 App 的候选包名（同一 App 在不同 ROM 上包名不同），用于每个任务前 force-stop
 PACKAGE_BY_APP = {
     "微信": ["com.tencent.mm"],
+    "QQ": ["com.tencent.mobileqq"],  # 手机 QQ；TIM（com.tencent.tim）不在此列
     "设置": ["com.android.settings"],
     "高德地图": ["com.autonavi.minimap"],
     "淘宝": ["com.taobao.taobao"],
@@ -48,6 +49,21 @@ PACKAGE_BY_APP = {
     "备忘录": ["com.miui.notes", "com.huawei.notepad", "com.hihonor.notepad",
               "com.vivo.notes", "com.coloros.note", "com.android.notes"],
 }
+
+# 测试数据集里 D04 只写「班级群」，手机上有多个 QQ 群时可能进错群。
+# 数据集原文件不改；执行前按 task_id 注入精确群名，保证搜索与读屏目标唯一。
+TASK_TEXT_OVERRIDES = {
+    "D04": "打开 QQ，进入「2026 计算机班级群」，找到最近一条作业提交时间通知，报告作业名和截止时间",
+}
+
+
+def apply_task_overrides(tasks: list[dict]) -> list[dict]:
+    """返回覆盖任务文本后的副本；未命中的任务原样保留。"""
+    overridden = []
+    for task in tasks:
+        text = TASK_TEXT_OVERRIDES.get(str(task.get("id", "")).upper())
+        overridden.append({**task, "task": text} if text else task)
+    return overridden
 
 
 def filter_failed(tasks: list[dict], results_path: str) -> list[dict]:
@@ -209,7 +225,7 @@ def load_tasks(path: Path):
         missing = {"id", "task"} - set(t)
         if missing:
             raise SystemExit(f"任务 {t} 缺少字段：{sorted(missing)}")
-    return tasks
+    return apply_task_overrides(tasks)
 
 
 def collect_steps(agent) -> int | None:

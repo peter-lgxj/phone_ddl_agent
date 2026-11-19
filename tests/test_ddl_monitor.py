@@ -73,6 +73,20 @@ def test_outlook_defaults_to_inbox():
     assert sources[0].target == "收件箱"
 
 
+def test_qq_only_sources_template_parses():
+    path = Path(__file__).resolve().parent.parent / "sources.qq.example.yaml"
+    config = load_config(path)
+
+    assert len(config.sources) == 1
+    source = config.sources[0]
+    assert source.app == "qq"
+    assert source.kind == "group"
+    assert source.target == "2026 计算机班级群"
+    assert source.enabled is True
+    assert config.output_dir == "output/qq-smoke"
+    assert config.state_dir == "state/qq-smoke"
+
+
 @pytest.mark.parametrize(
     "text, reason",
     [
