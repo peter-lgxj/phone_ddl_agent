@@ -1,17 +1,40 @@
 name: ci
 
 on:
+  # 只有 main 的 push 需要单独跑；feature 分支交给 pull_request，避免同一提交双跑。
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# 同一分支/PR 的新推送取消旧 run，避免排队与失败邮件堆积。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  syntax:
+  test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+
+      # 依赖唯一真源：本地与 CI 都从 requirements-lock.txt 安装（含 pytest/ruff/openpyxl）。
+      - name: Install dependencies from lock file
+        run: |
+          python -m pip install --upgrade pip
+          if grep -q -- '--hash=' requirements-lock.txt; then
+            pip install --require-hashes -r requirements-lock.txt
+          else
+            pip install -r requirements-lock.txt
+          fi
+
+      - name: Verify installed dependencies
+        run: python -m pip check
 
       - name: Parse every Python file
         run: python -m compileall -q .
@@ -22,35 +45,15 @@ jobs:
       - name: Experiment runner dry-run
         run: python experiments/run_experiment.py --tasks experiments/tasks.json --dry-run
 
-      - name: Install test dependencies
-        run: pip install python-dotenv openpyxl PyYAML openai Pillow opencv-python-headless flask "pytest>=8" "ruff>=0.6"
-
       - name: Lint (error-level rules only)
         run: ruff check .
 
-      - name: Unit tests
-        run: pytest -q
-
-  locked-deps:
-    # requirements-lock.txt 在 Windows + Python 3.12 下由 pip freeze 生成（仅锁版本、未带 hash）。
-    # 这里在 ubuntu + 3.12 上按锁文件完整安装一遍，验证锁文件不是“写了没人用”。
-    # 平台说明：Linux 与 Windows 的 wheel 集不同；若某版本在 Linux 缺 wheel，本 job 会失败，
-    # 这本身就是需要知道的信号。将来换成 hash 锁时，下方会自动加 --require-hashes。
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies from lock file
-        run: |
-          python -m pip install --upgrade pip
-          if grep -q -- '--hash=' requirements-lock.txt; then
-            pip install --require-hashes -r requirements-lock.txt
-          else
-            pip install -r requirements-lock.txt
-          fi
+      # 防止「新测试 import 了新包，但没写进 lock」：静态扫描 tests/ 的第三方 import。
+      - name: Check test dependencies are locked
+        run: python scripts/check_test_deps.py
 
       - name: Import smoke test
-        run: python -c "import flask, openai, cv2, torch, uiautomator2; print('lock-ok')"
+        run: python -c "import flask, openai, cv2, torch, uiautomator2, openpyxl, pytest; print('lock-ok')"
+
+      - name: Unit tests
+        run: pytest -q
