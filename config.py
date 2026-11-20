@@ -183,6 +183,15 @@ OBSERVE_OCR_ACTIONS = {
     if item.strip()
 }
 
+# 规则快路：开群、返回、滚动、点已知 resource-id 的输入框这类能被控件树证明的动作
+# 不调用视觉模型，直接执行。只有需要看懂截图语义时才走 VLM。命中与省下的调用数
+# 会写进 step JSON 的 timings.rule_* 与 usage_summary.json 的 rule_fastpath。
+RULE_FASTPATH = os.getenv("RULE_FASTPATH", "1").strip().lower() not in (
+    "0", "false", "off", ""
+)
+# 同一次会话里规则最多连续滚多少步；到上限后交回 VLM，避免无限翻页
+RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "6"))
+
 ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "runs")  # 每步截图与动作记录的归档目录
 
 # 历史上下文窗口：只带最近 N 张历史原图（当前屏幕始终带图），更早步骤压成文字摘要。

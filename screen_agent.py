@@ -12,6 +12,7 @@ from ocr_locator import (OCRLocator, mark_text_in_input_boxes, resolve_action_el
                          canonical_action_target, should_trigger_ocr, snap_action_coords)
 import config
 import image_preprocess
+import rule_policy
 from openai import OpenAI
 import ui_state
 
@@ -220,6 +221,9 @@ class ScreenAgent:
         self.usage_events = []            # 全部视觉调用 usage，任务结束写汇总
         self._last_step_usage = []        # 本步 usage 事件（可含决策/观察/完成检测）
         self._last_observe_ocr_seconds = 0.0  # 本步滚动 OCR 耗时（未触发为 0）
+        self._rule_state = {}             # 规则快路跨步状态（已进入的群、滚动次数等）
+        self._rule_hits = []              # 规则命中记录，任务结束写汇总
+        self._last_rule_seconds = 0.0     # 本步规则检查（控件树 dump）耗时
 
         print(f"视觉模型：{provider_name} / {self.model}")
         print(f"语义模型：{planner_name} / {self.text_model}")
@@ -902,6 +906,81 @@ class ScreenAgent:
         return int(float(val))
 
     # ══════════════════════════════════════════════════════════
+    #  规则快路：控件树能证明的动作不调用视觉模型
+    # ══════════════════════════════════════════════════════════
+
+    def _rule_action(self, memory: TaskMemory) -> dict | None:
+        """尝试用规则决定本步动作；None 表示需要 VLM 判断。
+
+        命中时省掉一次决策请求（合并观察模式下也就是本步唯一的一次视觉调用）。
+        """
+        self._last_rule_seconds = 0.0
+        if not getattr(config, "RULE_FASTPATH", True):
+            return None
+        state = getattr(self, "_rule_state", None)
+        if state is None:
+            self._rule_state = state = {}
+        if state.get("disabled"):
+            return None
+
+        task = memory.task or ""
+        # 没有引号目标、也不含搜索意图时规则不会命中：跳过控件树 dump，不增加开销
+        if not rule_policy.extract_quoted_targets(task) and "搜索" not in task:
+            return None
+
+        started = time.time()
+        try:
+            xml = self.phone.dump_hierarchy()
+        except Exception as e:
+            print(f"  ⚠️  规则快路读取控件树失败，交回视觉模型：{e}")
+            state["disabled"] = True
+            return None
+        self._last_rule_seconds = time.time() - started
+
+        last_action = dict(memory.steps[-1].get("action") or {}) if memory.steps else {}
+        action = rule_policy.decide(rule_policy.RuleContext(
+            task=task,
+            step=len(memory.steps) + 1,
+            read_only=self.read_only,
+            xml=xml,
+            last_action=last_action,
+            state=state,
+            max_scrolls=int(getattr(config, "RULE_MAX_SCROLLS", 6)),
+            known_input_resource_ids=(
+                getattr(config, "WECHAT_INPUT_RESOURCE_ID", ""),
+            ),
+        ))
+        if action is None:
+            return None
+
+        record = {"name": action["rule"]["name"], "step": len(memory.steps) + 1,
+                  "saved_calls": 1}
+        self._rule_hits.append(record)
+        print(f"  ⚡ 规则快路命中：{record['name']}"
+              f"（跳过视觉决策，省 {record['saved_calls']} 次模型调用）")
+        return action
+
+    def _rule_observe(self, action: dict, memory: TaskMemory) -> str:
+        """规则步骤的观察：截图 + 控件树文字，不调用视觉模型。"""
+        self._settle_screen()
+        self._clear_observe_shot()
+        try:
+            self.phone.screenshot("screen_observe.png")
+            self._observe_valid = True
+        except Exception as e:
+            self._observe_valid = False
+            print(f"  ⚠️  规则步骤截图失败：{e}")
+            return f"[规则] {action.get('description') or action.get('action_type')}"
+
+        try:
+            text = rule_policy.screen_text(self.phone.dump_hierarchy())
+        except Exception as e:
+            text = ""
+            print(f"  ⚠️  规则步骤读取控件树失败：{e}")
+        head = f"[规则] {action.get('description') or action.get('action_type')}"
+        return f"{head}\n{text}".strip() if text else head
+
+    # ══════════════════════════════════════════════════════════
     #  主循环（保持原样，不改动）
     # ══════════════════════════════════════════════════════════
 
@@ -966,7 +1045,15 @@ class ScreenAgent:
         )
         self._last_observation_scope = "pre_action" if merged_active else "post_action"
         started = time.time()
-        if merged_active:
+        rule_action = self._rule_action(memory) if merged_active else None
+        if rule_action is not None:
+            action = rule_action
+            timings["rule_hit"] = True
+            timings["rule_name"] = action["rule"]["name"]
+            timings["rule_saved_calls"] = 1
+            timings["rule_check"] = round(self._last_rule_seconds, 2)
+            observation = ""
+        elif merged_active:
             action = self._decide(step, memory, merged=True)
             if action is None:
                 # 合并响应不合法：本步回退旧的两段式（先观察当前屏幕，再决策）
@@ -999,6 +1086,11 @@ class ScreenAgent:
             timings["observe"] = 0.0
             if finished:
                 observation = "任务完成"
+            elif timings.get("rule_hit"):
+                # 规则步骤没有模型返回的 observation，用截图 + 控件树文字本地补齐
+                started = time.time()
+                observation = self._rule_observe(action, memory)
+                timings["observe"] = round(time.time() - started, 2)
             else:
                 # 合并模式下这一步没有独立的观察请求；等待界面稳定，供下一步截图
                 started = time.time()
@@ -1183,6 +1275,11 @@ class ScreenAgent:
                 bucket["missing_usage_calls"] += 1
         denominator = max(int(steps), 1)
         driver = getattr(self, "driver_kind", "uiautomator2")
+        rule_hits = list(getattr(self, "_rule_hits", []) or [])
+        rule_by_name: dict[str, int] = {}
+        for item in rule_hits:
+            name = item.get("name", "unknown")
+            rule_by_name[name] = rule_by_name.get(name, 0) + 1
         return {
             "provider": getattr(config, "ACTIVE_PROVIDER", "unknown"),
             "model": getattr(self, "model", ""),
@@ -1203,6 +1300,12 @@ class ScreenAgent:
             "per_step_prompt_tokens": round(prompt / denominator, 2),
             "per_step_completion_tokens": round(completion / denominator, 2),
             "per_step_total_tokens": round(total / denominator, 2),
+            # 规则快路：命中几次、省掉几次模型调用、按规则拆分
+            "rule_fastpath": {
+                "hits": len(rule_hits),
+                "saved_calls": sum(int(item.get("saved_calls", 0)) for item in rule_hits),
+                "by_rule": rule_by_name,
+            },
             "by_provider": by_provider,
             "calls_detail": events,
         }
@@ -1248,10 +1351,12 @@ class ScreenAgent:
             )
             with open(self.run_dir / f"step_{step:03d}.json", "w", encoding="utf-8") as f:
                 json.dump(record, f, ensure_ascii=False, indent=2)
-            sent_path = image_preprocess.sent_filename("screen_current.png", self._last_image_meta)
-            if os.path.exists(sent_path):
-                ext = os.path.splitext(sent_path)[1]
-                shutil.copy(sent_path, self.run_dir / f"step_{step:03d}_sent{ext}")
+            if self._last_image_meta:
+                sent_path = image_preprocess.sent_filename(
+                    "screen_current.png", self._last_image_meta)
+                if os.path.exists(sent_path):
+                    ext = os.path.splitext(sent_path)[1]
+                    shutil.copy(sent_path, self.run_dir / f"step_{step:03d}_sent{ext}")
             for src, suffix in (("screen_current.png", "current"),
                                 ("screen_observe.png", "observe")):
                 # finish 没有执行动作，screen_observe.png 是上一步的，归档会造成证据错位
