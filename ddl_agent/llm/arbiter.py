@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..models import DeadlineCandidate, TaskCluster
-from ..settings import LLM_MIN_CONFIDENCE, SOURCE_CREDIBILITY
+from ..settings import LLM_MIN_CONFIDENCE
 from .client import LLMClient, LLMUnavailable
 
 _SYSTEM = (
@@ -21,9 +21,9 @@ _PROMPT = """任务：{task}（课程：{course}）
 
 {candidates}
 
-可信度顺序（高到低）：official_email(4) > course_announcement(3) >
-instructor_chat(2) > student_chat(1)。
-同等可信度时，发布时间更新的公告覆盖旧公告。
+可信度同权：不要因为来源是邮件或群聊就固定偏向某一侧。
+优先看发布时间更新的公告；含「更正/延期/改为/以最新为准」的表述可覆盖旧值；
+无法判断先后时回答 uncertain。
 
 请输出 JSON：
 {{"decision": "选中的 ISO-8601 时间，或 uncertain",
@@ -52,11 +52,11 @@ class LLMConflictArbiter:
 
         lines = []
         for position, candidate in enumerate(dated, start=1):
-            weight = SOURCE_CREDIBILITY.get(candidate.source_type, 0)
             lines.append(
                 f"{position}. {candidate.deadline_iso} | 来源={candidate.source_type}"
-                f"（可信度 {weight}）| 发布="
+                f" | 发布="
                 f"{candidate.published_at.isoformat() if candidate.published_at else 'unknown'}"
+                f" | 更正/延期={candidate.correction_marker or '-'}"
                 f" | 原文={candidate.deadline_raw or '-'}"
                 f" | 抽取置信度={candidate.extractor_confidence if candidate.extractor_confidence is not None else '-'}"
             )

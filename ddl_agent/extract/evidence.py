@@ -82,14 +82,20 @@ def _time_evidence_in_body(raw: str | None, iso: str | None, body: str) -> bool:
     return True
 
 
-def validate_candidate_evidence(candidate: DeadlineCandidate, body: str) -> DeadlineCandidate:
-    """把正文里找不到依据的课程/截止时间置空，并标记 ``needs_review``。"""
+def validate_candidate_evidence(candidate: DeadlineCandidate, body: str,
+                                course_context: str = "") -> DeadlineCandidate:
+    """把正文里找不到依据的课程/截止时间置空，并标记 ``needs_review``。
+
+    ``course_context`` 是群名、主题等来源级上下文：课程代码在这里出现也算有效证据，
+    避免「群名是 COMP7503课程群、正文只写作业三」被误判成缺少课程。
+    """
     reasons: list[str] = []
     body_norm = normalize_for_evidence(body)
+    course_norm = normalize_for_evidence(f"{body}\n{course_context}")
 
     course = candidate.course
-    if course and normalize_for_evidence(course) not in body_norm:
-        reasons.append(f"课程 {course} 未在该条消息正文中出现")
+    if course and normalize_for_evidence(course) not in course_norm:
+        reasons.append(f"课程 {course} 未在该条消息正文/来源上下文中出现")
         course = None
 
     deadline_iso = candidate.deadline_iso

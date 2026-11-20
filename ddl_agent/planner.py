@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import difflib
 import re
+import unicodedata
 from datetime import datetime, timedelta
 
-from .extract.rules import find_courses
+from .extract.courses import find_courses
+from .extract.message_context import normalize_source_type
 from .models import RetrievalPlan, SourceSpec
 from .settings import TZ
 
@@ -17,6 +20,126 @@ _STOPWORDS = {
 
 _EMAIL_HINTS = ("邮件", "email", "outlook", "收件箱", "邮箱")
 _CHAT_HINTS = ("聊天", "群聊", "微信", "wechat", "qq", "群", "chat", "消息")
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_ALNUM_RE = re.compile(r"[a-z0-9]+")
+_GROUP_SIMILARITY = 0.88
+
+
+def normalize_source_name(name: str) -> str:
+    """群名归一化：全半角、大小写、空格与标点都不参与比较。"""
+    value = unicodedata.normalize("NFKC", name or "").lower()
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", value)
+
+
+def source_tokens(name: str) -> frozenset[str]:
+    """把群名拆成「英文数字串 + 单个汉字」，用于词序无关的比较。"""
+    compact = normalize_source_name(name)
+    tokens = _ALNUM_RE.findall(compact)
+    tokens.extend(_CJK_RE.findall(compact))
+    return frozenset(tokens)
+
+
+def source_names_equivalent(left: str, right: str) -> bool:
+    """仅空格/大小写/标点/词序不同的群名视为同一个群；序号差异不算同群。"""
+    if not left or not right:
+        return False
+    if normalize_source_name(left) == normalize_source_name(right):
+        return True
+    return source_tokens(left) == source_tokens(right)
+
+
+def _name_ratio(left: str, right: str) -> float:
+    return difflib.SequenceMatcher(
+        None, normalize_source_name(left), normalize_source_name(right)
+    ).ratio()
+
+
+def _is_similar_group(left: str, right: str) -> bool:
+    """相似群名：等价、极高相似，或同一课程代码下的「基名 vs 年份后缀」变体。"""
+    if source_names_equivalent(left, right):
+        return True
+    if _name_ratio(left, right) >= _GROUP_SIMILARITY:
+        return True
+
+    left_codes, right_codes = set(find_courses(left)), set(find_courses(right))
+    if not (left_codes & right_codes):
+        return False
+    left_has_year = bool(re.search(r"20\d{2}", left))
+    right_has_year = bool(re.search(r"20\d{2}", right))
+    return left_has_year != right_has_year
+
+
+def _query_match_score(name: str, query: str) -> tuple[int, float, int]:
+    """匹配分：完整群名出现在查询里最高，其次是课程代码命中；同分取更短的基名。"""
+    compact_query = normalize_source_name(query)
+    compact_name = normalize_source_name(name)
+    full_hit = bool(compact_name) and compact_name in compact_query
+    code_hit = bool(set(find_courses(name)) & set(find_courses(query)))
+    overlap = source_tokens(name) & source_tokens(query)
+    coverage = len(overlap) / max(1, len(source_tokens(name)))
+    return (int(full_hit) * 2 + int(code_hit), coverage, -len(compact_name))
+
+
+def select_sources(query: str, sources: list) -> tuple[list, list[dict]]:
+    """相似群名只保留与查询最匹配的一个，并记录选择依据。
+
+    返回 ``(选中的来源, 选择记录)``；没有相似群时记录为空。
+    """
+    kept: list = []
+    decisions: list[dict] = []
+    for source in sources:
+        name = str(getattr(source, "name", source))
+        match = next(
+            ((index, item) for index, item in enumerate(kept)
+             if _is_similar_group(str(getattr(item, "name", item)), name)),
+            None,
+        )
+        if match is None:
+            kept.append(source)
+            continue
+
+        index, existing = match
+        existing_name = str(getattr(existing, "name", existing))
+        if _query_match_score(name, query) <= _query_match_score(existing_name, query):
+            decisions.append(
+                _selection_entry(
+                    kept=existing_name,
+                    dropped=name,
+                    reason="群名归一化后相似，仅保留与查询最匹配的一个",
+                    left=existing_name,
+                    right=name,
+                )
+            )
+            continue
+
+        kept[index] = source
+        decisions.append(
+            _selection_entry(
+                kept=name,
+                dropped=existing_name,
+                reason="群名归一化后相似，仅保留与查询最匹配的一个",
+                left=existing_name,
+                right=name,
+            )
+        )
+    return kept, decisions
+
+
+def _selection_entry(kept: str, dropped: str, reason: str,
+                     left: str, right: str) -> dict:
+    equivalent = source_names_equivalent(left, right)
+    return {
+        "kept": kept,
+        "dropped": [dropped],
+        "reason": (
+            "群名归一化后同名（仅空格/词序/标点不同）"
+            if equivalent and _name_ratio(left, right) == 1.0
+            else reason
+        ),
+        "similarity": round(_name_ratio(left, right), 4),
+        "equivalent": equivalent,
+    }
 
 
 class SourceConfigParser:
@@ -33,9 +156,16 @@ class SourceConfigParser:
 
         selected: list = []
         for spec in enabled:
-            name_hit = str(getattr(spec, "name", "")).lower() in text
+            name = str(getattr(spec, "name", ""))
+            # 精确子串之外，再做空格/词序归一化匹配
+            name_hit = (
+                name.lower() in text
+                or normalize_source_name(name) in normalize_source_name(text)
+                or source_tokens(name) <= source_tokens(text)
+            )
             kind = getattr(spec, "kind", None) or (
-                "email" if getattr(spec, "source_type", "") == "official_email" else "chat"
+                "email" if normalize_source_type(getattr(spec, "source_type", "")) == "official_email"
+                else "chat"
             )
             kind_hit = (
                 kind == "email" and any(hint in text for hint in _EMAIL_HINTS)

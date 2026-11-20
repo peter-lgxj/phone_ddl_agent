@@ -1,0 +1,751 @@
+{
+ "source": [
+  "runs/qq_real_device_20261121/extraction.json",
+  "runs/qq_real_device_20261121/task_results.json",
+  "runs/wx_real_device_20261121/extraction.json",
+  "runs/wx_real_device_20261121/emails.json",
+  "runs/wx_real_device_20261121/task_results.json"
+ ],
+ "qq": {
+  "G1": {
+   "group": "2026 计算机班级群",
+   "messages": [
+    [
+     "如风",
+     "昨天 23:48",
+     "【COMP7503】机器学习作业三 11.29 23:59 交到 Moodle"
+    ],
+    [
+     "群主 さ`扑梦成空丶",
+     "昨天 23:48",
+     "群里禁水，只发通知"
+    ],
+    [
+     "如风",
+     "昨天 23:48",
+     "有人要一起订书吗，凑个单"
+    ],
+    [
+     "群主 さ`扑梦成空丶",
+     "昨天 23:48",
+     "【实验报告二】实验报告二，11.22 23:59 前交，交到课程网站"
+    ],
+    [
+     "如风",
+     "昨天 23:48",
+     "收到"
+    ],
+    [
+     "群主 さ`扑梦成空丶",
+     "昨天 23:48",
+     "谢谢"
+    ]
+   ],
+   "candidates": [
+    {
+     "candidate_id": "G1-1:llm1",
+     "task_name_raw": "机器学习作业三",
+     "course": "COMP7503",
+     "deadline_raw": "11.29 23:59",
+     "deadline_iso": "2026-11-29T23:59:00+08:00",
+     "source_type": "student_chat",
+     "source_name": "2026 计算机班级群",
+     "published_at": "2026-11-21 00:20:00+08:00",
+     "message_id": "G1-1",
+     "message_subject": "QQ / 2026 计算机班级群",
+     "missing_fields": [],
+     "unresolved_time": false,
+     "extractor_confidence": 0.95,
+     "needs_review": false,
+     "review_reason": ""
+    },
+    {
+     "candidate_id": "G1-4:llm1",
+     "task_name_raw": "实验报告二",
+     "course": null,
+     "deadline_raw": "11.22 23:59 前",
+     "deadline_iso": "2026-11-22T23:59:00+08:00",
+     "source_type": "student_chat",
+     "source_name": "2026 计算机班级群",
+     "published_at": "2026-11-21 00:20:00+08:00",
+     "message_id": "G1-4",
+     "message_subject": "QQ / 2026 计算机班级群",
+     "missing_fields": [
+      "course"
+     ],
+     "unresolved_time": false,
+     "extractor_confidence": 0.95,
+     "needs_review": false,
+     "review_reason": ""
+    }
+   ]
+  },
+  "G2": {
+   "group": "2026 计算机班级二群",
+   "messages": [
+    [
+     "如风",
+     "昨天 23:50",
+     "【实验报告二】实验报告二，11.24 23:59 前交，交到课程网站"
+    ],
+    [
+     "群主 さ`扑梦成空丶",
+     "昨天 23:50",
+     "收到"
+    ],
+    [
+     "如风",
+     "昨天 23:50",
+     "谢谢"
+    ]
+   ],
+   "candidates": [
+    {
+     "candidate_id": "G2-1:llm1",
+     "task_name_raw": "实验报告二",
+     "course": null,
+     "deadline_raw": "11.24 23:59 前",
+     "deadline_iso": "2026-11-24T23:59:00+08:00",
+     "source_type": "student_chat",
+     "source_name": "2026 计算机班级二群",
+     "published_at": "2026-11-21 00:20:00+08:00",
+     "message_id": "G2-1",
+     "message_subject": "QQ / 2026 计算机班级二群",
+     "missing_fields": [
+      "course"
+     ],
+     "unresolved_time": false,
+     "extractor_confidence": 0.95,
+     "needs_review": false,
+     "review_reason": ""
+    }
+   ]
+  },
+  "G4": {
+   "group": "COMP7503 作业通知群",
+   "messages": [
+    [
+     "风",
+     "昨天 23:53",
+     "【操作系统作业一】操作系统作业一，11.26 23:59 前交，交到课程网站"
+    ],
+    [
+     "群主 さ`扑梦成空丶",
+     "昨天 23:53",
+     "收到"
+    ],
+    [
+     "风",
+     "昨天 23:53",
+     "【操作系统作业一】操作系统作业一，11.26 23:59 前交，交到课程网站"
+    ],
+    [
+     "群主 さ`扑梦成空丶",
+     "昨天 23:53",
+     "收到"
+    ],
+    [
+     "风",
+     "昨天 23:53",
+     "【更正】操作系统作业一已改到 11.28 23:59，其他要求不变，别按旧时间交"
+    ],
+    [
+     "群主 さ`扑梦成空丶",
+     "昨天 23:53",
+     "好的"
+    ]
+   ],
+   "candidates": [
+    {
+     "candidate_id": "G4-1:llm1",
+     "task_name_raw": "操作系统作业一",
+     "course": null,
+     "deadline_raw": "11.26 23:59 前",
+     "deadline_iso": "2026-11-26T23:59:00+08:00",
+     "source_type": "student_chat",
+     "source_name": "COMP7503 作业通知群",
+     "published_at": "2026-11-21 00:20:00+08:00",
+     "message_id": "G4-1",
+     "message_subject": "QQ / COMP7503 作业通知群",
+     "missing_fields": [],
+     "unresolved_time": false,
+     "extractor_confidence": 0.95,
+     "needs_review": true,
+     "review_reason": "课程 COMP7503 未在该条消息正文中出现"
+    },
+    {
+     "candidate_id": "G4-3:llm1",
+     "task_name_raw": "操作系统作业一",
+     "course": null,
+     "deadline_raw": "11.26 23:59 前",
+     "deadline_iso": "2026-11-26T23:59:00+08:00",
+     "source_type": "student_chat",
+     "source_name": "COMP7503 作业通知群",
+     "published_at": "2026-11-21 00:20:00+08:00",
+     "message_id": "G4-3",
+     "message_subject": "QQ / COMP7503 作业通知群",
+     "missing_fields": [],
+     "unresolved_time": false,
+     "extractor_confidence": 0.95,
+     "needs_review": true,
+     "review_reason": "课程 COMP7503 未在该条消息正文中出现"
+    },
+    {
+     "candidate_id": "G4-5:llm1",
+     "task_name_raw": "操作系统作业一",
+     "course": null,
+     "deadline_raw": "11.28 23:59",
+     "deadline_iso": "2026-11-28T23:59:00+08:00",
+     "source_type": "student_chat",
+     "source_name": "COMP7503 作业通知群",
+     "published_at": "2026-11-21 00:20:00+08:00",
+     "message_id": "G4-5",
+     "message_subject": "QQ / COMP7503 作业通知群",
+     "missing_fields": [
+      "course"
+     ],
+     "unresolved_time": false,
+     "extractor_confidence": 0.95,
+     "needs_review": false,
+     "review_reason": ""
+    }
+   ]
+  }
+ },
+ "wx": {
+  "groups": {
+   "W1": {
+    "group": "COMP7503课程群",
+    "published_at": "2026-11-20T21:52:00+08:00",
+    "messages": [
+     [
+      "叶小凡",
+      "今晚 lab 演示改到 B 座 302，别走错"
+     ],
+     [
+      "叶小凡",
+      "机器学习作业二，11.15 23:59 前交到 Moodle，迟交每天扣 10%"
+     ],
+     [
+      "叶小凡",
+      "明天的课换到线上，zoom 链接在课程通知里"
+     ],
+     [
+      "叶小凡",
+      "上次那个 quiz 的答案在哪，我错过了"
+     ],
+     [
+      "leaffff",
+      "TA 说 quiz 不计分，只用来摸底，随便做"
+     ],
+     [
+      "叶小凡",
+      "我算的 loss 一直不下降，learning rate 是不是太大了"
+     ],
+     [
+      "leaffff",
+      "试试 2e-4，我用这个收敛了，别一上来就 1e-2"
+     ],
+     [
+      "叶小凡",
+      "GPU 排队排到明天早上了，今天跑不了"
+     ],
+     [
+      "叶小凡",
+      "用 Colab 免费额度吧，跑小模型够用"
+     ],
+     [
+      "leaffff",
+      "有人知道 report 模板在哪下吗"
+     ],
+     [
+      "叶小凡",
+      "Moodle 上“Assignment templates”那个文件夹，有 latex 和 docx 两版"
+     ],
+     [
+      "叶小凡",
+      "组队还差一个人，有人要吗"
+     ],
+     [
+      "leaffff",
+      "我我我，加我一个，我做实验部分"
+     ],
+     [
+      "叶小凡",
+      "机器学习作业三，11.29 23:59 前交到 Moodle，要交 code + report"
+     ],
+     [
+      "leaffff",
+      "作业三的数据集在哪，我在 Moodle 上没找到"
+     ],
+     [
+      "叶小凡",
+      "course announcement 第 3 条里有链接，往下翻一点"
+     ]
+    ],
+    "candidates": [
+     {
+      "candidate_id": "W1-2:llm1",
+      "task_name_raw": "机器学习作业二",
+      "course": null,
+      "deadline_raw": "11.15 23:59",
+      "deadline_iso": "2026-11-15T23:59:00+08:00",
+      "source_type": "student_chat",
+      "source_name": "COMP7503课程群",
+      "published_at": "2026-11-20 21:52:00+08:00",
+      "message_id": "W1-2",
+      "message_subject": "微信 / COMP7503课程群",
+      "missing_fields": [],
+      "unresolved_time": false,
+      "extractor_confidence": 0.95,
+      "needs_review": true,
+      "review_reason": "课程 COMP7503 未在该条消息正文中出现"
+     },
+     {
+      "candidate_id": "W1-14:llm1",
+      "task_name_raw": "机器学习作业三",
+      "course": null,
+      "deadline_raw": "11.29 23:59",
+      "deadline_iso": "2026-11-29T23:59:00+08:00",
+      "source_type": "student_chat",
+      "source_name": "COMP7503课程群",
+      "published_at": "2026-11-20 21:52:00+08:00",
+      "message_id": "W1-14",
+      "message_subject": "微信 / COMP7503课程群",
+      "missing_fields": [],
+      "unresolved_time": false,
+      "extractor_confidence": 0.95,
+      "needs_review": true,
+      "review_reason": "课程 COMP7503 未在该条消息正文中出现"
+     }
+    ]
+   },
+   "W2": {
+    "group": "COMP7503-2026",
+    "published_at": "2026-11-20T21:57:00+08:00",
+    "messages": [
+     [
+      "叶小凡",
+      "2026 春季 COMP7503 的选课群，课程作业都在 Moodle 上，群里只发通知"
+     ],
+     [
+      "叶小凡",
+      "机器学习作业二，11.15 23:59 前交到 Moodle"
+     ],
+     [
+      "叶小凡",
+      "期末复习资料我放共享盘了，链接过期找我"
+     ]
+    ],
+    "candidates": [
+     {
+      "candidate_id": "W2-2:llm1",
+      "task_name_raw": "机器学习作业二",
+      "course": null,
+      "deadline_raw": "11.15 23:59",
+      "deadline_iso": "2026-11-15T23:59:00+08:00",
+      "source_type": "student_chat",
+      "source_name": "COMP7503-2026",
+      "published_at": "2026-11-20 21:57:00+08:00",
+      "message_id": "W2-2",
+      "message_subject": "微信 / COMP7503-2026",
+      "missing_fields": [],
+      "unresolved_time": false,
+      "extractor_confidence": 0.95,
+      "needs_review": true,
+      "review_reason": "课程 COMP7503 未在该条消息正文中出现"
+     }
+    ]
+   },
+   "W3": {
+    "group": "COMP7415课程群",
+    "published_at": "2026-11-20T22:00:00+08:00",
+    "messages": [
+     [
+      "叶小凡",
+      "这周的 reading 是第 6 章，上课前先看一下"
+     ],
+     [
+      "叶小凡",
+      "上课地点改到 C 座 201，不是原来的教室"
+     ],
+     [
+      "叶小凡",
+      "老师说不考推导，考概念，别背公式了"
+     ],
+     [
+      "leaffff",
+      "期末是闭卷还是开卷"
+     ],
+     [
+      "叶小凡",
+      "闭卷，但可以带一张 A4 手写笔记"
+     ],
+     [
+      "叶小凡",
+      "小组课程报告，月底前交，具体要求看下面的课程表"
+     ],
+     [
+      "叶小凡",
+      "【图片】课程表：COMP7503 机器学习 / 作业与提交时间一览 / 2026 秋季学期。作业三 2026-11-29 23:59；课程作业 Final Report（小组 4 人·交 pdf）2026-12-08 23:59；期末展示 2026-12-15 23:59。备注：以上时间均为 HKT(UTC+8)，逾期每天扣 10%，最多扣至 60%，提交入口统一走 Moodle，不接受邮件提交。"
+     ],
+     [
+      "叶小凡",
+      "图片里最后一行是课程作业的截止时间，别跟作业三搞混"
+     ],
+     [
+      "leaffff",
+      "收到"
+     ]
+    ],
+    "candidates": [
+     {
+      "candidate_id": "W3-6:llm1",
+      "task_name_raw": "小组课程报告",
+      "course": null,
+      "deadline_raw": "月底前",
+      "deadline_iso": null,
+      "source_type": "student_chat",
+      "source_name": "COMP7415课程群",
+      "published_at": "2026-11-20 22:00:00+08:00",
+      "message_id": "W3-6",
+      "message_subject": "微信 / COMP7415课程群",
+      "missing_fields": [
+       "deadline"
+      ],
+      "unresolved_time": true,
+      "extractor_confidence": 0.3,
+      "needs_review": true,
+      "review_reason": "课程 COMP7415 未在该条消息正文中出现"
+     },
+     {
+      "candidate_id": "W3-7:llm1",
+      "task_name_raw": "作业三",
+      "course": "COMP7503",
+      "deadline_raw": "2026-11-29 23:59",
+      "deadline_iso": "2026-11-29T23:59:00+08:00",
+      "source_type": "student_chat",
+      "source_name": "COMP7415课程群",
+      "published_at": "2026-11-20 22:00:00+08:00",
+      "message_id": "W3-7",
+      "message_subject": "微信 / COMP7415课程群",
+      "missing_fields": [],
+      "unresolved_time": false,
+      "extractor_confidence": 0.95,
+      "needs_review": false,
+      "review_reason": ""
+     },
+     {
+      "candidate_id": "W3-7:llm2",
+      "task_name_raw": "Final Report",
+      "course": "COMP7503",
+      "deadline_raw": "2026-12-08 23:59",
+      "deadline_iso": "2026-12-08T23:59:00+08:00",
+      "source_type": "student_chat",
+      "source_name": "COMP7415课程群",
+      "published_at": "2026-11-20 22:00:00+08:00",
+      "message_id": "W3-7",
+      "message_subject": "微信 / COMP7415课程群",
+      "missing_fields": [],
+      "unresolved_time": false,
+      "extractor_confidence": 0.95,
+      "needs_review": false,
+      "review_reason": ""
+     },
+     {
+      "candidate_id": "W3-7:llm3",
+      "task_name_raw": "期末展示",
+      "course": "COMP7503",
+      "deadline_raw": "2026-12-15 23:59",
+      "deadline_iso": "2026-12-15T23:59:00+08:00",
+      "source_type": "student_chat",
+      "source_name": "COMP7415课程群",
+      "published_at": "2026-11-20 22:00:00+08:00",
+      "message_id": "W3-7",
+      "message_subject": "微信 / COMP7415课程群",
+      "missing_fields": [],
+      "unresolved_time": false,
+      "extractor_confidence": 0.9,
+      "needs_review": false,
+      "review_reason": ""
+     }
+    ]
+   },
+   "W4": {
+    "group": "COMP7506课程群",
+    "published_at": "2026-11-20T22:04:00+08:00",
+    "messages": [
+     [
+      "叶小凡",
+      "实验报告二，11.22 23:59 前交到 Moodle"
+     ],
+     [
+      "叶小凡",
+      "实验数据我传群文件了，按组号分文件夹"
+     ],
+     [
+      "叶小凡",
+      "报告模板也在同一个文件夹里"
+     ],
+     [
+      "leaffff",
+      "图表用什么画，matplotlib 还是 Origin"
+     ],
+     [
+      "叶小凡",
+      "matplotlib 就行，够用"
+     ],
+     [
+      "叶小凡",
+      "记得把图例和坐标轴单位写清楚"
+     ],
+     [
+      "叶小凡",
+      "上次扣分就扣在没写单位"
+     ],
+     [
+      "叶小凡",
+      "我改了模板表头，加了一列误差"
+     ],
+     [
+      "叶小凡",
+      "助教说格式按模板来，别自己改"
+     ],
+     [
+      "叶小凡",
+      "实验报告二已延期至 12 月 3 日 23:59，其他要求不变，别按旧时间交"
+     ],
+     [
+      "leaffff",
+      "收到"
+     ],
+     [
+      "leaffff",
+      "谢谢老师"
+     ]
+    ],
+    "candidates": [
+     {
+      "candidate_id": "W4-1:llm1",
+      "task_name_raw": "实验报告二",
+      "course": null,
+      "deadline_raw": "11.22 23:59 前",
+      "deadline_iso": "2026-11-22T23:59:00+08:00",
+      "source_type": "student_chat",
+      "source_name": "COMP7506课程群",
+      "published_at": "2026-11-20 22:04:00+08:00",
+      "message_id": "W4-1",
+      "message_subject": "微信 / COMP7506课程群",
+      "missing_fields": [],
+      "unresolved_time": false,
+      "extractor_confidence": 0.95,
+      "needs_review": true,
+      "review_reason": "课程 COMP7506 未在该条消息正文中出现"
+     },
+     {
+      "candidate_id": "W4-10:llm1",
+      "task_name_raw": "实验报告二",
+      "course": null,
+      "deadline_raw": "12 月 3 日 23:59",
+      "deadline_iso": "2026-12-03T23:59:00+08:00",
+      "source_type": "student_chat",
+      "source_name": "COMP7506课程群",
+      "published_at": "2026-11-20 22:04:00+08:00",
+      "message_id": "W4-10",
+      "message_subject": "微信 / COMP7506课程群",
+      "missing_fields": [],
+      "unresolved_time": false,
+      "extractor_confidence": 0.95,
+      "needs_review": true,
+      "review_reason": "课程 COMP7506 未在该条消息正文中出现"
+     }
+    ]
+   }
+  },
+  "emails": {
+   "O1": {
+    "sender": "XIAOFAN YE",
+    "subject": "[COMP7503] Final project proposal — submission deadline",
+    "published_at": "2026-11-20T00:00:00+08:00",
+    "body": "Dear students,\n\nThe final project proposal is due on 2026-12-05 23:59 (HKT).\nPlease submit a 2-page PDF via Moodle. Late submissions are not accepted.\n\nBest regards,\nDr. Chan\nCourse coordinator, COMP7503\nLast updated: 2025-11-30"
+   },
+   "O2": {
+    "sender": "XIAOFAN YE",
+    "subject": "[COMP7503] Assignment 3 — submission window",
+    "published_at": "2026-11-20T00:00:00+08:00",
+    "body": "Assignment 3 deadline: 2026-11-30 23:59 (HKT).\nSubmit code + report via Moodle.\n\nSent: 2026-11-15"
+   },
+   "O3": {
+    "sender": "XIAOFAN YE",
+    "subject": "[COMP7415] Final report — deadline",
+    "published_at": "2026-11-20T00:00:00+08:00",
+    "body": "The final report (group of 4) is due on 2026-12-12 23:59 (HKT).\nOne PDF per group, submitted via Moodle."
+   }
+  }
+ },
+ "old_results": {
+  "Q04": [
+   {
+    "task_name": "实验报告二",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "2026 计算机班级二群 (student_chat)",
+    "evidence_ids": [
+     "G2-1:llm1",
+     "G1-4:llm1"
+    ],
+    "sources": [
+     "2026 计算机班级二群 (student_chat)",
+     "2026 计算机班级群 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "冲突未能可靠裁决（两条 student_chat 来源可信度相同、发布时间相同，但给出的截止时间互相矛盾，无法判定哪一条正确。），追加检索 2 轮，标记 uncertain 交人工",
+    "alternatives": [
+     "2026-11-22T23:59:00+08:00",
+     "2026-11-24T23:59:00+08:00"
+    ],
+    "updated_at": null
+   },
+   {
+    "task_name": "机器学习作业三",
+    "course": "COMP7503",
+    "deadline_iso": "2026-11-29T23:59:00+08:00",
+    "status": "confirmed",
+    "source": "2026 计算机班级群 (student_chat)",
+    "evidence_ids": [
+     "G1-1:llm1"
+    ],
+    "sources": [
+     "2026 计算机班级群 (student_chat)"
+    ],
+    "confidence": 0.95,
+    "resolution_note": "单一来源",
+    "alternatives": [],
+    "updated_at": null
+   }
+  ],
+  "W-D08": [
+   {
+    "task_name": "机器学习作业二",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "COMP7503课程群 (student_chat)",
+    "evidence_ids": [
+     "W1-2:llm1"
+    ],
+    "sources": [
+     "COMP7503课程群 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "抽取置信度不足，标记 uncertain 交人工",
+    "alternatives": [
+     "2026-11-15T23:59:00+08:00"
+    ],
+    "updated_at": null
+   },
+   {
+    "task_name": "机器学习作业三",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "COMP7503课程群 (student_chat)",
+    "evidence_ids": [
+     "W1-14:llm1"
+    ],
+    "sources": [
+     "COMP7503课程群 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "抽取置信度不足，标记 uncertain 交人工",
+    "alternatives": [
+     "2026-11-29T23:59:00+08:00"
+    ],
+    "updated_at": null
+   }
+  ],
+  "W-D11": [
+   {
+    "task_name": "实验报告二",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "COMP7506课程群 (student_chat)",
+    "evidence_ids": [
+     "W4-10:llm1",
+     "W4-1:llm1"
+    ],
+    "sources": [
+     "COMP7506课程群 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "冲突未能可靠裁决（两条截止时间均来自同一 student_chat 来源、发布时间相同，且原文互相矛盾，没有更高可信度的来源可以裁决。），追加检索 0 轮，标记 uncertain 交人工",
+    "alternatives": [
+     "2026-11-22T23:59:00+08:00",
+     "2026-12-03T23:59:00+08:00"
+    ],
+    "updated_at": null
+   }
+  ],
+  "W-D13": [
+   {
+    "task_name": "Assignment 3",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "Outlook/收件箱 (email)",
+    "evidence_ids": [
+     "O2:llm1"
+    ],
+    "sources": [
+     "Outlook/收件箱 (email)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "抽取置信度不足，标记 uncertain 交人工",
+    "alternatives": [
+     "2026-11-30T23:59:00+08:00"
+    ],
+    "updated_at": null
+   },
+   {
+    "task_name": "机器学习作业二",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "COMP7503课程群 (student_chat)",
+    "evidence_ids": [
+     "W1-2:llm1"
+    ],
+    "sources": [
+     "COMP7503课程群 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "抽取置信度不足，标记 uncertain 交人工",
+    "alternatives": [
+     "2026-11-15T23:59:00+08:00"
+    ],
+    "updated_at": null
+   },
+   {
+    "task_name": "机器学习作业三",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "COMP7503课程群 (student_chat)",
+    "evidence_ids": [
+     "W1-14:llm1"
+    ],
+    "sources": [
+     "COMP7503课程群 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "抽取置信度不足，标记 uncertain 交人工",
+    "alternatives": [
+     "2026-11-29T23:59:00+08:00"
+    ],
+    "updated_at": null
+   }
+  ]
+ }
+}
