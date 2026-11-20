@@ -197,6 +197,15 @@ RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "6"))
 
 ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "runs")  # 每步截图与动作记录的归档目录
 
+# 连接预热：启动时复用同一个 HTTP 连接池，并预热设备通道（u2 RPC / adb server）。
+# 关掉后每次请求仍由 SDK/驱动自行建连，不影响正确性，只是第一步可能多一次握手。
+CONNECTION_WARMUP = os.getenv("CONNECTION_WARMUP", "1").strip().lower() not in (
+    "0", "false", "off", ""
+)
+# 视觉与规划两个 provider 共用连接池；keep-alive 秒数与最大连接数按单机单任务设置
+HTTP_KEEPALIVE_SECONDS = float(os.getenv("HTTP_KEEPALIVE_SECONDS", "90"))
+HTTP_MAX_CONNECTIONS = int(os.getenv("HTTP_MAX_CONNECTIONS", "8"))
+
 # 历史上下文窗口：只带最近 N 张历史原图（当前屏幕始终带图），更早步骤压成文字摘要。
 # 6GB 显存跑本地 Qwen3-VL 时，多张原图会显著抬高视觉 token 与显存占用，默认只带 1 张。
 HISTORY_IMAGE_WINDOW = int(os.getenv("HISTORY_IMAGE_WINDOW", "1"))

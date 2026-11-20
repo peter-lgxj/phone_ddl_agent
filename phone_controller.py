@@ -95,6 +95,13 @@ class PhoneController:
         self.version = version
         print(f"已连接设备：{info.get('productName', '未知')}（uiautomator2 {version or '?'}）")
 
+    def warmup(self) -> None:
+        """连接阶段已做 device.info；再查一次窗口尺寸，把首个 RPC 的握手挪到启动期。"""
+        try:
+            self.device.window_size()
+        except Exception:
+            pass
+
     def dump_hierarchy(self) -> str:
         """供 OCR 控件树通道复用；与 ADB 回退驱动保持同一接口。"""
         return self.device.dump_hierarchy()

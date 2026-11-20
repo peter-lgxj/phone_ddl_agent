@@ -220,6 +220,8 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 | `MERGED_OBSERVE` | 观察并入决策，默认开；正常每步 1 次带图请求，响应不合法时本步回退两段式 |
 | `RULE_FASTPATH` | 规则快路，默认开：任务里点名的群/会话、返回、以及进入会话后的滚动，只要控件树能证明就直接执行，不调用视觉模型；命中与省下的调用数写入 `step_NNN.json` 的 `timings.rule_*` 和 `usage_summary.json` 的 `rule_fastpath` |
 | `RULE_MAX_SCROLLS` | 规则快路在同一个会话里最多连续滚几步（默认 6），到上限交回模型 |
+| `CONNECTION_WARMUP` | 启动时预热连接，默认开：视觉与规划共用同一个 httpx 连接池（keep-alive），并发一次 `models.list()` 完成 TLS 握手；设备侧调用驱动 `warmup()`（adb 回退时启动 adb server）。预热耗时写 `usage_summary.json` 的 `warmup_seconds`，不计入第一步 |
+| `HTTP_KEEPALIVE_SECONDS` / `HTTP_MAX_CONNECTIONS` | 共用连接池的 keep-alive 秒数（默认 90）与最大连接数（默认 8） |
 | `OCR_PREHEAT` | 启动时预热 RapidOCR，默认开 |
 | `OBSERVE_SETTLE_MODE` | `adaptive`（默认，界面稳定即返回）/ `fixed`（固定等满 `OBSERVE_SETTLE_SECONDS`） |
 | `OBSERVE_SETTLE_POLL_SECONDS` | 自适应 settle 的截图轮询间隔，默认 0.15s |

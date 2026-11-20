@@ -6,6 +6,7 @@ import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import httpx
 from phone_driver import create_phone_controller
 from app_launcher import AppLauncher
 from memory import TaskMemory, format_steps_compact
@@ -40,6 +41,19 @@ def _require_api_key(provider_name: str, provider: dict, role: str):
         f"未配置{role}密钥：{role}当前为 {provider_name}（{provider.get('model')}），"
         f"需要环境变量 {env_name}。已在项目根目录查找 .env，"
         f"请复制 .env.example 为 .env 并填写后重试。"
+    )
+
+
+def make_http_client() -> httpx.Client:
+    """视觉与规划共用的 HTTP 连接池；keep-alive 避免多步任务每步重新握手。"""
+    max_connections = int(getattr(config, "HTTP_MAX_CONNECTIONS", 8))
+    return httpx.Client(
+        limits=httpx.Limits(
+            max_connections=max_connections,
+            max_keepalive_connections=max_connections,
+            keepalive_expiry=float(getattr(config, "HTTP_KEEPALIVE_SECONDS", 90)),
+        ),
+        timeout=httpx.Timeout(120.0, connect=10.0),
     )
 
 
@@ -188,9 +202,13 @@ class ScreenAgent:
         self.extra_body          = provider.get("extra_body")
 
         # VL 模型：负责看截图、决定下一步操作
+        # 视觉与规划共用同一个 HTTP 连接池：同 provider 时少一次 TLS 握手，
+        # 多步任务复用 keep-alive 连接，不再每步重新建连。
+        self._http_client = make_http_client()
         self.client = OpenAI(
             api_key=provider["api_key"],
             base_url=provider["base_url"],
+            http_client=self._http_client,
         )
 
         # 纯文字大模型：负责语义分析、纠正 VL 的理解偏差
@@ -200,6 +218,7 @@ class ScreenAgent:
         self.text_client = OpenAI(
             api_key=planner_cfg["api_key"],
             base_url=planner_cfg["base_url"],
+            http_client=self._http_client,
         )
         self.text_model = planner_cfg["model"]
         self.text_extra_body = planner_cfg.get("extra_body")
@@ -222,6 +241,8 @@ class ScreenAgent:
                 "  ⚠️  当前使用 adb_dump 回退驱动：截图/控件树/点击可用，"
                 "但本次不是完整 uiautomator2 链路"
             )
+        # 把 HTTP TLS 握手与设备通道启动挪到任务开始前，不占用第一步
+        self._warmup_connections()
         self.max_steps = max_steps or config.MAX_STEPS
         self.read_only = (
             getattr(config, "READ_ONLY_MODE", True) if read_only is None else read_only
@@ -247,6 +268,30 @@ class ScreenAgent:
 
         print(f"视觉模型：{provider_name} / {self.model}")
         print(f"语义模型：{planner_name} / {self.text_model}")
+
+    def _warmup_connections(self) -> None:
+        """启动时预热 HTTP 连接与设备通道。
+
+        - HTTP：复用同一个 httpx 连接池，并发一次 ``models.list()`` 完成 TLS/DNS 握手；
+        - 设备：调用驱动的 ``warmup()``（adb 回退时启动 adb server）。
+        失败只告警，不阻塞任务；预热耗时写进 ``self._warmup_seconds``，不计入第一步。
+        """
+        self._warmup_seconds = 0.0
+        if not getattr(config, "CONNECTION_WARMUP", True):
+            return
+        started = time.perf_counter()
+        try:
+            self.client.models.list()
+        except Exception as e:
+            print(f"  ⚠️  HTTP 连接预热失败（首步会重新建连）：{e}")
+        try:
+            warmup = getattr(self.phone, "warmup", None)
+            if callable(warmup):
+                warmup()
+        except Exception as e:
+            print(f"  ⚠️  设备通道预热失败（首步会重新握手）：{e}")
+        self._warmup_seconds = round(time.perf_counter() - started, 2)
+        print(f"连接预热完成：{self._warmup_seconds}s（HTTP keep-alive + 设备通道）")
 
     # ══════════════════════════════════════════════════════════
     #  语义分析：在决策前，用文字大模型理解历史 observation
@@ -1474,6 +1519,8 @@ class ScreenAgent:
             "per_step_prompt_tokens": round(prompt / denominator, 2),
             "per_step_completion_tokens": round(completion / denominator, 2),
             "per_step_total_tokens": round(total / denominator, 2),
+            # 启动期连接预热耗时（不计入第一步）
+            "warmup_seconds": getattr(self, "_warmup_seconds", 0.0),
             # 规则快路：命中几次、省掉几次模型调用、按规则拆分
             "rule_fastpath": {
                 "hits": len(rule_hits),
