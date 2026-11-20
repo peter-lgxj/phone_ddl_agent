@@ -112,6 +112,13 @@ STEP_RETRIES = 2            # 单步失败后的重试次数，避免一次 API 
 READ_ONLY_MODE = os.getenv("READ_ONLY_MODE", "1").strip().lower() not in (
     "0", "false", "off", ""
 )
+
+# 屏幕驱动：
+#   auto        —— 先试 uiautomator2；Android 17 等 RPC 不兼容时自动回退 adb_dump
+#   uiautomator2 —— 强制 u2，不兼容时给出明确报错
+#   adb_dump    —— 强制用系统 uiautomator dump + screencap（Android 17 回退）
+SCREEN_DRIVER = os.getenv("SCREEN_DRIVER", "auto")
+
 LLM_TEMPERATURE = 0.0       # 决策/观察调用温度，固定后重复实验才可比
 
 # 语义分析：每步额外一次纯文本请求。实测每步约 2s，且多数场景下决策模型已能自行理解历史，

@@ -33,6 +33,7 @@ multi_task_log.json
 *.png
 *.jpg
 *.jpeg
+!tests/fixtures/android17/*.png
 ui.xml
 ui_dump.xml
 

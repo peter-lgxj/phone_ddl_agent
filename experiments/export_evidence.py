@@ -57,6 +57,7 @@ def _sanitize_step(step: dict) -> dict:
     image = step.get("image") or {}
     return {
         "step": step.get("step"),
+        "driver": step.get("driver", "uiautomator2"),
         "action_type": action.get("action_type"),
         "action_fields": sorted(action.keys()),
         "target_present": bool(action.get("target")),
@@ -88,6 +89,9 @@ def export_evidence(run_dir: str | Path, out_dir: str | Path) -> dict:
 
     summary = summarize_run(run)
     summary["source_run"] = run.name
+    drivers = sorted({step["driver"] for step in steps if step.get("driver")})
+    summary["drivers"] = drivers
+    summary["full_pipeline"] = drivers in ([], ["uiautomator2"])
     (out / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )

@@ -29,6 +29,7 @@ def test_export_removes_images_and_raw_text(tmp_path):
     assert "截图" in (out / "README.md").read_text(encoding="utf-8")
     step = json.loads((out / "steps.jsonl").read_text(encoding="utf-8").strip())
     assert step["action_type"] == "tap"
+    assert step["driver"] == "uiautomator2"
     assert step["target_present"] is True
     assert step["observation_chars"] == len(secret)
     assert step["observation_sha256"]
@@ -41,3 +42,5 @@ def test_export_removes_images_and_raw_text(tmp_path):
     summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
     assert summary["steps"] == 1
     assert summary["source_run"] == "20261117-120000"
+    assert summary["drivers"] == ["uiautomator2"]
+    assert summary["full_pipeline"] is True

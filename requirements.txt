@@ -4,7 +4,9 @@
 Flask>=3.0
 Flask-SocketIO>=5.3
 openai>=1.0
-uiautomator2>=3.0
+# 3.7.1 为当前实测基线；Android 17（API 37）上各版本仍不兼容，
+# 程序会自动回退到 adb_dump 驱动（见 README「Android 17 与 ADB 回退驱动」）
+uiautomator2>=3.7.1
 Pillow>=10.0
 python-dotenv>=1.0
 openpyxl>=3.1

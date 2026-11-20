@@ -104,6 +104,79 @@ pip install -r requirements.txt
 
 `.env`、任务运行记录和手机界面导出文件不提交到仓库。
 
+## Android 17（API 37）与 ADB 回退驱动
+
+### 现状与判据
+
+真机 OPPO PLJ110 / Android 17 / 1080×2374 上，`uiautomator2` 3.7.1 在第一次
+`d.info` RPC 就抛 `ApplicationSharedMemory not initialized`，`ScreenAgent`
+无法截图和点击；系统自带的 `adb shell uiautomator dump` 与 `screencap` 正常。
+
+- **升级结论**：截至 2026-11-21，PyPI 最新版就是 `uiautomator2==3.7.1`（2026-10-23）；
+  上游 issue [openatx/uiautomator2#1209](https://github.com/openatx/uiautomator2/issues/1209)
+  记录从 3.3.1 升到 3.7.1 后错误不变，仍是 open。**目前没有任何已发布版本能解决 Android 17**。
+- **版本下限**：`requirements.txt` 写 `uiautomator2>=3.7.1`。这是非 Android 17 设备的
+  实测基线；Android 17 上即使满足该下限也会失败，必须用回退驱动。
+- **判据**：`SCREEN_DRIVER=auto`（默认）会先 `u2.connect()` 并读取 `device.info`；
+  连接失败（无 adb / 未授权）仍给出原来的连接错误，只有“已连接但 RPC 不可用”
+  （`ApplicationSharedMemory`、SDK 37 或 `device.info` 异常）才回退 `adb_dump`。
+  `SCREEN_DRIVER=uiautomator2` 强制 u2，不兼容时直接给出含 issue 链接与回退命令的明确报错；
+  `SCREEN_DRIVER=adb_dump` 强制回退。
+
+### 两种驱动怎么选
+
+| 能力 | `uiautomator2`（完整链路） | `adb_dump`（回退） |
+|---|---|---|
+| 截图 | `device.screenshot()` | `adb exec-out screencap -p` |
+| 控件树 | `device.dump_hierarchy()` | `adb shell uiautomator dump` + `cat` |
+| tap / swipe | u2 `click` / `swipe` | `adb shell input tap` / `input swipe` |
+| back / home | u2 `press` | `adb shell input keyevent 4/3` |
+| 打开 App | u2 / monkey | `adb shell monkey -p <pkg>` |
+| 当前界面文本 | 控件树 | dump XML 的 `text` / `content-desc` |
+| 输入框 | `EditText` 选择器 | dump 中找 `EditText` 并点中心 |
+| type / send / press_enter | 上层只读保护 | **驱动层再拦**：只读时抛 `PermissionError` |
+| u2 专有能力 | XPath、`set_text`、长连接 session | 不支持；当前 `ScreenAgent` 不依赖 |
+
+```powershell
+# 推荐：自动探测，Android 17 自动回退
+python run.py
+
+# 强制回退（已知 u2 故障或要做 A/B）
+$env:SCREEN_DRIVER="adb_dump"; python run.py
+
+# 强制 u2（排查用；Android 17 会在这里得到明确报错）
+$env:SCREEN_DRIVER="uiautomator2"; python run.py
+```
+
+回退发生时：
+
+- `runs/<run>/step_NNN.json` 顶层写 `"driver": "adb_dump"`；
+- 任务结束的 `usage_summary.json` 写 `driver` / `driver_mode` / `full_pipeline` /
+  `driver_note`，其中 `full_pipeline=false`，明确标注**本次不是完整 uiautomator2 链路**；
+- 启动日志与任务结束都会打印回退提示。
+
+### 回退模式的 A/B 与判分口径
+
+回退驱动不会改变 `ScreenAgent` 的决策、观察、OCR、settle、证据归档与 token 统计，
+因此 `step_NNN.json` 仍包含 `timings` / `usage` / `image` / `driver`，
+`experiments/summarize_timings.py`、`experiments/run_experiment.py`、`experiments/metrics.py`
+都能照常运行。但报告口径要注意：
+
+- `driver=adb_dump` 的 run **不能和 `uiautomator2` run 混进同一组均值**。A/B 时把
+  `driver` 当作分组变量，或在表格里单列“回退模式”。
+- 回退模式能给出：决策/观察/OCR/settle/execute 阶段耗时、每步 token、动作执行结果、
+  是否完成；不能给出 u2 专有路径的指标（如 `dump_hierarchy` 内部 RPC 延迟、`set_text`）。
+- 离线单测用 `runs/qq_real_device_20261121` 裁出的 dump XML 与截图回放，
+  CI 不需要真机；真机验证需要自己连接 Android 17 设备后执行：
+
+```powershell
+adb devices
+# 预期在 Android 17 上失败，并给出可读错误
+python -c "import uiautomator2 as u2; print(u2.connect().info)"
+# 回退驱动冒烟：能截图、dump、点击即可
+$env:SCREEN_DRIVER="adb_dump"; python run.py
+```
+
 ## 运行
 
 ```bash
@@ -134,6 +207,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 | `PLANNER_PROVIDER` | 规划/语义模型，默认 `deepseek`（`deepseek-flash`），单任务与多应用模式都读这一项；可切回 `qwen3` |
 | `MAX_STEPS` / `STEP_RETRIES` | 最大步数（默认 30，可用同名环境变量覆盖）与单步失败重试次数 |
 | `READ_ONLY_MODE` | 只读保护，默认开启：拒绝 `send` / `press_enter` / `type`，monitor 生产读屏强制开启；单独跑任务脚本时可置 0 |
+| `SCREEN_DRIVER` | 屏幕驱动：`auto`（默认，u2 不可用时自动回退 `adb_dump`）/ `uiautomator2`（强制 u2，失败明确报错）/ `adb_dump`（Android 17 回退） |
 | `LLM_TEMPERATURE` | 决策与观察调用温度，默认 0.0，保证重复实验可比 |
 | `ENABLE_SEMANTIC_ANALYSIS` | 语义分析（每步一次纯文本请求），默认关闭；置 1 可开启消融对比 |
 | `COMPLETION_CHECK` | 完成判断：`decision`（默认，读决策响应里的 `task_done`）/ `every_step`（旧行为，每步额外一次带图请求）/ `off` |
@@ -376,13 +450,13 @@ python run.py
 
 ## 项目结构
 
-- 核心链路：`screen_agent.py`（屏幕理解与操作循环）、`phone_controller.py`（ADB/uiautomator2 操作）、`ocr_locator.py`（OCR + 控件树定位）、`input_detector.py`（YOLO 输入框兜底）、`app_launcher.py`（应用启动）
+- 核心链路：`screen_agent.py`（屏幕理解与操作循环）、`phone_controller.py`（uiautomator2 操作）、`phone_driver.py`（驱动选择/回退）、`adb_controller.py`（Android 17 的 adb dump 回退）、`ocr_locator.py`（OCR + 控件树定位）、`input_detector.py`（YOLO 输入框兜底）、`app_launcher.py`（应用启动）
 - 记忆与状态：`memory.py`（步骤记录）、`ui_state.py`（Streamlit 状态）
 - 规划：`task_planner.py`（子任务拆解与重规划，含 `context_needed` 信息传递）、`multi_agent.py`（多应用编排）
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（269 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 测试与工程化：`tests/`（318 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
@@ -492,6 +566,7 @@ CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
 ## 已知限制（部分真机验证）
 
 - 单机、单账号、微信「文件传输助手」自聊会话做过一次只读读取与端到端抽取验证（`docs/real-device-test-report.md`）；真实课程群、QQ / Outlook App、图片型 DDL、点击与输入、跨 App 信息传递仍未在真实环境跑通。
+- Android 17（API 37）上 uiautomator2 3.7.1 仍不可用（[#1209](https://github.com/openatx/uiautomator2/issues/1209)），程序会回退到 `adb_dump`；回退链路的真机 A/B 尚未完成，`runs` 下的样本只用于离线解析测试。
 - 依赖版本：`requirements-lock.txt` 是在 Windows + Python 3.12 的虚拟环境里实际解析得到的；换机器（尤其 GPU/系统不同）需重新 `pip freeze` 替换。
 - 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）的命令、输出解析与配置要求已按上游代码写实，协议用假上游测过；但三个真实系统仍未在本机安装、未接真机联调，命令未实跑。
 - 任务前重置只做「回桌面 + force-stop 已知包名」，**无法自动清除应用内草稿、聊天输入框、剪贴板与输入法状态**；`reset` 字段会区分 `stopped` / `failed` / `not_installed` / `not_mapped`。

@@ -43,6 +43,7 @@ class OCRLocator:
         self.reader = None          # EasyOCR，按需加载
         self._rapid_reader = None   # RapidOCR，按需加载
         self.last_meta = {}         # 最近一次 OCR 的引擎/缩放比例/图尺寸
+        self._tree_provider = None  # 可选：由当前驱动提供 dump_hierarchy()
 
         # 初始化 u2 设备连接，默认连接第一个 USB 设备或模拟器
         # device="auto" 时自动连接；传 None/False 可跳过（单测用）
@@ -156,6 +157,10 @@ class OCRLocator:
         return elements, {"scale": scale, "original_size": orig_size,
                           "scaled_size": scaled_size}
 
+    def set_tree_provider(self, provider) -> None:
+        """绑定当前驱动的 dump_hierarchy()，让控件树通道跟随 u2 / adb_dump 切换。"""
+        self._tree_provider = provider
+
     def detect_tree(self) -> list[dict]:
         """只取控件树元素（不做 OCR），供「控件树优先」路径使用"""
         return self._xml_detect()
@@ -185,14 +190,17 @@ class OCRLocator:
         使用 uiautomator2 获取控件树，提取可交互元素。
         相比 adb shell dump，这种方式更稳定且无需文件中转。
         """
-        if not self.d:
+        if not self._tree_provider and not self.d:
             return []
-        
+
         try:
-            # 直接获取当前的 UI 层级结构 (XML 字符串)
-            # 注意：dump_hierarchy 不接受 timeout 参数，u2 内部有默认超时
-            xml_content = self.d.dump_hierarchy()
-            
+            # 优先用当前驱动的 dump_hierarchy（u2 或 adb_dump），保证回退后仍能取控件树
+            if self._tree_provider is not None:
+                xml_content = self._tree_provider()
+            else:
+                # 注意：dump_hierarchy 不接受 timeout 参数，u2 内部有默认超时
+                xml_content = self.d.dump_hierarchy()
+
             if not xml_content:
                 return []
 
