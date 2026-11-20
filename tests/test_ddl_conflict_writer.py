@@ -1,7 +1,9 @@
 """DDL Agent：冲突解决与文档写入。"""
 
 from datetime import datetime, timedelta
+from pathlib import Path
 
+import ddl_agent.settings as settings
 from ddl_agent.conflict import ConflictResolver
 from ddl_agent.models import DeadlineCandidate, ResolvedRecord, TaskCluster
 from ddl_agent.settings import TZ
@@ -60,6 +62,20 @@ def test_conflict_has_no_fixed_source_prior():
     assert record.deadline_iso == "2026-12-10T23:59:00+08:00"
     assert "发布时间更新" in record.resolution_note
     assert record.conflicts and len(record.conflicts[0]["sides"]) == 2
+
+
+def test_source_credibility_constant_removed_and_docs_match():
+    """四级可信度常量已不参与裁决：代码与文档都不能再声称固定来源等级。"""
+    assert not hasattr(settings, "SOURCE_CREDIBILITY")
+    assert not hasattr(settings, "CONFIDENCE_SOURCE_PRIORITY")
+
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "proposal-compliance.md")
+    text = doc.read_text(encoding="utf-8")
+    assert "SOURCE_CREDIBILITY" in text          # 只在“未按固定四级实现”的说明里出现
+    assert "official_email=4" not in text
+    assert "最高可信度组内一致即采用" not in text
+    assert "未按固定四级实现" in text
+    assert "来源等级先验" in text
 
 
 def test_conflict_same_time_same_weight_is_uncertain():

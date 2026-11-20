@@ -76,9 +76,9 @@
 
 | Proposal 要求 | 状态 | 实现位置 | 说明 / 差异 |
 | --- | --- | --- | --- |
-| 四级可信度：官方邮件 > 课程公告 > 教师群聊 > 学生消息 | ✅ | `settings.py: SOURCE_CREDIBILITY`、`conflict.py` | `official_email=4`、`course_announcement=3`、`instructor_chat=2`、`student_chat=1`。 |
-| 更可信来源优先 | ✅ | `conflict.py: _resolve_cluster` | 最高可信度组内一致即采用。 |
-| 同可信度下新公告覆盖旧公告 | ✅ | `conflict.py` | 比较 `published_at`，最新者胜。 |
+| 四级可信度：官方邮件 > 课程公告 > 教师群聊 > 学生消息 | ➖ 未按固定四级实现 | `conflict.py: _resolve_cluster` | 裁决不使用 `SOURCE_CREDIBILITY` 这类来源等级先验；同一冲突簇内所有候选等权。实际顺序是：候选自带的更正/作废标记 → `published_at` 最新者 → 多数一致；仍不一致才交 LLM 仲裁或标 `uncertain`。 |
+| 更可信来源优先 | ⚠️ 仅限候选自带标记 | `conflict.py`、`llm/arbiter.py` | 不因为“来自邮件/教师群”就固定加权；只有候选文本明确写了“以此为准/作废/更正”时才按标记决定优先级，仲裁提示词也要求同等看待来源。 |
+| 同权候选下新公告覆盖旧公告 | ✅ | `conflict.py` | 等权候选比较 `published_at`，最新者胜。 |
 | 停止条件 1：所有相关来源查完且一致 | ✅ | `pipeline.py` + `conflict.py` | 检索器先拉取全部选中来源；候选时间一致直接 confirmed。 |
 | 停止条件 2：追加两轮检索仍无法解决 | ✅ | `conflict.py: _resolve_cluster`、`settings.py: MAX_SUPPLEMENTARY_ROUNDS=2` | 规则与 LLM 两条路径都有 `while ... rounds_used < max_rounds`；测试断言恰好两轮后标 `uncertain`。 |
 | 停止条件 3：模型置信度足够高 | ✅ | `llm/arbiter.py`、`settings.py: LLM_MIN_CONFIDENCE=0.6` | 低于阈值、拒答或编造候选外时间都不采纳，继续追加检索。 |

@@ -35,17 +35,8 @@ DEDUPE_CHAR_WEIGHT = 0.4
 # 冲突无法判定时最多追加检索的轮数
 MAX_SUPPLEMENTARY_ROUNDS = 2
 
-# 来源可信度：官方邮件 > 课程公告 > 教师群消息 > 同学消息
-SOURCE_CREDIBILITY: dict[str, int] = {
-    "official_email": 4,
-    "course_announcement": 3,
-    "instructor_chat": 2,
-    "student_chat": 1,
-}
-
 # 各类判定对应的置信度
 CONFIDENCE_CONSISTENT = 0.95
-CONFIDENCE_SOURCE_PRIORITY = 0.85
 CONFIDENCE_NEWER_ANNOUNCEMENT = 0.75
 CONFIDENCE_UNCERTAIN = 0.4
 CONFIDENCE_MISSING = 0.3
