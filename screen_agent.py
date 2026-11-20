@@ -4,6 +4,7 @@ import hashlib
 import os
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from phone_driver import create_phone_controller
 from app_launcher import AppLauncher
@@ -488,21 +489,17 @@ class ScreenAgent:
         ocr_result = ""
         if ocr_mode == "always":
             ocr_result = self.ocr.format_for_prompt("screen_current.png")
-        # 合并观察时，上一步若为滚动动作，仍然把当前屏幕 OCR 原文并入 observation
+        # 合并观察时，上一步若为滚动动作，仍然把当前屏幕 OCR 原文并入 observation。
+        # OCR 与预编码/历史图准备并行，等 prompt 要拼 OCR 时再取结果。
+        ocr_executor = None
+        ocr_future = None
+        ocr_started = time.perf_counter()
         if merged and memory.steps:
             prev_type = effective_action_type(memory.steps[-1].get("action") or {})
             if (getattr(config, "OBSERVE_OCR_ENABLED", False)
                     and prev_type in getattr(config, "OBSERVE_OCR_ACTIONS", {"swipe", "scroll"})):
-                try:
-                    elements = self.ocr.detect_ocr("screen_current.png")
-                    text = format_ocr_observation(elements)
-                    self._last_merged_ocr_text = text
-                    if text:
-                        ocr_result = (ocr_result + "\n[上一动作后的 OCR]\n" + text).strip()
-                except Exception as e:
-                    print(f"  ⚠️  合并观察 OCR 失败，保留模型描述：{e}")
-        timings["ocr_pre"] = round(time.time() - started, 2)
-        timings["ocr"] = timings["ocr_pre"]
+                ocr_executor = ThreadPoolExecutor(max_workers=1)
+                ocr_future = ocr_executor.submit(self.ocr.detect_ocr, "screen_current.png")
         timings["ocr_triggered"] = ocr_mode == "always"
         timings["ocr_reason"] = "always" if ocr_mode == "always" else ""
 
@@ -515,6 +512,9 @@ class ScreenAgent:
         with open(image_preprocess.sent_filename("screen_current.png", image_meta), "wb") as f:
             f.write(current_bytes)
         current_b64 = base64.b64encode(current_bytes).decode("utf-8")
+
+        if ocr_future is None:
+            timings["ocr_pre"] = 0.0
 
         # 历史原图按窗口裁剪；当前屏幕无论如何都要带图
         history_images = self._collect_history_images(memory)
@@ -532,6 +532,23 @@ class ScreenAgent:
         image_steps = {img["step"] for img in history_images}
         history_text = self._build_history_text(memory, image_steps)
         timings["preprocess"] = round(time.time() - started, 2)
+
+        # 预编码与历史图准备做完后再取 OCR：此时通常已并行跑完，只剩很短的等待
+        if ocr_future is not None:
+            wait_started = time.perf_counter()
+            try:
+                elements = ocr_future.result()
+                text = format_ocr_observation(elements)
+                self._last_merged_ocr_text = text
+                if text:
+                    ocr_result = (ocr_result + "\n[上一动作后的 OCR]\n" + text).strip()
+            except Exception as e:
+                print(f"  ⚠️  合并观察 OCR 失败，保留模型描述：{e}")
+            finally:
+                ocr_executor.shutdown(wait=False)
+            timings["ocr_wait"] = round(time.perf_counter() - wait_started, 2)
+            timings["ocr_pre"] = round(time.perf_counter() - ocr_started, 2)
+        timings["ocr"] = timings["ocr_pre"]
 
         # ── 文字大模型先做语义分析（有历史才分析，默认关闭）──
         started = time.time()
@@ -813,46 +830,57 @@ class ScreenAgent:
         observe_bytes, observe_meta = image_preprocess.prepare_image_bytes("screen_observe.png")
         image_b64 = base64.b64encode(observe_bytes).decode("utf-8")
 
-        action_type = str(last_action.get("action_type") or "").lower()
+        action_type = effective_action_type(last_action)
         verify_question = build_observe_question(last_action, memory)
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            temperature=config.LLM_TEMPERATURE,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{observe_meta['mime']};base64,{image_b64}"}
-                        },
-                        {
-                            "type": "text",
-                            "text": f"请观察截图，{verify_question}只回复要求的内容，不要多余文字。"
-                        }
-                    ]
-                }
-            ],
-            extra_body=getattr(self, "extra_body", None),
-        )
-        self._record_usage("observe", response)
-        observation = response.choices[0].message.content.strip()
-
+        # 截图与 OCR 互不依赖：OCR 先起一个线程，和视觉观察请求并行跑。
+        # OCR 失败只影响补充文本，不影响截图与本次观察。
         ocr_actions = getattr(config, "OBSERVE_OCR_ACTIONS", {"swipe", "scroll"})
-        if (
+        want_ocr = (
             getattr(config, "OBSERVE_OCR_ENABLED", False)
             and action_type in ocr_actions
-        ):
+        )
+        executor = ThreadPoolExecutor(max_workers=1) if want_ocr else None
+        ocr_started = time.perf_counter()
+        ocr_future = (executor.submit(self.ocr.detect_ocr, "screen_observe.png")
+                      if executor else None)
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                temperature=config.LLM_TEMPERATURE,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{observe_meta['mime']};base64,{image_b64}"}
+                            },
+                            {
+                                "type": "text",
+                                "text": f"请观察截图，{verify_question}只回复要求的内容，不要多余文字。"
+                            }
+                        ]
+                    }
+                ],
+                extra_body=getattr(self, "extra_body", None),
+            )
+            self._record_usage("observe", response)
+            observation = response.choices[0].message.content.strip()
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=False)
+
+        if ocr_future is not None:
             try:
-                started = time.perf_counter()
-                elements = self.ocr.detect_ocr("screen_observe.png")
-                ocr_text = format_ocr_observation(elements)
-                elapsed = round(time.perf_counter() - started, 2)
+                elements = ocr_future.result()
+                elapsed = round(time.perf_counter() - ocr_started, 2)
                 self._last_observe_ocr_seconds = elapsed
+                ocr_text = format_ocr_observation(elements)
                 if ocr_text and ocr_text not in observation:
                     observation = f"{observation}\n[OCR]\n{ocr_text}"
-                print(f"│  🔎  滚动 OCR：{len(elements)} 个文本框，{elapsed}s")
+                print(f"│  🔎  滚动 OCR：{len(elements)} 个文本框，{elapsed}s（与观察并行）")
             except Exception as e:
                 # OCR 只是补充通道，失败不能中断滚动或让整步失败
                 print(f"│  ⚠️  滚动 OCR 失败，保留模型描述：{e}")
