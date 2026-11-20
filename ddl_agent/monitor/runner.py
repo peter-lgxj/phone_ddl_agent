@@ -56,6 +56,8 @@ class CycleResult:
                     "course": record.course,
                     "deadline": record.deadline_iso,
                     "status": record.status,
+                    "superseded_by": record.superseded_by,
+                    "conflicts": record.conflicts,
                 }
                 for record in self.records
             ],

@@ -11,6 +11,11 @@ from ..models import DeadlineCandidate, RawMessage
 from ..settings import TZ
 from ..llm.client import LLMClient, LLMUnavailable
 from .evidence import validate_candidate_evidence
+from .message_context import (
+    course_from_message,
+    detect_correction,
+    effective_published_at,
+)
 from .normalizer import TimeNormalizer
 from .rules import RuleExtractor
 
@@ -33,6 +38,7 @@ _PROMPT = """当前时间：{now}
     "reason": "简短理由"
   }}
 规则：
+- 课程代码优先看正文/标题；正文没写但「来源课程代码」给出了代码时，course 填该代码。
 - 相对时间按上面的当前时间换算；有歧义（如“考完试那周”“月底前”）不要猜，填 null 并 needs_review=true。
 - 如果消息明确在讨论某个任务的截止时间，但日期未定、互相矛盾或无法解析，仍然输出该任务，
   deadline_iso=null、needs_review=true；不要因为日期缺失就省略。
@@ -40,6 +46,7 @@ _PROMPT = """当前时间：{now}
 - 没有截止时间语义就输出 []。
 
 来源：{source_type} / {source_name}
+来源课程代码：{source_course}
 发件人：{sender}
 发布时间：{published}
 标题：{subject}
@@ -57,16 +64,25 @@ class LLMDeadlineExtractor:
     def extract(self, messages: list[RawMessage], now: datetime | None = None) -> list[DeadlineCandidate]:
         now = now or datetime.now(TZ)
         candidates: list[DeadlineCandidate] = []
+        order_by_source: dict[str, int] = {}
         for message in messages:
-            candidates.extend(self.extract_message(message, now))
+            order_by_source[message.source_name] = order_by_source.get(message.source_name, 0) + 1
+            candidates.extend(
+                self.extract_message(
+                    message, now, source_order=order_by_source[message.source_name]
+                )
+            )
         return candidates
 
-    def extract_message(self, message: RawMessage, now: datetime | None = None) -> list[DeadlineCandidate]:
+    def extract_message(self, message: RawMessage, now: datetime | None = None,
+                        source_order: int | None = None) -> list[DeadlineCandidate]:
         now = now or datetime.now(TZ)
+        source_course, source_course_origin = course_from_message(message)
         prompt = _PROMPT.format(
             now=now.isoformat(),
             source_type=message.source_type,
             source_name=message.source_name,
+            source_course=source_course or "null",
             sender=message.sender,
             published=message.published_at.isoformat() if message.published_at else "unknown",
             subject=message.subject,
@@ -75,24 +91,37 @@ class LLMDeadlineExtractor:
         try:
             data = self.client.complete_json(prompt, system=_SYSTEM, kind="extract")
         except LLMUnavailable:
-            return self.fallback.extract_message(message, now)
+            return self.fallback.extract_message(message, now, source_order=source_order)
 
         if not isinstance(data, list):
             # 模型输出非法时不能把消息当成“没有 DDL”，退回规则而不是静默丢弃
-            return self.fallback.extract_message(message, now)
+            return self.fallback.extract_message(message, now, source_order=source_order)
 
+        published_at = effective_published_at(message)
+        correction_marker = detect_correction(message.body)
         results: list[DeadlineCandidate] = []
         for index, item in enumerate(data, start=1):
             if not isinstance(item, dict):
                 continue
-            candidate = self._to_candidate(item, message, index, now)
+            candidate = self._to_candidate(
+                item, message, index, now,
+                source_course=source_course,
+                source_course_origin=source_course_origin,
+                source_order=source_order,
+                published_at=published_at,
+                correction_marker=correction_marker,
+            )
             if candidate is not None:
                 results.append(candidate)
         return results
 
     # ------------------------------------------------------------------ #
     def _to_candidate(self, item: dict, message: RawMessage, index: int,
-                      now: datetime) -> DeadlineCandidate | None:
+                      now: datetime, *, source_course: str | None = None,
+                      source_course_origin: str | None = None,
+                      source_order: int | None = None,
+                      published_at: datetime | None = None,
+                      correction_marker: str | None = None) -> DeadlineCandidate | None:
         task_name = str(item.get("task_name") or "").strip()
         if not task_name:
             return None
@@ -111,6 +140,10 @@ class LLMDeadlineExtractor:
 
         missing: list[str] = []
         course = str(item.get("course") or "").strip() or None
+        course_from = "model" if course else None
+        if not course and source_course:
+            # 抽不出课程时用来源名称/主题里的代码兜底，并标出来源，供审计
+            course, course_from = source_course, source_course_origin
         if not course:
             missing.append("course")
         if iso is None:
@@ -125,7 +158,7 @@ class LLMDeadlineExtractor:
                 deadline_iso=iso,
                 source_type=message.source_type,
                 source_name=message.source_name,
-                published_at=message.published_at,
+                published_at=published_at or message.published_at,
                 message_id=message.message_id,
                 message_subject=message.subject,
                 missing_fields=missing,
@@ -133,8 +166,13 @@ class LLMDeadlineExtractor:
                 extractor_confidence=confidence,
                 needs_review=needs_review or message.needs_review,
                 review_reason=message.review_reason,
+                course_from=course_from,
+                source_order=source_order,
+                is_correction=correction_marker is not None,
+                correction_marker=correction_marker,
             ),
             message.body,
+            course_context=f"{message.subject}\n{message.source_name}",
         )
 
 

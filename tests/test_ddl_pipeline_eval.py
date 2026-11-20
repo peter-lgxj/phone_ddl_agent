@@ -8,6 +8,7 @@ from ddl_agent.connectors.base import SourceNotConfigured
 from ddl_agent.connectors.graph_mail import GraphMailConnector
 from ddl_agent.connectors.local_chat import LocalChatConnector
 from ddl_agent.dataset.generator import generate_samples, load_samples, write_dataset
+from ddl_agent.dedupe import normalize_task_name
 from ddl_agent.evaluation.baseline import SinglePassBaseline
 from ddl_agent.evaluation.metrics import evaluate_dataset, evaluate_sample, validate_document
 from ddl_agent.conflict import ConflictResolver
@@ -84,12 +85,12 @@ def test_pipeline_dedupes_and_writes_document(tmp_path):
     result = agent.run(sample["query"], sample["source_config"])
 
     target = next(record for record in result.records
-                  if "assignment" in record.task_name.lower())
+                  if normalize_task_name(record.task_name) == normalize_task_name("Assignment 2"))
     assert target.deadline_iso == sample["ground_truth"][0]["deadline_iso"]
     assert target.status == "confirmed"
     # HW1/作业一 变体应合并成一行，而不是留下两份
     assert sum(1 for record in result.records
-               if "assignment" in record.task_name.lower()) == 1
+               if normalize_task_name(record.task_name) == normalize_task_name("Assignment 2")) == 1
     assert result.write_result.ok
     assert validate_document(document)["ok"]
     assert result.trace["llm_calls"] == 0

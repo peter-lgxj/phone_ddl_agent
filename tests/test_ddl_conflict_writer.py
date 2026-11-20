@@ -46,15 +46,30 @@ def _record(deadline: str | None = "2026-12-05T23:59:00+08:00", status: str = "c
 
 
 # ---------------------------------------------------------------- 冲突
-def test_conflict_prefers_official_email():
+def test_conflict_has_no_fixed_source_prior():
+    """邮件不再固定压过群聊：同权时按发布时间裁决。"""
+    cluster = _cluster([
+        _candidate("Assignment 1", "2026-12-10T23:59:00+08:00", "student_chat",
+                   NOW - timedelta(days=1), "s1"),
+        _candidate("Assignment 1", "2026-12-08T23:59:00+08:00", "official_email",
+                   NOW - timedelta(days=5), "e1"),
+    ])
+    record = ConflictResolver().resolve([cluster]).records[0]
+    assert record.status == "confirmed"
+    # 群消息更新 → 采用群里的时间，而不是因为来源是 official_email 就固定胜出
+    assert record.deadline_iso == "2026-12-10T23:59:00+08:00"
+    assert "发布时间更新" in record.resolution_note
+    assert record.conflicts and len(record.conflicts[0]["sides"]) == 2
+
+
+def test_conflict_same_time_same_weight_is_uncertain():
     cluster = _cluster([
         _candidate("Assignment 1", "2026-12-10T23:59:00+08:00", "student_chat", NOW, "s1"),
         _candidate("Assignment 1", "2026-12-08T23:59:00+08:00", "official_email", NOW, "e1"),
     ])
     record = ConflictResolver().resolve([cluster]).records[0]
-    assert record.status == "confirmed"
-    assert record.deadline_iso == "2026-12-08T23:59:00+08:00"
-    assert "最高可信度" in record.resolution_note
+    assert record.status == "uncertain"
+    assert record.deadline_iso is None
 
 
 def test_conflict_newer_announcement_wins():

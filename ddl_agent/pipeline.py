@@ -11,7 +11,7 @@ from .dedupe import Deduplicator, clusters_without_dedup
 from .extract.normalizer import TimeNormalizer
 from .extract.rules import RuleExtractor
 from .models import AgentRunResult, RetrievalPlan
-from .planner import QueryPlanner, SourceConfigParser
+from .planner import QueryPlanner, SourceConfigParser, select_sources
 from .retrieval import RetrievalOrchestrator
 from .settings import TZ
 from .writer.base import DeadlineWriter
@@ -59,6 +59,10 @@ class DdlAgent:
             else self.source_parser.parse(source_config, self.sources)
         )
         plan = plan or self.planner.plan(query, selected, self.now)
+        selection: list[dict] = []
+        if not self.fixed_sources:
+            # 相似群名只扫最匹配的一个；固定来源消融时保留全部，便于对比
+            plan.sources, selection = select_sources(query, plan.sources)
         stages["plan"] = round(perf_counter() - begin, 4)
 
         begin = perf_counter()
@@ -103,6 +107,8 @@ class DdlAgent:
             "supplementary_rounds": outcome.supplementary_rounds,
             "planner_reason": plan.reason,
             "planner": type(self.planner).__name__,
+            # 相似群名的取舍依据写进归档，便于复现“为什么只扫了这个群”
+            "source_selection": selection,
             "ablation": {
                 "dedupe": self.dedupe_enabled,
                 "verify": self.verify_enabled,

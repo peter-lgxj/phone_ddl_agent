@@ -9,7 +9,13 @@ import re
 from datetime import datetime
 
 from ..models import DeadlineCandidate, RawMessage
+from .courses import COURSE_RE, find_courses, normalize_course
 from .evidence import validate_candidate_evidence
+from .message_context import (
+    course_from_message,
+    detect_correction,
+    effective_published_at,
+)
 from .normalizer import TimeNormalizer
 
 _TASK_PATTERNS = [
@@ -28,7 +34,7 @@ _DEADLINE_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 
-_COURSE_RE = re.compile(r"\b([A-Z]{2,4})\s?-?\s?(\d{4})([A-Z]?)\b")
+_COURSE_RE = COURSE_RE
 
 _TRAILING_VERB_RE = re.compile(
     r"\s*(?:must\s+be\s+submitted(?:\s+by)?|should\s+be\s+submitted(?:\s+by)?|is\s+due|are\s+due|due|"
@@ -46,24 +52,6 @@ _TASK_NOUN_RE = re.compile(
     r"作业|实验|报告|项目|论文|考试)",
     re.IGNORECASE,
 )
-
-
-def find_courses(text: str) -> list[str]:
-    """抽取课程代码，统一成 ``COMP7608`` 形式。"""
-    found: list[str] = []
-    for match in _COURSE_RE.finditer(text or ""):
-        code = f"{match.group(1)}{match.group(2)}{match.group(3)}".upper()
-        if code not in found:
-            found.append(code)
-    return found
-
-
-def normalize_course(course: str | None) -> str | None:
-    if not course:
-        return None
-    text = course.strip().upper().replace(" ", "")
-    match = _COURSE_RE.search(text)
-    return f"{match.group(1)}{match.group(2)}{match.group(3)}" if match else text
 
 
 def _segments(text: str):
@@ -103,13 +91,23 @@ class RuleExtractor:
 
     def extract(self, messages: list[RawMessage], now: datetime | None = None) -> list[DeadlineCandidate]:
         candidates: list[DeadlineCandidate] = []
+        order_by_source: dict[str, int] = {}
         for message in messages:
-            candidates.extend(self.extract_message(message, now))
+            order_by_source[message.source_name] = order_by_source.get(message.source_name, 0) + 1
+            candidates.extend(
+                self.extract_message(
+                    message, now, source_order=order_by_source[message.source_name]
+                )
+            )
         return candidates
 
-    def extract_message(self, message: RawMessage, now: datetime | None = None) -> list[DeadlineCandidate]:
+    def extract_message(self, message: RawMessage, now: datetime | None = None,
+                        source_order: int | None = None) -> list[DeadlineCandidate]:
         results: list[DeadlineCandidate] = []
         seen: set[tuple[str, str | None]] = set()
+        published_at = effective_published_at(message)
+        correction_marker = detect_correction(message.body)
+        source_course, source_course_origin = course_from_message(message)
 
         for index, segment in enumerate(_segments(message.body), start=1):
             hint = _DEADLINE_HINT_RE.search(segment)
@@ -128,11 +126,14 @@ class RuleExtractor:
             if not task_name:
                 continue
 
-            course = (
-                (find_courses(segment) or [None])[0]
-                or (find_courses(message.subject) or [None])[0]
-                or (find_courses(message.body) or [None])[0]
-            )
+            course = (find_courses(segment) or [None])[0]
+            course_origin = "body" if course else None
+            if not course:
+                course = (find_courses(message.subject) or [None])[0]
+                course_origin = "subject" if course else None
+            if not course:
+                # 不再把「正文里没写课程」当成错误：群名/主题里的代码是有效上下文
+                course, course_origin = source_course, source_course_origin
 
             missing: list[str] = []
             if not course:
@@ -157,15 +158,20 @@ class RuleExtractor:
                         deadline_iso=normalized.iso,
                         source_type=message.source_type,
                         source_name=message.source_name,
-                        published_at=message.published_at,
+                        published_at=published_at,
                         message_id=message.message_id,
                         message_subject=message.subject,
                         missing_fields=sorted(set(missing)),
                         unresolved_time=normalized.unresolved,
                         needs_review=message.needs_review,
                         review_reason=message.review_reason,
+                        course_from=course_origin,
+                        source_order=source_order,
+                        is_correction=correction_marker is not None,
+                        correction_marker=correction_marker,
                     ),
                     message.body,
+                    course_context=f"{message.subject}\n{message.source_name}",
                 )
             )
         return results

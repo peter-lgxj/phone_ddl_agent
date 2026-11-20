@@ -11,6 +11,7 @@ from typing import Literal
 
 SourceType = Literal[
     "official_email",       # 教务/教师/助教正式邮件
+    "email",                # 兼容只写了 email 的旧数据/回放脚本
     "course_announcement",  # 课程平台/群公告
     "instructor_chat",      # 教师在群里直接发的消息
     "student_chat",         # 同学之间的消息
@@ -103,6 +104,15 @@ class DeadlineCandidate:
     extractor_confidence: float | None = None
     needs_review: bool = False
     review_reason: str = ""
+    # 课程代码来源：body / subject / source_name / model；用于审计兜底是否生效
+    course_from: str | None = None
+    # 同一来源内的读取顺序（从 1 递增）；发布时间相同时用它判断先后
+    source_order: int | None = None
+    # 原文是否包含「更正/延期/改为/以最新为准」等覆盖语义
+    is_correction: bool = False
+    correction_marker: str | None = None
+    # 被同源更新记录取代时，指向新记录的 candidate_id
+    superseded_by: str | None = None
 
     @property
     def has_deadline(self) -> bool:
@@ -133,6 +143,10 @@ class ResolvedRecord:
     confidence: float = 0.0
     resolution_note: str = ""
     alternatives: list[str] = field(default_factory=list)
+    # 同源更正/延期被覆盖的旧记录（只输出生效值，旧值留在这里审计）
+    superseded_by: list[dict] = field(default_factory=list)
+    # 跨来源冲突记录：两侧原文、各自时间与裁决依据
+    conflicts: list[dict] = field(default_factory=list)
     updated_at: str | None = None
 
 

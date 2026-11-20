@@ -17,7 +17,6 @@ from .settings import (
     DEDUPE_CHAR_WEIGHT,
     DEDUPE_THRESHOLD,
     DEDUPE_TOKEN_WEIGHT,
-    SOURCE_CREDIBILITY,
     TZ,
 )
 
@@ -60,6 +59,14 @@ def normalize_task_name(name: str) -> str:
 
     for pattern, word in _EN_TASK_PATTERNS:
         text = pattern.sub(lambda m, w=word: f"{w} {int(m.group(1))}", text)
+
+    # 「机器学习作业三」→「assignment 3」：去掉紧邻数字任务名的中文科目前缀，
+    # 否则群里的「机器学习作业三」无法和邮件的「Assignment 3」合并成同一任务。
+    text = re.sub(
+        r"[\u4e00-\u9fff]+\s*(?=(?:assignment|project|lab|essay|exam)\s+\d+)",
+        "",
+        text,
+    )
 
     text = re.sub(r"\b(?:no|number)\s+(\d+)\b", r"\1", text)
     text = _SPACE_RE.sub(" ", text).strip()
@@ -160,6 +167,9 @@ def clusters_without_dedup(candidates: list[DeadlineCandidate]) -> list[TaskClus
     ]
 
 
-def _rank_key(candidate: DeadlineCandidate) -> tuple[int, object]:
-    return (SOURCE_CREDIBILITY.get(candidate.source_type, 0),
-            candidate.published_at or _MIN_TIME)
+def _rank_key(candidate: DeadlineCandidate) -> tuple[object, int]:
+    """代表性排序只看发布时间与读取顺序，不再给某类来源固定高低先验。"""
+    return (
+        candidate.published_at or _MIN_TIME,
+        candidate.source_order or 0,
+    )
