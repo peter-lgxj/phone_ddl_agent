@@ -1,0 +1,30 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- 从 runs/qq_real_device_20261121/groups_list.xml 裁剪：保留群列表四行与可点击祖先，
+     bounds 与真机一致，仅去掉与本用例无关的节点。-->
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.tencent.mobileqq" clickable="false" bounds="[0,0][1080,2374]">
+    <node index="0" text="搜索" resource-id="com.tencent.mobileqq:id/ztq" class="android.view.ViewGroup" clickable="true" bounds="[0,244][1080,405]" />
+    <node index="1" text="" resource-id="com.tencent.mobileqq:id/qb_troop_list_view" class="android.widget.AbsListView" clickable="true" bounds="[0,989][1080,2326]">
+      <node index="0" text="" resource-id="" class="android.widget.LinearLayout" clickable="true" bounds="[0,1295][1080,1456]">
+        <node index="0" text="" resource-id="" class="android.widget.RelativeLayout" clickable="false" bounds="[0,1295][1080,1456]">
+          <node index="0" text="COMP7503 作业通知群" resource-id="com.tencent.mobileqq:id/text1" class="android.widget.TextView" clickable="false" bounds="[183,1348][668,1402]" />
+        </node>
+      </node>
+      <node index="1" text="" resource-id="" class="android.widget.LinearLayout" clickable="true" bounds="[0,1456][1080,1617]">
+        <node index="0" text="" resource-id="" class="android.widget.RelativeLayout" clickable="false" bounds="[0,1456][1080,1617]">
+          <node index="0" text="COMP7415 课程群" resource-id="com.tencent.mobileqq:id/text1" class="android.widget.TextView" clickable="false" bounds="[183,1509][564,1563]" />
+        </node>
+      </node>
+      <node index="2" text="" resource-id="" class="android.widget.LinearLayout" clickable="true" bounds="[0,1617][1080,1778]">
+        <node index="0" text="" resource-id="" class="android.widget.RelativeLayout" clickable="false" bounds="[0,1617][1080,1778]">
+          <node index="0" text="2026 计算机班级群" resource-id="com.tencent.mobileqq:id/text1" class="android.widget.TextView" clickable="false" bounds="[183,1670][579,1724]" />
+        </node>
+      </node>
+      <node index="3" text="" resource-id="" class="android.widget.LinearLayout" clickable="true" bounds="[0,2100][1080,2261]">
+        <node index="0" text="" resource-id="" class="android.widget.RelativeLayout" clickable="false" bounds="[0,2100][1080,2261]">
+          <node index="0" text="2026 计算机班级二群" resource-id="com.tencent.mobileqq:id/text1" class="android.widget.TextView" clickable="false" bounds="[183,2153][625,2207]" />
+        </node>
+      </node>
+    </node>
+  </node>
+</hierarchy>

@@ -163,7 +163,9 @@ $env:SCREEN_DRIVER="uiautomator2"; python run.py
 回退驱动不会改变 `ScreenAgent` 的决策、观察、OCR、settle、证据归档与 token 统计，
 因此 `step_NNN.json` 仍包含 `timings` / `usage` / `image` / `driver`，
 `experiments/summarize_timings.py`、`experiments/run_experiment.py`、`experiments/metrics.py`
-都能照常运行。但报告口径要注意：
+都能照常运行。若某步画面哈希与上一帧相同，`step_NNN.json` 顶层写 `reused_frame=true`，
+`timings.reuse_reason="hash"`，该步跳过重新截图与重编码；settle 保留了稳定帧但画面已变时，
+`reuse_reason="settle"`、`reused_frame=false`，只省截图不省编码。但报告口径要注意：
 
 - `driver=adb_dump` 的 run **不能和 `uiautomator2` run 混进同一组均值**。A/B 时把
   `driver` 当作分组变量，或在表格里单列“回退模式”。
@@ -208,13 +210,18 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 |---|---|
 | `ACTIVE_PROVIDER` | 执行模型（视觉），默认 `deepseek` → `deepseek-flash`，需要 `DEEPSEEK_API_KEY`；可设 `qwen` / `zhipu` / `openai` / `local` |
 | `PLANNER_PROVIDER` | 规划/语义模型，默认 `deepseek`（`deepseek-flash`），单任务与多应用模式都读这一项；可切回 `qwen3` |
-| `MAX_STEPS` / `STEP_RETRIES` | 最大步数（默认 30，可用同名环境变量覆盖）与单步失败重试次数 |
+| `MAX_STEPS` / `STEP_RETRIES` | 最大步数（默认 30，可用同名环境变量覆盖）与单步失败重试次数。步数按**模型请求**计：一次响应用 `actions` 数组返回多个连续动作也只算一步 |
+| `MAX_ACTIONS_PER_STEP` | 一次响应最多接受的连续动作数，默认 3；超出截断。动作按顺序执行，`step_NNN.json` 里记 `action_type="sequence"` 与 `actions` 数组 |
 | `READ_ONLY_MODE` | 只读保护，默认开启：拒绝 `send` / `press_enter` / `type`，monitor 生产读屏强制开启；单独跑任务脚本时可置 0 |
 | `SCREEN_DRIVER` | 屏幕驱动：`auto`（默认，u2 不可用时自动回退 `adb_dump`）/ `uiautomator2`（强制 u2，失败明确报错）/ `adb_dump`（Android 17 回退） |
 | `LLM_TEMPERATURE` | 决策与观察调用温度，默认 0.0，保证重复实验可比 |
 | `ENABLE_SEMANTIC_ANALYSIS` | 语义分析（每步一次纯文本请求），默认关闭；置 1 可开启消融对比 |
 | `COMPLETION_CHECK` | 完成判断：`decision`（默认，读决策响应里的 `task_done`）/ `every_step`（旧行为，每步额外一次带图请求）/ `off` |
 | `MERGED_OBSERVE` | 观察并入决策，默认开；正常每步 1 次带图请求，响应不合法时本步回退两段式 |
+| `RULE_FASTPATH` | 规则快路，默认开：任务里点名的群/会话、返回、以及进入会话后的滚动，只要控件树能证明就直接执行，不调用视觉模型；命中与省下的调用数写入 `step_NNN.json` 的 `timings.rule_*` 和 `usage_summary.json` 的 `rule_fastpath` |
+| `RULE_MAX_SCROLLS` | 规则快路在同一个会话里最多连续滚几步（默认 6），到上限交回模型 |
+| `CONNECTION_WARMUP` | 启动时预热连接，默认开：视觉与规划共用同一个 httpx 连接池（keep-alive），并发一次 `models.list()` 完成 TLS 握手；设备侧调用驱动 `warmup()`（adb 回退时启动 adb server）。预热耗时写 `usage_summary.json` 的 `warmup_seconds`，不计入第一步 |
+| `HTTP_KEEPALIVE_SECONDS` / `HTTP_MAX_CONNECTIONS` | 共用连接池的 keep-alive 秒数（默认 90）与最大连接数（默认 8） |
 | `OCR_PREHEAT` | 启动时预热 RapidOCR，默认开 |
 | `OBSERVE_SETTLE_MODE` | `adaptive`（默认，界面稳定即返回）/ `fixed`（固定等满 `OBSERVE_SETTLE_SECONDS`） |
 | `OBSERVE_SETTLE_POLL_SECONDS` | 自适应 settle 的截图轮询间隔，默认 0.15s |

@@ -105,7 +105,10 @@ WECHAT_INPUT_RESOURCE_ID = "com.tencent.mm:id/b4z"
 # ============================================================
 
 # 最大执行步数：与 test.md 实验规程的 30 步保持一致，可用环境变量覆盖（如 MAX_STEPS=20）
+# 步数按「模型请求」计：一次响应里用 actions 数组返回多个连续动作也只算一步。
 MAX_STEPS = int(os.getenv("MAX_STEPS", "30"))
+# 一次响应最多接受几个连续动作；超出部分截断，避免单个请求里塞入不可控的动作序列
+MAX_ACTIONS_PER_STEP = int(os.getenv("MAX_ACTIONS_PER_STEP", "3"))
 STEP_RETRIES = 2            # 单步失败后的重试次数，避免一次 API 抖动直接判任务失败
 # 生产读屏默认只读：拒绝 send / press_enter / type 等会在群内发言或改动内容的动作。
 # 单独跑任务脚本（run.py / multi_agent.py）时可设 READ_ONLY_MODE=0 关闭。
@@ -183,7 +186,25 @@ OBSERVE_OCR_ACTIONS = {
     if item.strip()
 }
 
+# 规则快路：开群、返回、滚动、点已知 resource-id 的输入框这类能被控件树证明的动作
+# 不调用视觉模型，直接执行。只有需要看懂截图语义时才走 VLM。命中与省下的调用数
+# 会写进 step JSON 的 timings.rule_* 与 usage_summary.json 的 rule_fastpath。
+RULE_FASTPATH = os.getenv("RULE_FASTPATH", "1").strip().lower() not in (
+    "0", "false", "off", ""
+)
+# 同一次会话里规则最多连续滚多少步；到上限后交回 VLM，避免无限翻页
+RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "6"))
+
 ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "runs")  # 每步截图与动作记录的归档目录
+
+# 连接预热：启动时复用同一个 HTTP 连接池，并预热设备通道（u2 RPC / adb server）。
+# 关掉后每次请求仍由 SDK/驱动自行建连，不影响正确性，只是第一步可能多一次握手。
+CONNECTION_WARMUP = os.getenv("CONNECTION_WARMUP", "1").strip().lower() not in (
+    "0", "false", "off", ""
+)
+# 视觉与规划两个 provider 共用连接池；keep-alive 秒数与最大连接数按单机单任务设置
+HTTP_KEEPALIVE_SECONDS = float(os.getenv("HTTP_KEEPALIVE_SECONDS", "90"))
+HTTP_MAX_CONNECTIONS = int(os.getenv("HTTP_MAX_CONNECTIONS", "8"))
 
 # 历史上下文窗口：只带最近 N 张历史原图（当前屏幕始终带图），更早步骤压成文字摘要。
 # 6GB 显存跑本地 Qwen3-VL 时，多张原图会显著抬高视觉 token 与显存占用，默认只带 1 张。

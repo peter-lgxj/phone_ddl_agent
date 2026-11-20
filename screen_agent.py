@@ -4,7 +4,9 @@ import hashlib
 import os
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import httpx
 from phone_driver import create_phone_controller
 from app_launcher import AppLauncher
 from memory import TaskMemory, format_steps_compact
@@ -12,6 +14,7 @@ from ocr_locator import (OCRLocator, mark_text_in_input_boxes, resolve_action_el
                          canonical_action_target, should_trigger_ocr, snap_action_coords)
 import config
 import image_preprocess
+import rule_policy
 from openai import OpenAI
 import ui_state
 
@@ -38,6 +41,19 @@ def _require_api_key(provider_name: str, provider: dict, role: str):
         f"未配置{role}密钥：{role}当前为 {provider_name}（{provider.get('model')}），"
         f"需要环境变量 {env_name}。已在项目根目录查找 .env，"
         f"请复制 .env.example 为 .env 并填写后重试。"
+    )
+
+
+def make_http_client() -> httpx.Client:
+    """视觉与规划共用的 HTTP 连接池；keep-alive 避免多步任务每步重新握手。"""
+    max_connections = int(getattr(config, "HTTP_MAX_CONNECTIONS", 8))
+    return httpx.Client(
+        limits=httpx.Limits(
+            max_connections=max_connections,
+            max_keepalive_connections=max_connections,
+            keepalive_expiry=float(getattr(config, "HTTP_KEEPALIVE_SECONDS", 90)),
+        ),
+        timeout=httpx.Timeout(120.0, connect=10.0),
     )
 
 
@@ -72,13 +88,27 @@ def consecutive_unresolved_targets(steps: list[dict], target: str) -> int:
     return count
 
 
+def effective_action_type(action: dict) -> str:
+    """多动作序列按最后一个子动作判断类型（观察问题、滚动 OCR 都依赖它）。"""
+    if not isinstance(action, dict):
+        return ""
+    if action.get("action_type") == "sequence":
+        items = action.get("actions") or []
+        return str((items[-1] if items else {}).get("action_type") or "").lower()
+    return str(action.get("action_type") or "").lower()
+
+
 def build_observe_question(last_action: dict, memory) -> str:
     """按动作类型构造观察问题。
 
     滚动类动作不能只让模型说一句“这是某界面”，否则聊天正文永远进不了
     observation；这里要求逐条列出可见消息，作为 OCR 之外的第一层文本来源。
     """
-    action_type = str(last_action.get("action_type") or "").lower()
+    action_type = effective_action_type(last_action)
+    if last_action.get("action_type") == "sequence":
+        items = last_action.get("actions") or []
+        if items:
+            last_action = items[-1]
     action_desc = last_action.get("description", "")
 
     if action_type == "type":
@@ -172,9 +202,13 @@ class ScreenAgent:
         self.extra_body          = provider.get("extra_body")
 
         # VL 模型：负责看截图、决定下一步操作
+        # 视觉与规划共用同一个 HTTP 连接池：同 provider 时少一次 TLS 握手，
+        # 多步任务复用 keep-alive 连接，不再每步重新建连。
+        self._http_client = make_http_client()
         self.client = OpenAI(
             api_key=provider["api_key"],
             base_url=provider["base_url"],
+            http_client=self._http_client,
         )
 
         # 纯文字大模型：负责语义分析、纠正 VL 的理解偏差
@@ -184,6 +218,7 @@ class ScreenAgent:
         self.text_client = OpenAI(
             api_key=planner_cfg["api_key"],
             base_url=planner_cfg["base_url"],
+            http_client=self._http_client,
         )
         self.text_model = planner_cfg["model"]
         self.text_extra_body = planner_cfg.get("extra_body")
@@ -206,6 +241,8 @@ class ScreenAgent:
                 "  ⚠️  当前使用 adb_dump 回退驱动：截图/控件树/点击可用，"
                 "但本次不是完整 uiautomator2 链路"
             )
+        # 把 HTTP TLS 握手与设备通道启动挪到任务开始前，不占用第一步
+        self._warmup_connections()
         self.max_steps = max_steps or config.MAX_STEPS
         self.read_only = (
             getattr(config, "READ_ONLY_MODE", True) if read_only is None else read_only
@@ -220,9 +257,41 @@ class ScreenAgent:
         self.usage_events = []            # 全部视觉调用 usage，任务结束写汇总
         self._last_step_usage = []        # 本步 usage 事件（可含决策/观察/完成检测）
         self._last_observe_ocr_seconds = 0.0  # 本步滚动 OCR 耗时（未触发为 0）
+        self._rule_state = {}             # 规则快路跨步状态（已进入的群、滚动次数等）
+        self._rule_hits = []              # 规则命中记录，任务结束写汇总
+        self._last_rule_seconds = 0.0     # 本步规则检查（控件树 dump）耗时
+        self._last_frame_hash = None      # 上一帧截图哈希，用于同屏复用
+        self._last_frame_bytes = None     # 上一帧编码后的字节
+        self._last_frame_meta = None      # 上一帧图片元数据
+        self._pending_settle_frame = None # settle 保留的稳定帧，供下一步复用
+        self._last_reused_frame = False   # 本步是否复用了上一帧（写进 step JSON）
 
         print(f"视觉模型：{provider_name} / {self.model}")
         print(f"语义模型：{planner_name} / {self.text_model}")
+
+    def _warmup_connections(self) -> None:
+        """启动时预热 HTTP 连接与设备通道。
+
+        - HTTP：复用同一个 httpx 连接池，并发一次 ``models.list()`` 完成 TLS/DNS 握手；
+        - 设备：调用驱动的 ``warmup()``（adb 回退时启动 adb server）。
+        失败只告警，不阻塞任务；预热耗时写进 ``self._warmup_seconds``，不计入第一步。
+        """
+        self._warmup_seconds = 0.0
+        if not getattr(config, "CONNECTION_WARMUP", True):
+            return
+        started = time.perf_counter()
+        try:
+            self.client.models.list()
+        except Exception as e:
+            print(f"  ⚠️  HTTP 连接预热失败（首步会重新建连）：{e}")
+        try:
+            warmup = getattr(self.phone, "warmup", None)
+            if callable(warmup):
+                warmup()
+        except Exception as e:
+            print(f"  ⚠️  设备通道预热失败（首步会重新握手）：{e}")
+        self._warmup_seconds = round(time.perf_counter() - started, 2)
+        print(f"连接预热完成：{self._warmup_seconds}s（HTTP keep-alive + 设备通道）")
 
     # ══════════════════════════════════════════════════════════
     #  语义分析：在决策前，用文字大模型理解历史 observation
@@ -357,7 +426,7 @@ class ScreenAgent:
     {coord_rule}
     2. 已打开的 App 不要重复 open_app
     {progress_rule}
-    4. 每次只返回一个动作
+    4. 默认每次只返回一个动作；只有连续动作彼此不依赖时（例如连续两次 swipe、swipe 后 back）才可用 "actions" 数组一次返回，程序按顺序执行、仍只算一步；需要看执行结果再决定的一律只返回一个动作
     5. 可直接打开的 App：{known_apps}
     6. 搜索框输入后，查看搜索结果并选择目标；聊天消息输入后才使用 send
     7. 历史中验证结果包含"输入成功"只表示文字已输入，不表示搜索或发送已完成
@@ -383,7 +452,8 @@ class ScreenAgent:
     "summary": "（finish时填）",
     "description": "本步操作一句话描述",
     "target": "（tap时填）要点击元素的文字或描述，用于精确定位",
-    "task_done": 布尔值（整项任务是否已全部完成，未完成填 false）
+    "task_done": 布尔值（整项任务是否已全部完成，未完成填 false）,
+    "actions": [{{"action_type": "swipe", "x": 数字, "y": 数字, "x2": 数字, "y2": 数字}}]
     }}
 
     ## 只返回 JSON，注意：
@@ -461,41 +531,37 @@ class ScreenAgent:
         self._last_merged_observation = ""
         self._last_merged_ocr_text = ""
         started = time.time()
-        self.phone.screenshot("screen_current.png")
-        timings["screenshot"] = round(time.time() - started, 2)
+        current_bytes, image_meta, reused_frame = self._capture_frame(timings)
+        self._last_image_meta = image_meta
+        self._last_model_action = None
+        current_b64 = base64.b64encode(current_bytes).decode("utf-8")
+        if not reused_frame:
+            print(f"  🖼  发送图：{image_preprocess.describe(image_meta)}")
+            with open(image_preprocess.sent_filename("screen_current.png", image_meta), "wb") as f:
+                f.write(current_bytes)
 
         started = time.time()
         ocr_mode = getattr(config, "OCR_MODE", "on_demand")
         ocr_result = ""
         if ocr_mode == "always":
             ocr_result = self.ocr.format_for_prompt("screen_current.png")
-        # 合并观察时，上一步若为滚动动作，仍然把当前屏幕 OCR 原文并入 observation
+        # 合并观察时，上一步若为滚动动作，仍然把当前屏幕 OCR 原文并入 observation。
+        # OCR 与预编码/历史图准备并行，等 prompt 要拼 OCR 时再取结果。
+        ocr_executor = None
+        ocr_future = None
+        ocr_started = time.perf_counter()
         if merged and memory.steps:
-            prev_type = str((memory.steps[-1].get("action") or {}).get("action_type") or "").lower()
+            prev_type = effective_action_type(memory.steps[-1].get("action") or {})
             if (getattr(config, "OBSERVE_OCR_ENABLED", False)
                     and prev_type in getattr(config, "OBSERVE_OCR_ACTIONS", {"swipe", "scroll"})):
-                try:
-                    elements = self.ocr.detect_ocr("screen_current.png")
-                    text = format_ocr_observation(elements)
-                    self._last_merged_ocr_text = text
-                    if text:
-                        ocr_result = (ocr_result + "\n[上一动作后的 OCR]\n" + text).strip()
-                except Exception as e:
-                    print(f"  ⚠️  合并观察 OCR 失败，保留模型描述：{e}")
-        timings["ocr_pre"] = round(time.time() - started, 2)
-        timings["ocr"] = timings["ocr_pre"]
+                ocr_executor = ThreadPoolExecutor(max_workers=1)
+                ocr_future = ocr_executor.submit(self.ocr.detect_ocr, "screen_current.png")
         timings["ocr_triggered"] = ocr_mode == "always"
         timings["ocr_reason"] = "always" if ocr_mode == "always" else ""
 
         started = time.time()
-        # 截图后先预处理：JPEG 编码 / 可选等比缩放；缩放比例用于把模型坐标反算回设备坐标
-        current_bytes, image_meta = image_preprocess.prepare_image_bytes("screen_current.png")
-        self._last_image_meta = image_meta
-        self._last_model_action = None
-        print(f"  🖼  发送图：{image_preprocess.describe(image_meta)}")
-        with open(image_preprocess.sent_filename("screen_current.png", image_meta), "wb") as f:
-            f.write(current_bytes)
-        current_b64 = base64.b64encode(current_bytes).decode("utf-8")
+        if ocr_future is None:
+            timings["ocr_pre"] = 0.0
 
         # 历史原图按窗口裁剪；当前屏幕无论如何都要带图
         history_images = self._collect_history_images(memory)
@@ -512,7 +578,26 @@ class ScreenAgent:
         # 没带原图的早期步骤压成文字摘要
         image_steps = {img["step"] for img in history_images}
         history_text = self._build_history_text(memory, image_steps)
-        timings["preprocess"] = round(time.time() - started, 2)
+        timings["preprocess"] = round(
+            timings.get("preprocess", 0.0) + (time.time() - started), 2
+        )
+
+        # 预编码与历史图准备做完后再取 OCR：此时通常已并行跑完，只剩很短的等待
+        if ocr_future is not None:
+            wait_started = time.perf_counter()
+            try:
+                elements = ocr_future.result()
+                text = format_ocr_observation(elements)
+                self._last_merged_ocr_text = text
+                if text:
+                    ocr_result = (ocr_result + "\n[上一动作后的 OCR]\n" + text).strip()
+            except Exception as e:
+                print(f"  ⚠️  合并观察 OCR 失败，保留模型描述：{e}")
+            finally:
+                ocr_executor.shutdown(wait=False)
+            timings["ocr_wait"] = round(time.perf_counter() - wait_started, 2)
+            timings["ocr_pre"] = round(time.perf_counter() - ocr_started, 2)
+        timings["ocr"] = timings["ocr_pre"]
 
         # ── 文字大模型先做语义分析（有历史才分析，默认关闭）──
         started = time.time()
@@ -558,7 +643,7 @@ class ScreenAgent:
 
         if merged:
             if (not isinstance(action, dict) or "observation" not in action
-                    or not action.get("action_type")):
+                    or not (action.get("action_type") or action.get("actions"))):
                 print(f"  ⚠️  合并响应缺少 observation/action，回退两段式")
                 self._last_merged_parse_failed = True
                 self._last_decision_timings = timings
@@ -570,6 +655,42 @@ class ScreenAgent:
                     f"{self._last_merged_observation}\n[OCR]\n{self._last_merged_ocr_text}"
                 ).strip()
 
+        # 一次响应可返回多个连续动作（步骤语义仍按请求计）
+        raw_actions = None
+        if isinstance(action.get("actions"), list):
+            raw_actions = [
+                item for item in action["actions"]
+                if isinstance(item, dict) and item.get("action_type")
+            ]
+        if raw_actions:
+            limit = max(1, int(getattr(config, "MAX_ACTIONS_PER_STEP", 3)))
+            raw_actions = raw_actions[:limit]
+            cache = {}
+            mapped_actions = []
+            for item in raw_actions:
+                item = image_preprocess.map_action_coords(item, image_meta)
+                mapped_actions.append(
+                    self._snap_mapped_action(item, timings, memory, cache))
+            if image_meta.get("resized"):
+                self._last_model_action = {"actions": raw_actions}
+            timings["sequence_len"] = len(mapped_actions)
+            mapped = {
+                "action_type": "sequence",
+                "actions": mapped_actions,
+                "thought": action.get("thought", ""),
+                "description": "；".join(
+                    item.get("description") or item.get("action_type", "")
+                    for item in mapped_actions
+                ),
+                "target": "",
+                "task_done": bool(
+                    action.get("task_done")
+                    or any(item.get("task_done") for item in mapped_actions)
+                ),
+            }
+            self._last_decision_timings = timings
+            return mapped
+
         # 缩放过才反算；未缩放时 map_action_coords 原样返回，不引入偏移
         mapped = image_preprocess.map_action_coords(action, image_meta)
         keys = ("x", "y", "x2", "y2")
@@ -579,112 +700,127 @@ class ScreenAgent:
                   f"{ {k: mapped[k] for k in keys if k in mapped} }")
 
         # tap 后统一收集候选：单个匹配直接吸附，多个匹配按模型坐标就近吸附。
-        if should_trigger_ocr(ocr_mode, mapped.get("action_type", "")):
-            snap_mode = getattr(config, "OCR_SNAP_MODE", "tree_first")
-            max_distance = int(getattr(config, "OCR_SNAP_MAX_DISTANCE", 80))
-            snap_source = "none"
-            moves = []
-            candidates = []
-            tree_elements = []
-            tree_elapsed = ocr_elapsed = 0.0
-            yolo_elapsed = 0.0
-            tree_count = ocr_count = 0
-            ocr_meta = {}
-
-            if snap_mode in ("tree_first", "tree_only"):
-                started = time.time()
-                try:
-                    tree_elements = self.ocr.detect_tree()
-                except Exception as e:
-                    print(f"  ⚠️  控件树读取失败，继续走 OCR：{e}")
-                    tree_elements = []
-                tree_elapsed = round(time.time() - started, 2)
-                tree_count = len(tree_elements)
-                candidates.extend(tree_elements)
-
-            target = str(mapped.get("target") or "").strip()
-            description = str(mapped.get("description") or "")
-            wants_search = "搜索" in target or "放大镜" in target
-            wants_contact = any(word in description + target
-                                for word in ("联系人", "群聊", "聊天项"))
-            needs_input_boxes = wants_contact and not any(
-                item.get("type") == "input" for item in tree_elements)
-            if (snap_mode == "tree_first"
-                    and getattr(config, "SEARCH_ICON_DETECTION", True)
-                    and (wants_search or needs_input_boxes)):
-                started = time.time()
-                try:
-                    detector = getattr(self, "_gui_detector", None)
-                    if detector is None:
-                        from input_detector import InputDetector
-                        detector = self._gui_detector = InputDetector()
-                    detections = detector.detect("screen_current.png", conf=0.45)
-                    candidates.extend(item for item in detections
-                                      if (wants_search and item.get("class_name") == "search_icon")
-                                      or (needs_input_boxes and item.get("class_name") == "input_box"
-                                          and item.get("confidence", 0) >= 0.65))
-                except Exception as e:
-                    print(f"  ⚠️  YOLO 元素检测失败，继续走 OCR：{e}")
-                yolo_elapsed = round(time.time() - started, 2)
-
-            if snap_mode in ("tree_first", "ocr_only"):
-                started = time.time()
-                try:
-                    ocr_elements = mark_text_in_input_boxes(
-                        self.ocr.detect_ocr("screen_current.png"), candidates)
-                except Exception as e:
-                    print(f"  ⚠️  OCR 失败，保留模型坐标：{e}")
-                    ocr_elements = []
-                ocr_elapsed = round(time.time() - started, 2)
-                ocr_count = len(ocr_elements)
-                candidates.extend(ocr_elements)
-                ocr_meta = dict(getattr(self.ocr, "last_meta", {}) or {})
-
-            found = resolve_action_element(mapped, candidates, max_distance)
-            if found:
-                snap_source = found[0].get("source", "unknown")
-                mapped, moves = snap_action_coords(mapped, candidates, max_distance)
-
-            timings["ocr"] = round(
-                timings.get("ocr", 0.0) + tree_elapsed + yolo_elapsed + ocr_elapsed, 2
-            )
-            timings["ocr_triggered"] = True
-            timings["ocr_reason"] = "tap"
-            timings["snap_source"] = snap_source
-            timings["snap_tree"] = {"elapsed": tree_elapsed, "elements": tree_count}
-            timings["snap_yolo"] = {"elapsed": yolo_elapsed}
-            timings["snap_ocr"] = {"elapsed": ocr_elapsed, "elements": ocr_count,
-                                   "scale": ocr_meta.get("scale"),
-                                   "scaled_size": ocr_meta.get("scaled_size"),
-                                   "engine": ocr_meta.get("engine")}
-            timings["ocr_snap"] = {"moves": moves}
-            if moves:
-                print(f"  🎯 {snap_source} 吸附：{moves}")
-            if target and not found:
-                mapped = dict(mapped)
-                timings["target_unresolved"] = target
-                prior = consecutive_unresolved_targets(memory.steps, target)
-                if prior >= 1 and mapped.get("x") is not None and mapped.get("y") is not None:
-                    # 连续两轮都定位不到（常见于返回键、发送键等无文字图标）：
-                    # 不再终止任务，回退到模型给出的坐标继续，保留可恢复路径。
-                    mapped["localization_fallback"] = True
-                    mapped["thought"] = (
-                        f"连续 {prior + 1} 次未匹配到目标「{target}」的文字元素，"
-                        "回退到模型坐标继续尝试。"
-                    )
-                    mapped["description"] = f"目标「{target}」未定位，按原坐标点击"
-                    timings["localization_fallback"] = True
-                    print(f"  ⚠️  {mapped['thought']}")
-                else:
-                    mapped["action_type"] = "wait"
-                    mapped["localization_failed"] = True
-                    mapped["thought"] = (
-                        f"未找到与目标「{target}」文字及类型匹配的元素，避免误点。"
-                    )
-                    mapped["description"] = f"目标「{target}」未定位，保持当前界面并重新观察"
-                    print(f"  ⚠️  {mapped['thought']}")
+        mapped = self._snap_mapped_action(mapped, timings, memory)
 
         self._last_decision_timings = timings
+        return mapped
+
+    def _snap_mapped_action(self, mapped: dict, timings: dict, memory: TaskMemory,
+                            cache: dict | None = None) -> dict:
+        """对 tap 做控件树/OCR 吸附；多动作序列共享同一次树与 OCR 结果。"""
+        ocr_mode = getattr(config, "OCR_MODE", "on_demand")
+        if not should_trigger_ocr(ocr_mode, mapped.get("action_type", "")):
+            return mapped
+        cache = cache if cache is not None else {}
+        snap_mode = getattr(config, "OCR_SNAP_MODE", "tree_first")
+        max_distance = int(getattr(config, "OCR_SNAP_MAX_DISTANCE", 80))
+        snap_source = "none"
+        moves = []
+        candidates = []
+        tree_elements = []
+        tree_elapsed = ocr_elapsed = 0.0
+        yolo_elapsed = 0.0
+        tree_count = ocr_count = 0
+        ocr_meta = {}
+
+        if snap_mode in ("tree_first", "tree_only"):
+            if "tree" not in cache:
+                started = time.time()
+                try:
+                    cache["tree"] = self.ocr.detect_tree()
+                except Exception as e:
+                    print(f"  ⚠️  控件树读取失败，继续走 OCR：{e}")
+                    cache["tree"] = []
+                cache["tree_elapsed"] = round(time.time() - started, 2)
+            tree_elements = cache["tree"]
+            tree_elapsed = cache["tree_elapsed"]
+            tree_count = len(tree_elements)
+            candidates.extend(tree_elements)
+
+        target = str(mapped.get("target") or "").strip()
+        description = str(mapped.get("description") or "")
+        wants_search = "搜索" in target or "放大镜" in target
+        wants_contact = any(word in description + target
+                            for word in ("联系人", "群聊", "聊天项"))
+        needs_input_boxes = wants_contact and not any(
+            item.get("type") == "input" for item in tree_elements)
+        if (snap_mode == "tree_first"
+                and getattr(config, "SEARCH_ICON_DETECTION", True)
+                and (wants_search or needs_input_boxes)):
+            started = time.time()
+            try:
+                detector = getattr(self, "_gui_detector", None)
+                if detector is None:
+                    from input_detector import InputDetector
+                    detector = self._gui_detector = InputDetector()
+                detections = detector.detect("screen_current.png", conf=0.45)
+                candidates.extend(item for item in detections
+                                  if (wants_search and item.get("class_name") == "search_icon")
+                                  or (needs_input_boxes and item.get("class_name") == "input_box"
+                                      and item.get("confidence", 0) >= 0.65))
+            except Exception as e:
+                print(f"  ⚠️  YOLO 元素检测失败，继续走 OCR：{e}")
+            yolo_elapsed = round(time.time() - started, 2)
+
+        if snap_mode in ("tree_first", "ocr_only"):
+            if "ocr_raw" not in cache:
+                started = time.time()
+                try:
+                    cache["ocr_raw"] = self.ocr.detect_ocr("screen_current.png")
+                except Exception as e:
+                    print(f"  ⚠️  OCR 失败，保留模型坐标：{e}")
+                    cache["ocr_raw"] = []
+                cache["ocr_elapsed"] = round(time.time() - started, 2)
+                cache["ocr_meta"] = dict(getattr(self.ocr, "last_meta", {}) or {})
+            ocr_elements = mark_text_in_input_boxes(cache["ocr_raw"], candidates)
+            ocr_elapsed = cache["ocr_elapsed"]
+            ocr_count = len(ocr_elements)
+            candidates.extend(ocr_elements)
+            ocr_meta = cache["ocr_meta"]
+
+        found = resolve_action_element(mapped, candidates, max_distance)
+        if found:
+            snap_source = found[0].get("source", "unknown")
+            mapped, moves = snap_action_coords(mapped, candidates, max_distance)
+
+        timings["ocr"] = round(
+            timings.get("ocr", 0.0) + tree_elapsed + yolo_elapsed + ocr_elapsed, 2
+        )
+        timings["ocr_triggered"] = True
+        timings["ocr_reason"] = "tap"
+        timings["snap_source"] = snap_source
+        timings["snap_tree"] = {"elapsed": tree_elapsed, "elements": tree_count}
+        timings["snap_yolo"] = {"elapsed": yolo_elapsed}
+        timings["snap_ocr"] = {"elapsed": ocr_elapsed, "elements": ocr_count,
+                               "scale": ocr_meta.get("scale"),
+                               "scaled_size": ocr_meta.get("scaled_size"),
+                               "engine": ocr_meta.get("engine")}
+        timings["ocr_snap"] = {"moves": moves}
+        if moves:
+            print(f"  🎯 {snap_source} 吸附：{moves}")
+        if target and not found:
+            mapped = dict(mapped)
+            timings["target_unresolved"] = target
+            prior = consecutive_unresolved_targets(memory.steps, target)
+            if prior >= 1 and mapped.get("x") is not None and mapped.get("y") is not None:
+                # 连续两轮都定位不到（常见于返回键、发送键等无文字图标）：
+                # 不再终止任务，回退到模型给出的坐标继续，保留可恢复路径。
+                mapped["localization_fallback"] = True
+                mapped["thought"] = (
+                    f"连续 {prior + 1} 次未匹配到目标「{target}」的文字元素，"
+                    "回退到模型坐标继续尝试。"
+                )
+                mapped["description"] = f"目标「{target}」未定位，按原坐标点击"
+                timings["localization_fallback"] = True
+                print(f"  ⚠️  {mapped['thought']}")
+            else:
+                mapped["action_type"] = "wait"
+                mapped["localization_failed"] = True
+                mapped["thought"] = (
+                    f"未找到与目标「{target}」文字及类型匹配的元素，避免误点。"
+                )
+                mapped["description"] = f"目标「{target}」未定位，保持当前界面并重新观察"
+                print(f"  ⚠️  {mapped['thought']}")
         return mapped
 
     # ══════════════════════════════════════════════════════════
@@ -713,6 +849,7 @@ class ScreenAgent:
 
         poll = max(float(getattr(config, "OBSERVE_SETTLE_POLL_SECONDS", 0.15)), 0.02)
         previous = None
+        digest = None
         try:
             while time.perf_counter() - started < max_wait:
                 self.phone.screenshot("screen_settle.png")
@@ -728,11 +865,68 @@ class ScreenAgent:
             if remaining > 0:
                 time.sleep(remaining)
         finally:
-            try:
-                os.remove("screen_settle.png")
-            except OSError:
-                pass
+            # 保留 settle 的最后一帧：下一步若哈希未变，可直接复用，省一次截图与重编码
+            if digest is not None and os.path.exists("screen_settle.png"):
+                try:
+                    os.replace("screen_settle.png", "screen_settle_last.png")
+                    self._pending_settle_frame = {
+                        "path": "screen_settle_last.png", "hash": digest,
+                    }
+                except OSError:
+                    pass
+            else:
+                try:
+                    os.remove("screen_settle.png")
+                except OSError:
+                    pass
         return round(time.perf_counter() - started, 2)
+
+    def _capture_frame(self, timings: dict) -> tuple[bytes, dict, bool]:
+        """截取当前帧；能用上一帧时跳过重新截图与重编码。
+
+        返回 (发送字节, 图片元数据, 是否复用上一帧)。哈希未变时 reused=True，
+        并在 step JSON 里写 reused_frame=true。
+        """
+        started = time.perf_counter()
+        pending = getattr(self, "_pending_settle_frame", None)
+        self._pending_settle_frame = None
+        reuse_capture = False
+        if pending and os.path.exists(pending["path"]):
+            digest = pending["hash"]
+            try:
+                shutil.copyfile(pending["path"], "screen_current.png")
+                os.remove(pending["path"])
+                reuse_capture = True
+            except OSError as e:
+                print(f"  ⚠️  settle 帧复用失败，改为重新截图：{e}")
+                digest = None
+
+        if not reuse_capture:
+            self.phone.screenshot("screen_current.png")
+            with open("screen_current.png", "rb") as f:
+                digest = hashlib.md5(f.read()).hexdigest()
+
+        last_hash = getattr(self, "_last_frame_hash", None)
+        last_bytes = getattr(self, "_last_frame_bytes", None)
+        last_meta = getattr(self, "_last_frame_meta", None)
+        reused = (digest == last_hash and last_bytes is not None)
+        self._last_reused_frame = bool(reused)
+        timings["screenshot"] = round(time.perf_counter() - started, 2)
+        timings["reused_frame"] = bool(reused)
+        timings["reuse_reason"] = "hash" if reused else ("settle" if reuse_capture else "")
+
+        if reused:
+            print("  ♻️  画面未变，复用上一帧（跳过截图与重编码）")
+            timings["preprocess"] = 0.0
+            return last_bytes, last_meta, True
+
+        encode_started = time.perf_counter()
+        data, meta = image_preprocess.prepare_image_bytes("screen_current.png")
+        timings["preprocess"] = round(time.perf_counter() - encode_started, 2)
+        self._last_frame_hash = digest
+        self._last_frame_bytes = data
+        self._last_frame_meta = meta
+        return data, meta, False
 
     def _observe(self, last_action: dict, memory: TaskMemory) -> str:
         """执行动作后截图，VL 模型描述结果；滚动类动作再叠加 OCR 文本。"""
@@ -743,46 +937,57 @@ class ScreenAgent:
         observe_bytes, observe_meta = image_preprocess.prepare_image_bytes("screen_observe.png")
         image_b64 = base64.b64encode(observe_bytes).decode("utf-8")
 
-        action_type = str(last_action.get("action_type") or "").lower()
+        action_type = effective_action_type(last_action)
         verify_question = build_observe_question(last_action, memory)
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            temperature=config.LLM_TEMPERATURE,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{observe_meta['mime']};base64,{image_b64}"}
-                        },
-                        {
-                            "type": "text",
-                            "text": f"请观察截图，{verify_question}只回复要求的内容，不要多余文字。"
-                        }
-                    ]
-                }
-            ],
-            extra_body=getattr(self, "extra_body", None),
-        )
-        self._record_usage("observe", response)
-        observation = response.choices[0].message.content.strip()
-
+        # 截图与 OCR 互不依赖：OCR 先起一个线程，和视觉观察请求并行跑。
+        # OCR 失败只影响补充文本，不影响截图与本次观察。
         ocr_actions = getattr(config, "OBSERVE_OCR_ACTIONS", {"swipe", "scroll"})
-        if (
+        want_ocr = (
             getattr(config, "OBSERVE_OCR_ENABLED", False)
             and action_type in ocr_actions
-        ):
+        )
+        executor = ThreadPoolExecutor(max_workers=1) if want_ocr else None
+        ocr_started = time.perf_counter()
+        ocr_future = (executor.submit(self.ocr.detect_ocr, "screen_observe.png")
+                      if executor else None)
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                temperature=config.LLM_TEMPERATURE,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{observe_meta['mime']};base64,{image_b64}"}
+                            },
+                            {
+                                "type": "text",
+                                "text": f"请观察截图，{verify_question}只回复要求的内容，不要多余文字。"
+                            }
+                        ]
+                    }
+                ],
+                extra_body=getattr(self, "extra_body", None),
+            )
+            self._record_usage("observe", response)
+            observation = response.choices[0].message.content.strip()
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=False)
+
+        if ocr_future is not None:
             try:
-                started = time.perf_counter()
-                elements = self.ocr.detect_ocr("screen_observe.png")
-                ocr_text = format_ocr_observation(elements)
-                elapsed = round(time.perf_counter() - started, 2)
+                elements = ocr_future.result()
+                elapsed = round(time.perf_counter() - ocr_started, 2)
                 self._last_observe_ocr_seconds = elapsed
+                ocr_text = format_ocr_observation(elements)
                 if ocr_text and ocr_text not in observation:
                     observation = f"{observation}\n[OCR]\n{ocr_text}"
-                print(f"│  🔎  滚动 OCR：{len(elements)} 个文本框，{elapsed}s")
+                print(f"│  🔎  滚动 OCR：{len(elements)} 个文本框，{elapsed}s（与观察并行）")
             except Exception as e:
                 # OCR 只是补充通道，失败不能中断滚动或让整步失败
                 print(f"│  ⚠️  滚动 OCR 失败，保留模型描述：{e}")
@@ -847,6 +1052,15 @@ class ScreenAgent:
 
         return False
 
+    def _execute_sequence(self, actions: list[dict]) -> bool:
+        """顺序执行一次响应里的多个连续动作；任一步被只读拦截则停止后续动作。"""
+        for item in actions:
+            if self._execute(item):
+                return True
+            if item.get("blocked"):
+                return False
+        return False
+
     # ══════════════════════════════════════════════════════════
     #  任务完成检测（保持原样，不改动）
     # ══════════════════════════════════════════════════════════
@@ -900,6 +1114,81 @@ class ScreenAgent:
         if isinstance(val, str):
             val = val.strip().strip("[]").split(",")[0]
         return int(float(val))
+
+    # ══════════════════════════════════════════════════════════
+    #  规则快路：控件树能证明的动作不调用视觉模型
+    # ══════════════════════════════════════════════════════════
+
+    def _rule_action(self, memory: TaskMemory) -> dict | None:
+        """尝试用规则决定本步动作；None 表示需要 VLM 判断。
+
+        命中时省掉一次决策请求（合并观察模式下也就是本步唯一的一次视觉调用）。
+        """
+        self._last_rule_seconds = 0.0
+        if not getattr(config, "RULE_FASTPATH", True):
+            return None
+        state = getattr(self, "_rule_state", None)
+        if state is None:
+            self._rule_state = state = {}
+        if state.get("disabled"):
+            return None
+
+        task = memory.task or ""
+        # 没有引号目标、也不含搜索意图时规则不会命中：跳过控件树 dump，不增加开销
+        if not rule_policy.extract_quoted_targets(task) and "搜索" not in task:
+            return None
+
+        started = time.time()
+        try:
+            xml = self.phone.dump_hierarchy()
+        except Exception as e:
+            print(f"  ⚠️  规则快路读取控件树失败，交回视觉模型：{e}")
+            state["disabled"] = True
+            return None
+        self._last_rule_seconds = time.time() - started
+
+        last_action = dict(memory.steps[-1].get("action") or {}) if memory.steps else {}
+        action = rule_policy.decide(rule_policy.RuleContext(
+            task=task,
+            step=len(memory.steps) + 1,
+            read_only=self.read_only,
+            xml=xml,
+            last_action=last_action,
+            state=state,
+            max_scrolls=int(getattr(config, "RULE_MAX_SCROLLS", 6)),
+            known_input_resource_ids=(
+                getattr(config, "WECHAT_INPUT_RESOURCE_ID", ""),
+            ),
+        ))
+        if action is None:
+            return None
+
+        record = {"name": action["rule"]["name"], "step": len(memory.steps) + 1,
+                  "saved_calls": 1}
+        self._rule_hits.append(record)
+        print(f"  ⚡ 规则快路命中：{record['name']}"
+              f"（跳过视觉决策，省 {record['saved_calls']} 次模型调用）")
+        return action
+
+    def _rule_observe(self, action: dict, memory: TaskMemory) -> str:
+        """规则步骤的观察：截图 + 控件树文字，不调用视觉模型。"""
+        self._settle_screen()
+        self._clear_observe_shot()
+        try:
+            self.phone.screenshot("screen_observe.png")
+            self._observe_valid = True
+        except Exception as e:
+            self._observe_valid = False
+            print(f"  ⚠️  规则步骤截图失败：{e}")
+            return f"[规则] {action.get('description') or action.get('action_type')}"
+
+        try:
+            text = rule_policy.screen_text(self.phone.dump_hierarchy())
+        except Exception as e:
+            text = ""
+            print(f"  ⚠️  规则步骤读取控件树失败：{e}")
+        head = f"[规则] {action.get('description') or action.get('action_type')}"
+        return f"{head}\n{text}".strip() if text else head
 
     # ══════════════════════════════════════════════════════════
     #  主循环（保持原样，不改动）
@@ -959,6 +1248,7 @@ class ScreenAgent:
         done 表示完成检测判定已完成，summary 为结束说明。
         """
         timings = dict(getattr(self, "_last_decision_timings", {}) or {})
+        self._last_reused_frame = False
         self._last_step_usage = []
         merged_active = (
             getattr(config, "MERGED_OBSERVE", True)
@@ -966,7 +1256,15 @@ class ScreenAgent:
         )
         self._last_observation_scope = "pre_action" if merged_active else "post_action"
         started = time.time()
-        if merged_active:
+        rule_action = self._rule_action(memory) if merged_active else None
+        if rule_action is not None:
+            action = rule_action
+            timings["rule_hit"] = True
+            timings["rule_name"] = action["rule"]["name"]
+            timings["rule_saved_calls"] = 1
+            timings["rule_check"] = round(self._last_rule_seconds, 2)
+            observation = ""
+        elif merged_active:
             action = self._decide(step, memory, merged=True)
             if action is None:
                 # 合并响应不合法：本步回退旧的两段式（先观察当前屏幕，再决策）
@@ -986,19 +1284,32 @@ class ScreenAgent:
                 self._observe_valid = True
         else:
             action = self._decide(step, memory)
+        if rule_action is None:
+            # 合并本步决策阶段（截图/OCR/预编码/模型）的真实耗时，
+            # 避免 step JSON 沿用上一轮的阶段数据
+            timings.update(getattr(self, "_last_decision_timings", {}) or {})
         timings["decide_total"] = round(time.time() - started, 2)
 
         # 动作只执行一次，不随观察/完成检测失败而重放
         # 动作执行后旧截图作废，观察成功才重新有效
         self._observe_valid = False
         started = time.time()
-        finished = self._execute(action)
+        if action.get("action_type") == "sequence":
+            finished = self._execute_sequence(action.get("actions") or [])
+            timings["actions"] = len(action.get("actions") or [])
+        else:
+            finished = self._execute(action)
         timings["execute"] = round(time.time() - started, 2)
 
         if merged_active:
             timings["observe"] = 0.0
             if finished:
                 observation = "任务完成"
+            elif timings.get("rule_hit"):
+                # 规则步骤没有模型返回的 observation，用截图 + 控件树文字本地补齐
+                started = time.time()
+                observation = self._rule_observe(action, memory)
+                timings["observe"] = round(time.time() - started, 2)
             else:
                 # 合并模式下这一步没有独立的观察请求；等待界面稳定，供下一步截图
                 started = time.time()
@@ -1183,6 +1494,11 @@ class ScreenAgent:
                 bucket["missing_usage_calls"] += 1
         denominator = max(int(steps), 1)
         driver = getattr(self, "driver_kind", "uiautomator2")
+        rule_hits = list(getattr(self, "_rule_hits", []) or [])
+        rule_by_name: dict[str, int] = {}
+        for item in rule_hits:
+            name = item.get("name", "unknown")
+            rule_by_name[name] = rule_by_name.get(name, 0) + 1
         return {
             "provider": getattr(config, "ACTIVE_PROVIDER", "unknown"),
             "model": getattr(self, "model", ""),
@@ -1203,6 +1519,14 @@ class ScreenAgent:
             "per_step_prompt_tokens": round(prompt / denominator, 2),
             "per_step_completion_tokens": round(completion / denominator, 2),
             "per_step_total_tokens": round(total / denominator, 2),
+            # 启动期连接预热耗时（不计入第一步）
+            "warmup_seconds": getattr(self, "_warmup_seconds", 0.0),
+            # 规则快路：命中几次、省掉几次模型调用、按规则拆分
+            "rule_fastpath": {
+                "hits": len(rule_hits),
+                "saved_calls": sum(int(item.get("saved_calls", 0)) for item in rule_hits),
+                "by_rule": rule_by_name,
+            },
             "by_provider": by_provider,
             "calls_detail": events,
         }
@@ -1233,6 +1557,7 @@ class ScreenAgent:
         try:
             record = {"step": step, "action": action, "observation": observation,
                       "driver": getattr(self, "driver_kind", "uiautomator2"),
+                      "reused_frame": bool(getattr(self, "_last_reused_frame", False)),
                       "observation_scope": getattr(self, "_last_observation_scope", "post_action")}
             if getattr(self, "_last_image_meta", None):
                 # 记录本次发送图的规格与缩放比例，便于事后核对坐标
@@ -1248,10 +1573,12 @@ class ScreenAgent:
             )
             with open(self.run_dir / f"step_{step:03d}.json", "w", encoding="utf-8") as f:
                 json.dump(record, f, ensure_ascii=False, indent=2)
-            sent_path = image_preprocess.sent_filename("screen_current.png", self._last_image_meta)
-            if os.path.exists(sent_path):
-                ext = os.path.splitext(sent_path)[1]
-                shutil.copy(sent_path, self.run_dir / f"step_{step:03d}_sent{ext}")
+            if self._last_image_meta:
+                sent_path = image_preprocess.sent_filename(
+                    "screen_current.png", self._last_image_meta)
+                if os.path.exists(sent_path):
+                    ext = os.path.splitext(sent_path)[1]
+                    shutil.copy(sent_path, self.run_dir / f"step_{step:03d}_sent{ext}")
             for src, suffix in (("screen_current.png", "current"),
                                 ("screen_observe.png", "observe")):
                 # finish 没有执行动作，screen_observe.png 是上一步的，归档会造成证据错位

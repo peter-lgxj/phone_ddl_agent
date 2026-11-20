@@ -143,6 +143,14 @@ class AdbDumpController:
         if probe:
             self._probe()
 
+    def warmup(self) -> None:
+        """启动 adb server 并确认设备在线，避免第一次 dump/screencap 付启动成本。"""
+        try:
+            self._run("start-server", timeout=20)
+            self._run("get-state", timeout=10)
+        except Exception as e:
+            print(f"  ⚠️  adb 通道预热失败：{e}")
+
     # ------------------------------------------------------------------ #
     #  adb 基础调用
     # ------------------------------------------------------------------ #
