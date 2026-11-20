@@ -94,7 +94,8 @@ def test_pipeline_dedupes_and_writes_document(tmp_path):
     assert result.write_result.ok
     assert validate_document(document)["ok"]
     assert result.trace["llm_calls"] == 0
-    assert result.trace["message_count"] == len(sample["messages"]) - 1  # 其他课程的诱饵被课程软过滤
+    # 内容粗扫只保留命中 Assignment 2 的邮件与课程群，其他诱饵来源不再抽取
+    assert result.trace["message_count"] == 2
 
 
 def test_rule_pipeline_does_not_invent_missing_deadline(tmp_path):

@@ -12,6 +12,11 @@ from .extract.normalizer import TimeNormalizer
 from .extract.rules import RuleExtractor
 from .models import AgentRunResult, RetrievalPlan
 from .planner import QueryPlanner, SourceConfigParser, select_sources
+from .query_focus import (
+    focus_records,
+    select_sources_by_content,
+    task_hints,
+)
 from .retrieval import RetrievalOrchestrator
 from .settings import TZ
 from .writer.base import DeadlineWriter
@@ -59,14 +64,32 @@ class DdlAgent:
             else self.source_parser.parse(source_config, self.sources)
         )
         plan = plan or self.planner.plan(query, selected, self.now)
+        planner_sources = list(plan.sources)
         selection: list[dict] = []
+        hints = task_hints(query)
+        # 只有查询点名了具体任务时才扩到全部候选来源做内容粗扫；
+        # 课程泛查（D10/D16）仍按规划器/相似群规则走，避免把同课其他群带进来。
+        probe_enabled = not self.fixed_sources and bool(hints)
         if not self.fixed_sources:
-            # 相似群名只扫最匹配的一个；固定来源消融时保留全部，便于对比
-            plan.sources, selection = select_sources(query, plan.sources)
+            pool = selected if probe_enabled else plan.sources
+            plan.sources, selection = select_sources(query, pool)
         stages["plan"] = round(perf_counter() - begin, 4)
 
         begin = perf_counter()
-        messages = self.orchestrator.fetch(plan)
+        source_messages = self.orchestrator.fetch_sources(plan)
+        content_decision: dict = {"enabled": False}
+        if probe_enabled:
+            chosen, content_decision = select_sources_by_content(
+                query, source_messages, fallback_sources=planner_sources
+            )
+            if chosen:
+                chosen_ids = {id(source) for source in chosen}
+                source_messages = [
+                    (source, messages) for source, messages in source_messages
+                    if id(source) in chosen_ids
+                ]
+                plan.sources = chosen
+        messages = [message for _, items in source_messages for message in items]
         stages["retrieve"] = round(perf_counter() - begin, 4)
 
         begin = perf_counter()
@@ -87,6 +110,8 @@ class DdlAgent:
         else:
             outcome = self.resolver.resolve_without_verification(clusters)
         records = [record for record in outcome.records if _within_window(record, plan)]
+        # 查询只问某个任务时，同群其他 DDL 不进最终输出；没有明确任务时不过滤
+        records, focus_decision = focus_records(query, records)
         stages["resolve"] = round(perf_counter() - begin, 4)
 
         write_result = None
@@ -109,6 +134,9 @@ class DdlAgent:
             "planner": type(self.planner).__name__,
             # 相似群名的取舍依据写进归档，便于复现“为什么只扫了这个群”
             "source_selection": selection,
+            # 内容粗扫选源与查询聚焦过滤的依据
+            "content_probe": content_decision,
+            "focus_filter": focus_decision,
             "ablation": {
                 "dedupe": self.dedupe_enabled,
                 "verify": self.verify_enabled,

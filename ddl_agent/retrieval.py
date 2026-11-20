@@ -22,14 +22,22 @@ class RetrievalOrchestrator:
         self.message_count = 0
 
     def fetch(self, plan: RetrievalPlan) -> list[RawMessage]:
-        messages: list[RawMessage] = []
-        for source in plan.sources or self.sources:
-            try:
-                messages.extend(source.fetch(plan))
-            except SourceError as exc:
-                self.warnings.append(f"{source.name}: {exc}")
+        pairs = self.fetch_sources(plan)
+        messages = [message for _, items in pairs for message in items]
         self.message_count = len(messages)
         return messages
+
+    def fetch_sources(self, plan: RetrievalPlan) -> list[tuple[MessageSource, list[RawMessage]]]:
+        """按来源返回消息，供内容粗扫在选源前复用同一次读取。"""
+        pairs: list[tuple[MessageSource, list[RawMessage]]] = []
+        for source in plan.sources or self.sources:
+            try:
+                pairs.append((source, list(source.fetch(plan))))
+            except SourceError as exc:
+                self.warnings.append(f"{source.name}: {exc}")
+                pairs.append((source, []))
+        self.message_count = sum(len(items) for _, items in pairs)
+        return pairs
 
     def supplementary(self, plan: RetrievalPlan | None, cluster: TaskCluster,
                       round_index: int) -> list[DeadlineCandidate]:
