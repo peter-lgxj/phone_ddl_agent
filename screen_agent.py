@@ -4,16 +4,14 @@ import hashlib
 import os
 import shutil
 import time
-import subprocess
 from pathlib import Path
-from phone_controller import PhoneController
+from phone_driver import create_phone_controller
 from app_launcher import AppLauncher
 from memory import TaskMemory, format_steps_compact
 from ocr_locator import (OCRLocator, mark_text_in_input_boxes, resolve_action_element,
                          canonical_action_target, should_trigger_ocr, snap_action_coords)
 import config
 import image_preprocess
-from adb_utils import ADB
 from openai import OpenAI
 import ui_state
 
@@ -190,7 +188,8 @@ class ScreenAgent:
         self.text_model = planner_cfg["model"]
         self.text_extra_body = planner_cfg.get("extra_body")
 
-        self.ocr      = OCRLocator()
+        # 控件树由当前驱动提供：u2 用 dump_hierarchy()，Android 17 回退到 adb dump
+        self.ocr      = OCRLocator(device=None)
         if getattr(config, "OCR_PREHEAT", True):
             started = time.perf_counter()
             try:
@@ -198,8 +197,15 @@ class ScreenAgent:
                 print(f"OCR 预热完成：{time.perf_counter() - started:.1f}s")
             except Exception as e:
                 print(f"  ⚠️  OCR 预热失败，首次 OCR 时再加载：{e}")
-        self.phone    = PhoneController(self.ocr)
+        self.phone    = create_phone_controller(self.ocr)
+        self.driver_kind = getattr(self.phone, "kind", "uiautomator2")
+        self.ocr.set_tree_provider(self.phone.dump_hierarchy)
         self.launcher = AppLauncher(self.phone)
+        if self.driver_kind != "uiautomator2":
+            print(
+                "  ⚠️  当前使用 adb_dump 回退驱动：截图/控件树/点击可用，"
+                "但本次不是完整 uiautomator2 链路"
+            )
         self.max_steps = max_steps or config.MAX_STEPS
         self.read_only = (
             getattr(config, "READ_ONLY_MODE", True) if read_only is None else read_only
@@ -807,11 +813,11 @@ class ScreenAgent:
                 return False
             self.phone.type_text(text)
         elif t == "send":
-            subprocess.run([ADB, "shell", "input", "keyevent", "66"])
-            print("ADB 回车发送")
+            self.phone.send()
+            print("回车发送")
         elif t == "press_enter":
-            subprocess.run([ADB, "shell", "input", "keyevent", "66"])
-            print("ADB 回车发送")
+            self.phone.press_enter()
+            print("按下回车")
         elif t == "back":
             self.phone.press_back()
         elif t == "home":
@@ -1176,9 +1182,18 @@ class ScreenAgent:
             else:
                 bucket["missing_usage_calls"] += 1
         denominator = max(int(steps), 1)
+        driver = getattr(self, "driver_kind", "uiautomator2")
         return {
             "provider": getattr(config, "ACTIVE_PROVIDER", "unknown"),
             "model": getattr(self, "model", ""),
+            # 回退驱动下任务摘要要明确标注“不是完整链路”
+            "driver": driver,
+            "driver_mode": getattr(config, "SCREEN_DRIVER", "auto"),
+            "full_pipeline": driver == "uiautomator2",
+            "driver_note": (
+                "" if driver == "uiautomator2"
+                else "ADB dump 回退：截图/控件树/点击可用，但本次不是完整 uiautomator2 链路"
+            ),
             "steps": int(steps),
             "calls": len(events),
             "missing_usage_calls": len(events) - len(valid),
@@ -1199,6 +1214,8 @@ class ScreenAgent:
             summary = self._usage_summary(len(memory.steps))
             with open(self.run_dir / "usage_summary.json", "w", encoding="utf-8") as f:
                 json.dump(summary, f, ensure_ascii=False, indent=2)
+            if not summary["full_pipeline"]:
+                print(f"  ⚠️  {summary['driver_note']}")
             if summary["calls"]:
                 print(
                     f"  💰 tokens：prompt={summary['prompt_tokens']}, "
@@ -1215,6 +1232,7 @@ class ScreenAgent:
             return
         try:
             record = {"step": step, "action": action, "observation": observation,
+                      "driver": getattr(self, "driver_kind", "uiautomator2"),
                       "observation_scope": getattr(self, "_last_observation_scope", "post_action")}
             if getattr(self, "_last_image_meta", None):
                 # 记录本次发送图的规格与缩放比例，便于事后核对坐标

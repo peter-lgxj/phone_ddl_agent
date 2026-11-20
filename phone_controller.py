@@ -4,25 +4,100 @@ from PIL import Image
 import io
 import config
 
+# 实测基线：3.7.1 是当前最新版，但仍未修复 Android 17 的 ApplicationSharedMemory 问题
+MIN_UIAUTOMATOR2_VERSION = (3, 7, 1)
+ANDROID17_ISSUE_URL = "https://github.com/openatx/uiautomator2/issues/1209"
+
+
+class Uiautomator2CompatibilityError(RuntimeError):
+    """uiautomator2 已连接但服务端 RPC 不可用（典型：Android 17）。"""
+
+
+def _parse_version(value: str) -> tuple[int, ...]:
+    numbers: list[int] = []
+    for part in str(value or "").split("."):
+        digits = "".join(char for char in part if char.isdigit())
+        if not digits:
+            break
+        numbers.append(int(digits))
+    return tuple(numbers)
+
+
+def _android_sdk() -> str:
+    """读取设备 SDK；失败时返回空串，仅用于生成更具体的报错。"""
+    try:
+        from adb_utils import ADB
+        result = subprocess.run(
+            [ADB, "shell", "getprop", "ro.build.version.sdk"],
+            capture_output=True, timeout=10,
+        )
+        return (result.stdout or b"").decode("utf-8", "replace").strip()
+    except Exception:
+        return ""
+
+
+def _compatibility_message(version: str, sdk: str, error: Exception) -> str:
+    detail = str(error)
+    if "ApplicationSharedMemory" in detail or sdk == "37":
+        return (
+            f"uiautomator2 {version or '未知版本'} 在 Android 17（SDK {sdk or '37'}）上"
+            "首次读取设备信息失败：ApplicationSharedMemory not initialized。"
+            "这是 uiautomator2 服务端与 Android 17 的已知兼容问题"
+            f"（{ANDROID17_ISSUE_URL}），截至最新版 3.7.1 仍未修复。\n"
+            "请改用 ADB 回退驱动：SCREEN_DRIVER=adb_dump python run.py；"
+            "或保持 SCREEN_DRIVER=auto（默认）让程序自动回退。"
+        )
+    upgrade = ""
+    if _parse_version(version) < MIN_UIAUTOMATOR2_VERSION:
+        upgrade = (
+            f"当前版本低于实测基线 {'.'.join(map(str, MIN_UIAUTOMATOR2_VERSION))}，"
+            "请先执行 pip install -U 'uiautomator2>=3.7.1'。"
+        )
+    return (
+        f"uiautomator2 已连接设备，但首次 RPC 失败（SDK {sdk or '未知'}）：{detail}。"
+        f"{upgrade}"
+        "若设备是 Android 17，请使用 SCREEN_DRIVER=adb_dump 回退驱动。"
+    )
+
 
 class PhoneController:
     """手机控制器：基于 uiautomator2，支持中文输入"""
+
+    kind = "uiautomator2"
 
     def __init__(self,locator):
         # 延迟导入：没有 uiautomator2 时本模块仍可被导入（CI 单测需要）
         import uiautomator2 as u2
 
+        self.locator=locator
+        version = str(getattr(u2, "__version__", "") or "")
         # 自动连接 USB 设备
         try:
             self.device = u2.connect()
         except Exception as e:
+            if "ApplicationSharedMemory" in str(e):
+                raise Uiautomator2CompatibilityError(
+                    _compatibility_message(version, _android_sdk(), e)
+                ) from e
             raise RuntimeError(
                 "无法连接手机：请确认已安装 adb 并加入 PATH、手机已开启开发者选项与 USB 调试、"
                 "`adb devices` 能看到已授权设备。"
                 f"（原始错误：{e}）"
             ) from e
-        self.locator=locator
-        print(f"已连接设备：{self.device.info.get('productName', '未知')}")
+
+        # u2.connect() 本身可能成功，真正的兼容性错误发生在第一次 RPC（d.info）
+        try:
+            info = self.device.info
+        except Exception as e:
+            raise Uiautomator2CompatibilityError(
+                _compatibility_message(version, _android_sdk(), e)
+            ) from e
+        self.version = version
+        print(f"已连接设备：{info.get('productName', '未知')}（uiautomator2 {version or '?'}）")
+
+    def dump_hierarchy(self) -> str:
+        """供 OCR 控件树通道复用；与 ADB 回退驱动保持同一接口。"""
+        return self.device.dump_hierarchy()
 
     def screenshot(self, save_path="screen.png"):
         """截图"""
@@ -167,6 +242,10 @@ class PhoneController:
         self.device.press("enter")
         print("按下回车键")
         time.sleep(0.5)
+
+    def send(self):
+        """发送消息/提交；与 press_enter 等价，便于驱动层统一拦只读动作。"""
+        self.press_enter()
 
     def long_tap(self, x, y, duration=1.0):
         """长按，用于触发输入框光标"""
