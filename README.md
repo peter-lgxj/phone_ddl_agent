@@ -163,7 +163,9 @@ $env:SCREEN_DRIVER="uiautomator2"; python run.py
 回退驱动不会改变 `ScreenAgent` 的决策、观察、OCR、settle、证据归档与 token 统计，
 因此 `step_NNN.json` 仍包含 `timings` / `usage` / `image` / `driver`，
 `experiments/summarize_timings.py`、`experiments/run_experiment.py`、`experiments/metrics.py`
-都能照常运行。但报告口径要注意：
+都能照常运行。若某步画面哈希与上一帧相同，`step_NNN.json` 顶层写 `reused_frame=true`，
+`timings.reuse_reason="hash"`，该步跳过重新截图与重编码；settle 保留了稳定帧但画面已变时，
+`reuse_reason="settle"`、`reused_frame=false`，只省截图不省编码。但报告口径要注意：
 
 - `driver=adb_dump` 的 run **不能和 `uiautomator2` run 混进同一组均值**。A/B 时把
   `driver` 当作分组变量，或在表格里单列“回退模式”。

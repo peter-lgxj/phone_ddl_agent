@@ -239,6 +239,11 @@ class ScreenAgent:
         self._rule_state = {}             # 规则快路跨步状态（已进入的群、滚动次数等）
         self._rule_hits = []              # 规则命中记录，任务结束写汇总
         self._last_rule_seconds = 0.0     # 本步规则检查（控件树 dump）耗时
+        self._last_frame_hash = None      # 上一帧截图哈希，用于同屏复用
+        self._last_frame_bytes = None     # 上一帧编码后的字节
+        self._last_frame_meta = None      # 上一帧图片元数据
+        self._pending_settle_frame = None # settle 保留的稳定帧，供下一步复用
+        self._last_reused_frame = False   # 本步是否复用了上一帧（写进 step JSON）
 
         print(f"视觉模型：{provider_name} / {self.model}")
         print(f"语义模型：{planner_name} / {self.text_model}")
@@ -481,8 +486,14 @@ class ScreenAgent:
         self._last_merged_observation = ""
         self._last_merged_ocr_text = ""
         started = time.time()
-        self.phone.screenshot("screen_current.png")
-        timings["screenshot"] = round(time.time() - started, 2)
+        current_bytes, image_meta, reused_frame = self._capture_frame(timings)
+        self._last_image_meta = image_meta
+        self._last_model_action = None
+        current_b64 = base64.b64encode(current_bytes).decode("utf-8")
+        if not reused_frame:
+            print(f"  🖼  发送图：{image_preprocess.describe(image_meta)}")
+            with open(image_preprocess.sent_filename("screen_current.png", image_meta), "wb") as f:
+                f.write(current_bytes)
 
         started = time.time()
         ocr_mode = getattr(config, "OCR_MODE", "on_demand")
@@ -504,15 +515,6 @@ class ScreenAgent:
         timings["ocr_reason"] = "always" if ocr_mode == "always" else ""
 
         started = time.time()
-        # 截图后先预处理：JPEG 编码 / 可选等比缩放；缩放比例用于把模型坐标反算回设备坐标
-        current_bytes, image_meta = image_preprocess.prepare_image_bytes("screen_current.png")
-        self._last_image_meta = image_meta
-        self._last_model_action = None
-        print(f"  🖼  发送图：{image_preprocess.describe(image_meta)}")
-        with open(image_preprocess.sent_filename("screen_current.png", image_meta), "wb") as f:
-            f.write(current_bytes)
-        current_b64 = base64.b64encode(current_bytes).decode("utf-8")
-
         if ocr_future is None:
             timings["ocr_pre"] = 0.0
 
@@ -531,7 +533,9 @@ class ScreenAgent:
         # 没带原图的早期步骤压成文字摘要
         image_steps = {img["step"] for img in history_images}
         history_text = self._build_history_text(memory, image_steps)
-        timings["preprocess"] = round(time.time() - started, 2)
+        timings["preprocess"] = round(
+            timings.get("preprocess", 0.0) + (time.time() - started), 2
+        )
 
         # 预编码与历史图准备做完后再取 OCR：此时通常已并行跑完，只剩很短的等待
         if ocr_future is not None:
@@ -800,6 +804,7 @@ class ScreenAgent:
 
         poll = max(float(getattr(config, "OBSERVE_SETTLE_POLL_SECONDS", 0.15)), 0.02)
         previous = None
+        digest = None
         try:
             while time.perf_counter() - started < max_wait:
                 self.phone.screenshot("screen_settle.png")
@@ -815,11 +820,68 @@ class ScreenAgent:
             if remaining > 0:
                 time.sleep(remaining)
         finally:
-            try:
-                os.remove("screen_settle.png")
-            except OSError:
-                pass
+            # 保留 settle 的最后一帧：下一步若哈希未变，可直接复用，省一次截图与重编码
+            if digest is not None and os.path.exists("screen_settle.png"):
+                try:
+                    os.replace("screen_settle.png", "screen_settle_last.png")
+                    self._pending_settle_frame = {
+                        "path": "screen_settle_last.png", "hash": digest,
+                    }
+                except OSError:
+                    pass
+            else:
+                try:
+                    os.remove("screen_settle.png")
+                except OSError:
+                    pass
         return round(time.perf_counter() - started, 2)
+
+    def _capture_frame(self, timings: dict) -> tuple[bytes, dict, bool]:
+        """截取当前帧；能用上一帧时跳过重新截图与重编码。
+
+        返回 (发送字节, 图片元数据, 是否复用上一帧)。哈希未变时 reused=True，
+        并在 step JSON 里写 reused_frame=true。
+        """
+        started = time.perf_counter()
+        pending = getattr(self, "_pending_settle_frame", None)
+        self._pending_settle_frame = None
+        reuse_capture = False
+        if pending and os.path.exists(pending["path"]):
+            digest = pending["hash"]
+            try:
+                shutil.copyfile(pending["path"], "screen_current.png")
+                os.remove(pending["path"])
+                reuse_capture = True
+            except OSError as e:
+                print(f"  ⚠️  settle 帧复用失败，改为重新截图：{e}")
+                digest = None
+
+        if not reuse_capture:
+            self.phone.screenshot("screen_current.png")
+            with open("screen_current.png", "rb") as f:
+                digest = hashlib.md5(f.read()).hexdigest()
+
+        last_hash = getattr(self, "_last_frame_hash", None)
+        last_bytes = getattr(self, "_last_frame_bytes", None)
+        last_meta = getattr(self, "_last_frame_meta", None)
+        reused = (digest == last_hash and last_bytes is not None)
+        self._last_reused_frame = bool(reused)
+        timings["screenshot"] = round(time.perf_counter() - started, 2)
+        timings["reused_frame"] = bool(reused)
+        timings["reuse_reason"] = "hash" if reused else ("settle" if reuse_capture else "")
+
+        if reused:
+            print("  ♻️  画面未变，复用上一帧（跳过截图与重编码）")
+            timings["preprocess"] = 0.0
+            return last_bytes, last_meta, True
+
+        encode_started = time.perf_counter()
+        data, meta = image_preprocess.prepare_image_bytes("screen_current.png")
+        timings["preprocess"] = round(time.perf_counter() - encode_started, 2)
+        self._last_frame_hash = digest
+        self._last_frame_bytes = data
+        self._last_frame_meta = meta
+        return data, meta, False
 
     def _observe(self, last_action: dict, memory: TaskMemory) -> str:
         """执行动作后截图，VL 模型描述结果；滚动类动作再叠加 OCR 文本。"""
@@ -1141,6 +1203,7 @@ class ScreenAgent:
         done 表示完成检测判定已完成，summary 为结束说明。
         """
         timings = dict(getattr(self, "_last_decision_timings", {}) or {})
+        self._last_reused_frame = False
         self._last_step_usage = []
         merged_active = (
             getattr(config, "MERGED_OBSERVE", True)
@@ -1176,6 +1239,10 @@ class ScreenAgent:
                 self._observe_valid = True
         else:
             action = self._decide(step, memory)
+        if rule_action is None:
+            # 合并本步决策阶段（截图/OCR/预编码/模型）的真实耗时，
+            # 避免 step JSON 沿用上一轮的阶段数据
+            timings.update(getattr(self, "_last_decision_timings", {}) or {})
         timings["decide_total"] = round(time.time() - started, 2)
 
         # 动作只执行一次，不随观察/完成检测失败而重放
@@ -1443,6 +1510,7 @@ class ScreenAgent:
         try:
             record = {"step": step, "action": action, "observation": observation,
                       "driver": getattr(self, "driver_kind", "uiautomator2"),
+                      "reused_frame": bool(getattr(self, "_last_reused_frame", False)),
                       "observation_scope": getattr(self, "_last_observation_scope", "post_action")}
             if getattr(self, "_last_image_meta", None):
                 # 记录本次发送图的规格与缩放比例，便于事后核对坐标
