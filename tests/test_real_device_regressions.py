@@ -1,7 +1,9 @@
 """真机报告（QQ/微信/Outlook）复现的回归用例。
 
-输入直接取 ``runs/qq_real_device_20261121`` 与 ``runs/wx_real_device_20261121``
-里归档的真实消息与当次 LLM 抽取结果；不联网、不碰手机。
+``tests/fixtures/real_device_20261121.json`` 是从
+``runs/qq_real_device_20261121`` 与 ``runs/wx_real_device_20261121`` 裁剪出的
+真实消息、当次 LLM 抽取结果与旧判分；runs 目录不进库，夹具保证 CI 可复现。
+不联网、不碰手机。
 每个 P0 修复都断言「真机旧判分」与「修复后判分」的差异。
 """
 
@@ -26,9 +28,9 @@ from ddl_agent.pipeline import DdlAgent
 from ddl_agent.settings import TZ
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNS = ROOT / "runs"
-QQ_DIR = RUNS / "qq_real_device_20261121"
-WX_DIR = RUNS / "wx_real_device_20261121"
+FIXTURE = json.loads(
+    (ROOT / "tests" / "fixtures" / "real_device_20261121.json").read_text(encoding="utf-8")
+)
 QQ_NOW = datetime(2026, 11, 21, 0, 20, tzinfo=TZ)
 WX_NOW = datetime(2026, 11, 21, 0, 50, tzinfo=TZ)
 
@@ -58,8 +60,7 @@ class _RecordedClient:
 
 
 def _qq_messages(group_id: str) -> tuple[str, list[RawMessage]]:
-    data = json.loads((QQ_DIR / "extraction.json").read_text(encoding="utf-8"))
-    spec = data[group_id]
+    spec = FIXTURE["qq"][group_id]
     messages: list[RawMessage] = []
     for index, (sender, visible_time, body) in enumerate(spec["messages"], start=1):
         match = _REL_TIME_RE.search(visible_time)
@@ -82,8 +83,7 @@ def _qq_messages(group_id: str) -> tuple[str, list[RawMessage]]:
 
 
 def _wx_messages(group_id: str) -> tuple[str, list[RawMessage]]:
-    data = json.loads((WX_DIR / "extraction.json").read_text(encoding="utf-8"))
-    spec = data[group_id]
+    spec = FIXTURE["wx"]["groups"][group_id]
     published = datetime.fromisoformat(spec["published_at"])
     return spec["group"], [
         RawMessage(
@@ -101,9 +101,7 @@ def _wx_messages(group_id: str) -> tuple[str, list[RawMessage]]:
 
 def _saved_candidates(group_id: str, wx: bool = False) -> list[DeadlineCandidate]:
     """用归档的当次抽取结果构造候选，并按修复后的语义补齐上下文字段。"""
-    folder = WX_DIR if wx else QQ_DIR
-    data = json.loads((folder / "extraction.json").read_text(encoding="utf-8"))
-    spec = data[group_id]
+    spec = FIXTURE["wx"]["groups"][group_id] if wx else FIXTURE["qq"][group_id]
     messages = {message.message_id: message for message in (
         _wx_messages(group_id)[1] if wx else _qq_messages(group_id)[1]
     )}
@@ -149,7 +147,7 @@ def _saved_candidates(group_id: str, wx: bool = False) -> list[DeadlineCandidate
 
 
 def _email_candidates() -> dict[str, DeadlineCandidate]:
-    data = json.loads((WX_DIR / "emails.json").read_text(encoding="utf-8"))
+    data = FIXTURE["wx"]["emails"]
     expected = {
         "O1": ("Final project proposal", "COMP7503", "2026-12-05T23:59:00+08:00"),
         "O2": ("Assignment 3", "COMP7503", "2026-11-30T23:59:00+08:00"),
@@ -190,10 +188,7 @@ def _get(record, key):
 
 
 def _old_task_result(task_id: str, wx: bool = True) -> list[dict]:
-    folder = WX_DIR if wx else QQ_DIR
-    data = json.loads((folder / "task_results.json").read_text(encoding="utf-8"))
-    payload = data["results"][task_id] if "results" in data else data[task_id]
-    return payload["records"]
+    return FIXTURE["old_results"][task_id]
 
 
 # ---------------------------------------------------------------- P0-1 课程代码
