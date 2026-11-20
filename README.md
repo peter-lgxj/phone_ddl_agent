@@ -91,12 +91,15 @@ set DDL_EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
 ```bash
 git clone https://github.com/peter-lgxj/phone_ddl_agent.git
 cd phone_ddl_agent
-pip install -r requirements.txt
-# 需要可复现环境时改用锁定版本（在目标机器上重新生成）：
-# pip install -r requirements-lock.txt
+# 与 CI 完全一致：运行时 + 测试依赖都从这一份锁文件安装
+pip install -r requirements-lock.txt
 ```
 
-`requirements-lock.txt` 是本项目在 Windows + Python 3.12 下实际解析出的完整版本清单（含传递依赖），仅作为参考基线；实验室机器或 GPU 环境请重新 `pip freeze`。
+`requirements-lock.txt` 是本项目在 Windows + Python 3.12 下实际解析出的完整版本清单（含传递依赖），也是 **CI 与本地安装的唯一真源**；`requirements-dev.txt` 只保留 `-r requirements-lock.txt` 的兼容入口。实验室机器或 GPU 环境请重新 `pip freeze` 替换 lock。
+
+> 新增测试依赖时只改 `requirements-lock.txt`，不要再往 `ci.yml` 里加手写 pip 清单；详见[开发与测试](#开发与测试)。
+
+`requirements.txt` 只维护运行时依赖的最低版本，供需要自行解析环境的场景参考。
 
 用 `adb devices` 确认手机已连接并完成授权。将 `.env.example` 复制为 `.env`，填写所使用服务的密钥。默认执行模型与规划模型都是 `deepseek`（`deepseek-flash`，读 `DEEPSEEK_API_KEY`）；执行模型可切回 `qwen`（`qwen-vl-max`，读 `DASHSCOPE_API_KEY`）。其他模型与接口配置见 `config.py`。
 
@@ -456,7 +459,7 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（318 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt` / `requirements-dev.txt`
+- 测试与工程化：`tests/`（326 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
@@ -576,15 +579,32 @@ CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
 ## 开发与测试
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -r requirements-lock.txt   # 与 CI 同一份依赖（含 pytest/ruff/openpyxl）
+python scripts/check_test_deps.py      # 校验 tests 的第三方 import 都已在 lock 里
 
 pytest -q          # 单元测试：动作容错、指标聚合、任务集校验、配置加载、baseline 协议
 ruff check .       # 只启用能发现真实错误的规则（E9/F63/F7/F82）
 ```
 
-CI（`.github/workflows/ci.yml`）会做语法编译、任务集 JSON 校验、runner dry-run、ruff 与 pytest。uiautomator2/easyocr/ultralytics 已改为延迟导入，CI 不需要安装它们即可导入 `screen_agent` 并执行全部单元测试（错误导入会直接失败，而不是 skip）。
+### 新增测试依赖只改一个文件
 
-另有一个 `locked-deps` job 在 **ubuntu + Python 3.12** 上按 `requirements-lock.txt` 完整安装一遍并做导入冒烟，避免锁文件长期没人验证。锁文件是在 Windows + Python 3.12 下 `pip freeze` 得到的**版本锁（未带 hash）**；Linux/Windows 的 wheel 集不同，若某版本在 Linux 缺 wheel，该 job 会直接失败。将来若用 `pip-compile --generate-hashes`（或 `uv pip compile --generate-hashes`）生成 hash 锁，替换文件后 job 会自动改用 `pip install --require-hashes`，无需改 workflow。
+1. 在 `requirements-lock.txt` 里加**精确版本**（例如 `bs4==4.12.3`），必要时在 `requirements.txt` 补最低版本；
+2. 不要改 `.github/workflows/ci.yml` 的依赖清单——CI 直接 `pip install -r requirements-lock.txt`；
+3. 本地跑 `python scripts/check_test_deps.py`（CI 也会跑）：
+   - 它静态扫描 `tests/` 的 `import`，把第三方模块映射到发行包名；
+   - 若某个 import 不在 lock 里，直接非零退出并列出引用文件；
+   - `python -m pip check` 另行校验已安装依赖之间没有冲突。
+4. 测试输入只能放 `tests/fixtures/`；**不要读 `runs/`、`output/`、`state/`**，这些目录被 `.gitignore` 忽略，CI checkout 后不存在。测试里有一条守卫会扫描这类路径拼接。
+
+### CI 行为
+
+- 触发：`push` 只在 `main`；feature 分支走 `pull_request`；另留 `workflow_dispatch` 手动触发。
+- 并发：`concurrency` 按 workflow + ref 分组，同分支新推送取消旧 run。
+- 单 job `test`（ubuntu + Python 3.12）：从 lock 安装 → `pip check` → compileall → tasks JSON → dry-run → ruff → 依赖一致性检查 → 导入冒烟 → pytest。
+
+锁文件是 Windows + Python 3.12 下 `pip freeze` 得到的**版本锁（未带 hash）**；Linux/Windows 的 wheel 集不同，缺 wheel 会直接让 job 失败。将来若用 `pip-compile --generate-hashes`（或 `uv pip compile --generate-hashes`）生成 hash 锁，workflow 会自动改用 `pip install --require-hashes`。
+
+> 历史教训：此前 `ci.yml` 另维护一份手写 pip 子集，新增测试用到 `uiautomator2` / `cv2` / `flask` 时 CI 连续红灯；现已统一为 lock 单源，并由 `check_test_deps.py` 兜底。
 
 ## 注意事项
 
