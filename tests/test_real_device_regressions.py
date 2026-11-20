@@ -332,7 +332,8 @@ def test_similar_group_names_select_only_best_match():
     _, w1 = _wx_messages("W1")
     _, w2 = _wx_messages("W2")
     kept, decisions = select_sources(
-        "搜索 COMP7503 时有两个相似群，进入正确的那个并找作业三的 DDL", [
+        "搜索「COMP7503」时有两个相似群（「COMP7503」与「COMP7503-2026」），"
+        "进入正确那个并找 DDL", [
             _CapturedSource("COMP7503课程群", "student_chat", w1),
             _CapturedSource("COMP7503-2026", "student_chat", w2),
         ],

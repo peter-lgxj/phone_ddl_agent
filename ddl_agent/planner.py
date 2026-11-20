@@ -70,15 +70,37 @@ def _is_similar_group(left: str, right: str) -> bool:
     return left_has_year != right_has_year
 
 
-def _query_match_score(name: str, query: str) -> tuple[int, float, int]:
-    """匹配分：完整群名出现在查询里最高，其次是课程代码命中；同分取更短的基名。"""
-    compact_query = normalize_source_name(query)
+def _name_in_query(name: str, query: str) -> bool:
     compact_name = normalize_source_name(name)
-    full_hit = bool(compact_name) and compact_name in compact_query
-    code_hit = bool(set(find_courses(name)) & set(find_courses(query)))
-    overlap = source_tokens(name) & source_tokens(query)
-    coverage = len(overlap) / max(1, len(source_tokens(name)))
-    return (int(full_hit) * 2 + int(code_hit), coverage, -len(compact_name))
+    return bool(compact_name) and compact_name in normalize_source_name(query)
+
+
+def _base_preference(name: str) -> tuple[int, int]:
+    """基名优先：不带年份后缀、名字更短的那个更像“主群”。"""
+    return (int(bool(re.search(r"20\d{2}", name))), len(normalize_source_name(name)))
+
+
+_AMBIGUOUS_GROUP_HINTS = ("相似", "两个", "同名", "正确那个", "歧义", "哪个")
+
+
+def _mentions_ambiguous_groups(query: str) -> bool:
+    return any(hint in query for hint in _AMBIGUOUS_GROUP_HINTS)
+
+
+def _prefer_source(candidate: str, existing: str, query: str) -> bool:
+    base, other = sorted((candidate, existing), key=_base_preference)
+    base_named = _name_in_query(base, query)
+    other_named = _name_in_query(other, query)
+
+    if other_named and not base_named:
+        # 查询明确点名年份/序号变体，但同时又提示「有两个相似群」时，仍回到底名主群
+        if _base_preference(other) > _base_preference(base) and _mentions_ambiguous_groups(query):
+            return candidate == base
+        return candidate == other
+    if base_named and not other_named:
+        return candidate == base
+    # 两个都点名或都没点名：基名优先，避免把「COMP7503-2026」当成主群
+    return candidate == base
 
 
 def select_sources(query: str, sources: list) -> tuple[list, list[dict]]:
@@ -101,7 +123,7 @@ def select_sources(query: str, sources: list) -> tuple[list, list[dict]]:
 
         index, existing = match
         existing_name = str(getattr(existing, "name", existing))
-        if _query_match_score(name, query) <= _query_match_score(existing_name, query):
+        if not _prefer_source(name, existing_name, query):
             decisions.append(
                 _selection_entry(
                     kept=existing_name,
