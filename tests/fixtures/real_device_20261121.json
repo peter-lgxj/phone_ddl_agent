@@ -121,6 +121,67 @@
     }
    ]
   },
+  "G3": {
+   "group": "COMP7415 课程群",
+   "messages": [
+    [
+     "如风",
+     "昨天 23:51",
+     "【期末报告】COMP7415 期末报告，12.06 23:59 前交，交到 Moodle"
+    ],
+    [
+     "群主 さ`扑梦成空丶",
+     "昨天 23:51",
+     "收到"
+    ],
+    [
+     "如风",
+     "昨天 23:51",
+     "【课程设计】COMP7506 课程设计，12.02 23:59 前交，交到课程网站"
+    ],
+    [
+     "群主 さ`扑梦成空丶",
+     "昨天 23:51",
+     "谢谢"
+    ]
+   ],
+   "candidates": [
+    {
+     "candidate_id": "G3-1:llm1",
+     "task_name_raw": "期末报告",
+     "course": "COMP7415",
+     "deadline_raw": "12.06 23:59 前",
+     "deadline_iso": "2026-12-06T23:59:00+08:00",
+     "source_type": "student_chat",
+     "source_name": "COMP7415 课程群",
+     "published_at": "2026-11-21 00:20:00+08:00",
+     "message_id": "G3-1",
+     "message_subject": "QQ / COMP7415 课程群",
+     "missing_fields": [],
+     "unresolved_time": false,
+     "extractor_confidence": 0.95,
+     "needs_review": false,
+     "review_reason": ""
+    },
+    {
+     "candidate_id": "G3-3:llm1",
+     "task_name_raw": "课程设计",
+     "course": "COMP7506",
+     "deadline_raw": "12.02 23:59 前",
+     "deadline_iso": "2026-12-02T23:59:00+08:00",
+     "source_type": "student_chat",
+     "source_name": "COMP7415 课程群",
+     "published_at": "2026-11-21 00:20:00+08:00",
+     "message_id": "G3-3",
+     "message_subject": "QQ / COMP7415 课程群",
+     "missing_fields": [],
+     "unresolved_time": false,
+     "extractor_confidence": 0.95,
+     "needs_review": false,
+     "review_reason": ""
+    }
+   ]
+  },
   "G4": {
    "group": "COMP7503 作业通知群",
    "messages": [
@@ -560,6 +621,398 @@
       "review_reason": "课程 COMP7506 未在该条消息正文中出现"
      }
     ]
+   },
+   "W5": {
+    "group": "LLM小组",
+    "published_at": "2026-11-20T22:13:00+08:00",
+    "messages": [
+     [
+      "叶小凡",
+      "机器学习作业三，11.29 23:59 交到 Moodle"
+     ],
+     [
+      "叶小凡",
+      "今晚 8 点线上过一遍方案，主要把数据接口对齐，谁有空谁来"
+     ],
+     [
+      "叶小凡",
+      "我把上周的会议纪要整理了一下，三条结论：一，分工按模块走不按人走；二，接口定义下周三前冻结；三，实验只做一遍，够不够另说"
+     ],
+     [
+      "leaffff",
+      "关于第二点补充一下，冻结之后改接口要全员同意，不然前端那边会白做"
+     ],
+     [
+      "leaffff",
+      "前端说字段名统一用下划线，别混驼峰"
+     ],
+     [
+      "叶小凡",
+      "我看了下现有代码，配置是硬编码的，得抽出来放到一个文件里"
+     ],
+     [
+      "叶小凡",
+      "抽配置这件事我来做，今晚提交"
+     ],
+     [
+      "叶小凡",
+      "模型那边跑通了吗，我这边看日志还是报错"
+     ],
+     [
+      "leaffff",
+      "报的是显存不够，8G 卡跑不动这个 batch size"
+     ],
+     [
+      "叶小凡",
+      "那就把 batch 降到 4，梯度累积两步顶上"
+     ],
+     [
+      "叶小凡",
+      "累积两步是等价的，但要注意归一化层的统计量"
+     ],
+     [
+      "叶小凡",
+      "我们这版没用 BN，是 LayerNorm，问题不大"
+     ],
+     [
+      "leaffff",
+      "好，那我今晚改成 batch 4 再跑一次，跑完把曲线发群里"
+     ],
+     [
+      "leaffff",
+      "顺手问一句，报告要写多长，有没有页数限制"
+     ],
+     [
+      "叶小凡",
+      "老师说 8 页以内，参考文献不算页数"
+     ],
+     [
+      "leaffff",
+      "那图表可以放附录吗"
+     ],
+     [
+      "叶小凡",
+      "可以，但正文要能自洽，别让读者翻附录才看懂"
+     ],
+     [
+      "leaffff",
+      "我把图表都重画了一遍，统一风格，配色用同一套"
+     ],
+     [
+      "leaffff",
+      "明天下午我在实验室，谁要当面讨论可以过来"
+     ],
+     [
+      "叶小凡",
+      "我周四在，周三全天有课"
+     ],
+     [
+      "leaffff",
+      "那就周四下午三点，实验室 3 楼靠窗那排"
+     ],
+     [
+      "叶小凡",
+      "【置顶】小组作业提交：11.20 23:59 前把 report 传到共享文件夹，命名 组号_姓名.pdf"
+     ],
+     [
+      "leaffff",
+      "收到"
+     ],
+     [
+      "leaffff",
+      "我今晚传"
+     ],
+     [
+      "leaffff",
+      "文件夹权限给一下，我打不开"
+     ],
+     [
+      "叶小凡",
+      "已经开了，刷新一下"
+     ],
+     [
+      "叶小凡",
+      "作业三再提醒一次，11.29 23:59，别拖"
+     ],
+     [
+      "叶小凡",
+      "课程报告 12.05 23:59，跟上面那个不是一回事，别混"
+     ],
+     [
+      "leaffff",
+      "好的，两个都记下了"
+     ],
+     [
+      "叶小凡",
+      "嗯嗯"
+     ]
+    ],
+    "candidates": [
+     {
+      "candidate_id": "W5-1:llm1",
+      "task_name_raw": "机器学习作业三",
+      "course": null,
+      "deadline_raw": "11.29 23:59",
+      "deadline_iso": "2026-11-29T23:59:00+08:00",
+      "source_type": "student_chat",
+      "source_name": "LLM小组",
+      "published_at": "2026-11-20 22:13:00+08:00",
+      "message_id": "W5-1",
+      "message_subject": "微信 / LLM小组",
+      "missing_fields": [
+       "course"
+      ],
+      "unresolved_time": false,
+      "extractor_confidence": 0.95,
+      "needs_review": false,
+      "review_reason": ""
+     },
+     {
+      "candidate_id": "W5-3:llm1",
+      "task_name_raw": "接口定义冻结",
+      "course": null,
+      "deadline_raw": "下周三前",
+      "deadline_iso": "2026-11-25T23:59:59+08:00",
+      "source_type": "student_chat",
+      "source_name": "LLM小组",
+      "published_at": "2026-11-20 22:13:00+08:00",
+      "message_id": "W5-3",
+      "message_subject": "微信 / LLM小组",
+      "missing_fields": [
+       "course"
+      ],
+      "unresolved_time": false,
+      "extractor_confidence": 0.85,
+      "needs_review": false,
+      "review_reason": ""
+     },
+     {
+      "candidate_id": "W5-7:llm1",
+      "task_name_raw": "抽配置",
+      "course": null,
+      "deadline_raw": "今晚提交",
+      "deadline_iso": "2026-11-21T23:59:59+08:00",
+      "source_type": "student_chat",
+      "source_name": "LLM小组",
+      "published_at": "2026-11-20 22:13:00+08:00",
+      "message_id": "W5-7",
+      "message_subject": "微信 / LLM小组",
+      "missing_fields": [
+       "course"
+      ],
+      "unresolved_time": false,
+      "extractor_confidence": 0.6,
+      "needs_review": true,
+      "review_reason": ""
+     },
+     {
+      "candidate_id": "W5-22:llm1",
+      "task_name_raw": "小组作业提交（report）",
+      "course": null,
+      "deadline_raw": "11.20 23:59 前",
+      "deadline_iso": "2026-11-20T23:59:00+08:00",
+      "source_type": "student_chat",
+      "source_name": "LLM小组",
+      "published_at": "2026-11-20 22:13:00+08:00",
+      "message_id": "W5-22",
+      "message_subject": "微信 / LLM小组",
+      "missing_fields": [
+       "course"
+      ],
+      "unresolved_time": false,
+      "extractor_confidence": 0.95,
+      "needs_review": false,
+      "review_reason": ""
+     },
+     {
+      "candidate_id": "W5-27:llm1",
+      "task_name_raw": "作业三",
+      "course": null,
+      "deadline_raw": "11.29 23:59",
+      "deadline_iso": "2026-11-29T23:59:00+08:00",
+      "source_type": "student_chat",
+      "source_name": "LLM小组",
+      "published_at": "2026-11-20 22:13:00+08:00",
+      "message_id": "W5-27",
+      "message_subject": "微信 / LLM小组",
+      "missing_fields": [
+       "course"
+      ],
+      "unresolved_time": false,
+      "extractor_confidence": 0.95,
+      "needs_review": false,
+      "review_reason": ""
+     },
+     {
+      "candidate_id": "W5-28:llm1",
+      "task_name_raw": "课程报告",
+      "course": null,
+      "deadline_raw": "12.05 23:59",
+      "deadline_iso": "2026-12-05T23:59:00+08:00",
+      "source_type": "student_chat",
+      "source_name": "LLM小组",
+      "published_at": "2026-11-20 22:13:00+08:00",
+      "message_id": "W5-28",
+      "message_subject": "微信 / LLM小组",
+      "missing_fields": [
+       "course"
+      ],
+      "unresolved_time": false,
+      "extractor_confidence": 0.9,
+      "needs_review": false,
+      "review_reason": ""
+     }
+    ]
+   },
+   "W6": {
+    "group": "实习内推群",
+    "published_at": "2026-11-20T22:07:00+08:00",
+    "messages": [
+     [
+      "叶小凡",
+      "某厂 2026 暑期实习，算法 / 后端都要，网申截止 11.21，简历发我邮箱"
+     ],
+     [
+      "叶小凡",
+      "base 深圳，日薪 200 起"
+     ],
+     [
+      "叶小凡",
+      "网申链接放群公告了，11.21 之后系统就关了"
+     ],
+     [
+      "叶小凡",
+      "有同学问能不能远程，可以，但每周至少到岗 3 天"
+     ],
+     [
+      "叶小凡",
+      "简历记得写项目经历，别只写课程"
+     ]
+    ],
+    "candidates": [
+     {
+      "candidate_id": "W6-3:llm1",
+      "task_name_raw": "网申",
+      "course": null,
+      "deadline_raw": "11.21 之后系统就关了",
+      "deadline_iso": "2026-11-21T23:59:59+08:00",
+      "source_type": "student_chat",
+      "source_name": "实习内推群",
+      "published_at": "2026-11-20 22:07:00+08:00",
+      "message_id": "W6-3",
+      "message_subject": "微信 / 实习内推群",
+      "missing_fields": [
+       "course"
+      ],
+      "unresolved_time": false,
+      "extractor_confidence": 0.55,
+      "needs_review": true,
+      "review_reason": ""
+     }
+    ]
+   },
+   "W7": {
+    "group": "家人群",
+    "published_at": "2026-11-20T22:08:00+08:00",
+    "messages": [
+     [
+      "叶小凡",
+      "周六聚餐报名截止，11.20 之前跟我说，我好订位"
+     ],
+     [
+      "leaffff",
+      "我带酒"
+     ],
+     [
+      "leaffff",
+      "孩子不吃辣，点菜注意"
+     ],
+     [
+      "叶小凡",
+      "订了 6 点的位子"
+     ],
+     [
+      "叶小凡",
+      "报名截止那天别忘了，过了就不加了"
+     ]
+    ],
+    "candidates": []
+   },
+   "W8": {
+    "group": "闲聊群",
+    "published_at": "2026-11-20T22:09:00+08:00",
+    "messages": [
+     [
+      "叶小凡",
+      "今天有人去图书馆吗，帮我占个位"
+     ],
+     [
+      "叶小凡",
+      "llm 的 ddl 是 11.31，反正我先记这个"
+     ],
+     [
+      "leaffff",
+      "11.31 是几号啊，有这样写的吗"
+     ],
+     [
+      "叶小凡",
+      "别问了，反正交了就行"
+     ],
+     [
+      "leaffff",
+      "我下午去图书馆，占三楼"
+     ],
+     [
+      "leaffff",
+      "谁有充电器借我一下，忘带了"
+     ],
+     [
+      "叶小凡",
+      "食堂新开那家排队排到门口了"
+     ],
+     [
+      "叶小凡",
+      "晚上打球吗，三缺一"
+     ],
+     [
+      "leaffff",
+      "我膝盖还没好，pass"
+     ],
+     [
+      "叶小凡",
+      "那改天"
+     ],
+     [
+      "叶小凡",
+      "周末有谁回家，帮我带点东西"
+     ],
+     [
+      "leaffff",
+      "我回，你要带啥"
+     ]
+    ],
+    "candidates": [
+     {
+      "candidate_id": "W8-2:llm1",
+      "task_name_raw": "llm",
+      "course": null,
+      "deadline_raw": "11.31",
+      "deadline_iso": null,
+      "source_type": "student_chat",
+      "source_name": "闲聊群",
+      "published_at": "2026-11-20 22:09:00+08:00",
+      "message_id": "W8-2",
+      "message_subject": "微信 / 闲聊群",
+      "missing_fields": [
+       "course",
+       "deadline"
+      ],
+      "unresolved_time": true,
+      "extractor_confidence": 0.2,
+      "needs_review": true,
+      "review_reason": ""
+     }
+    ]
    }
   },
   "emails": {
@@ -584,6 +1037,102 @@
   }
  },
  "old_results": {
+  "Q01": [
+   {
+    "task_name": "实验报告二",
+    "course": null,
+    "deadline_iso": "2026-11-22T23:59:00+08:00",
+    "status": "confirmed",
+    "source": "2026 计算机班级群 (student_chat)",
+    "evidence_ids": [
+     "G1-4:llm1"
+    ],
+    "sources": [
+     "2026 计算机班级群 (student_chat)"
+    ],
+    "confidence": 0.95,
+    "resolution_note": "单一来源",
+    "alternatives": [],
+    "updated_at": null
+   },
+   {
+    "task_name": "机器学习作业三",
+    "course": "COMP7503",
+    "deadline_iso": "2026-11-29T23:59:00+08:00",
+    "status": "confirmed",
+    "source": "2026 计算机班级群 (student_chat)",
+    "evidence_ids": [
+     "G1-1:llm1"
+    ],
+    "sources": [
+     "2026 计算机班级群 (student_chat)"
+    ],
+    "confidence": 0.95,
+    "resolution_note": "单一来源",
+    "alternatives": [],
+    "updated_at": null
+   }
+  ],
+  "Q02": [
+   {
+    "task_name": "实验报告二",
+    "course": null,
+    "deadline_iso": "2026-11-22T23:59:00+08:00",
+    "status": "confirmed",
+    "source": "2026 计算机班级群 (student_chat)",
+    "evidence_ids": [
+     "G1-4:llm1"
+    ],
+    "sources": [
+     "2026 计算机班级群 (student_chat)"
+    ],
+    "confidence": 0.95,
+    "resolution_note": "单一来源",
+    "alternatives": [],
+    "updated_at": null
+   },
+   {
+    "task_name": "机器学习作业三",
+    "course": "COMP7503",
+    "deadline_iso": "2026-11-29T23:59:00+08:00",
+    "status": "confirmed",
+    "source": "2026 计算机班级群 (student_chat)",
+    "evidence_ids": [
+     "G1-1:llm1"
+    ],
+    "sources": [
+     "2026 计算机班级群 (student_chat)"
+    ],
+    "confidence": 0.95,
+    "resolution_note": "单一来源",
+    "alternatives": [],
+    "updated_at": null
+   }
+  ],
+  "Q03": [
+   {
+    "task_name": "操作系统作业一",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "COMP7503 作业通知群 (student_chat)",
+    "evidence_ids": [
+     "G4-1:llm1",
+     "G4-3:llm1",
+     "G4-5:llm1"
+    ],
+    "sources": [
+     "COMP7503 作业通知群 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "冲突未能可靠裁决（三条记录均来自同一来源且可信度相同，其中两条写 11.26、一条写 11.28，发布时间相同，无法判定哪条更新或更权威。），追加检索 0 轮，标记 uncertain 交人工",
+    "alternatives": [
+     "2026-11-26T23:59:00+08:00",
+     "2026-11-28T23:59:00+08:00"
+    ],
+    "updated_at": null
+   }
+  ],
   "Q04": [
    {
     "task_name": "实验报告二",
@@ -662,6 +1211,112 @@
     "alternatives": [
      "2026-11-29T23:59:00+08:00"
     ],
+    "updated_at": null
+   }
+  ],
+  "W-D10": [
+   {
+    "task_name": "作业三",
+    "course": null,
+    "deadline_iso": "2026-11-29T23:59:00+08:00",
+    "status": "confirmed",
+    "source": "LLM小组 (student_chat)",
+    "evidence_ids": [
+     "W5-27:llm1"
+    ],
+    "sources": [
+     "LLM小组 (student_chat)"
+    ],
+    "confidence": 0.95,
+    "resolution_note": "单一来源",
+    "alternatives": [],
+    "updated_at": null
+   },
+   {
+    "task_name": "小组作业提交",
+    "course": null,
+    "deadline_iso": "2026-11-20T23:59:00+08:00",
+    "status": "confirmed",
+    "source": "LLM小组 (student_chat)",
+    "evidence_ids": [
+     "W5-22:llm1"
+    ],
+    "sources": [
+     "LLM小组 (student_chat)"
+    ],
+    "confidence": 0.95,
+    "resolution_note": "单一来源",
+    "alternatives": [],
+    "updated_at": null
+   },
+   {
+    "task_name": "抽配置",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "LLM小组 (student_chat)",
+    "evidence_ids": [
+     "W5-7:llm1"
+    ],
+    "sources": [
+     "LLM小组 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "抽取置信度不足，标记 uncertain 交人工",
+    "alternatives": [
+     "2026-11-21T23:59:59+08:00"
+    ],
+    "updated_at": null
+   },
+   {
+    "task_name": "接口定义冻结",
+    "course": null,
+    "deadline_iso": "2026-11-25T23:59:59+08:00",
+    "status": "confirmed",
+    "source": "LLM小组 (student_chat)",
+    "evidence_ids": [
+     "W5-3:llm1"
+    ],
+    "sources": [
+     "LLM小组 (student_chat)"
+    ],
+    "confidence": 0.95,
+    "resolution_note": "单一来源",
+    "alternatives": [],
+    "updated_at": null
+   },
+   {
+    "task_name": "机器学习作业三",
+    "course": null,
+    "deadline_iso": "2026-11-29T23:59:00+08:00",
+    "status": "confirmed",
+    "source": "LLM小组 (student_chat)",
+    "evidence_ids": [
+     "W5-1:llm1"
+    ],
+    "sources": [
+     "LLM小组 (student_chat)"
+    ],
+    "confidence": 0.95,
+    "resolution_note": "单一来源",
+    "alternatives": [],
+    "updated_at": null
+   },
+   {
+    "task_name": "课程报告",
+    "course": null,
+    "deadline_iso": "2026-12-05T23:59:00+08:00",
+    "status": "confirmed",
+    "source": "LLM小组 (student_chat)",
+    "evidence_ids": [
+     "W5-28:llm1"
+    ],
+    "sources": [
+     "LLM小组 (student_chat)"
+    ],
+    "confidence": 0.95,
+    "resolution_note": "单一来源",
+    "alternatives": [],
     "updated_at": null
    }
   ],
@@ -744,6 +1399,124 @@
     "alternatives": [
      "2026-11-29T23:59:00+08:00"
     ],
+    "updated_at": null
+   }
+  ],
+  "W-D15": [
+   {
+    "task_name": "机器学习作业二",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "COMP7503课程群 (student_chat)",
+    "evidence_ids": [
+     "W1-2:llm1"
+    ],
+    "sources": [
+     "COMP7503课程群 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "抽取置信度不足，标记 uncertain 交人工",
+    "alternatives": [
+     "2026-11-15T23:59:00+08:00"
+    ],
+    "updated_at": null
+   },
+   {
+    "task_name": "机器学习作业三",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "COMP7503课程群 (student_chat)",
+    "evidence_ids": [
+     "W1-14:llm1"
+    ],
+    "sources": [
+     "COMP7503课程群 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "抽取置信度不足，标记 uncertain 交人工",
+    "alternatives": [
+     "2026-11-29T23:59:00+08:00"
+    ],
+    "updated_at": null
+   }
+  ],
+  "W-D16": [
+   {
+    "task_name": "机器学习作业二",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "COMP7503课程群 (student_chat)",
+    "evidence_ids": [
+     "W1-2:llm1"
+    ],
+    "sources": [
+     "COMP7503课程群 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "抽取置信度不足，标记 uncertain 交人工",
+    "alternatives": [
+     "2026-11-15T23:59:00+08:00"
+    ],
+    "updated_at": null
+   },
+   {
+    "task_name": "机器学习作业三",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "COMP7503课程群 (student_chat)",
+    "evidence_ids": [
+     "W1-14:llm1"
+    ],
+    "sources": [
+     "COMP7503课程群 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "抽取置信度不足，标记 uncertain 交人工",
+    "alternatives": [
+     "2026-11-29T23:59:00+08:00"
+    ],
+    "updated_at": null
+   }
+  ],
+  "W-D17": [
+   {
+    "task_name": "llm",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "闲聊群 (student_chat)",
+    "evidence_ids": [
+     "W8-2:llm1"
+    ],
+    "sources": [
+     "闲聊群 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "时间表达无法可靠解析，标记 uncertain 交人工",
+    "alternatives": [],
+    "updated_at": null
+   }
+  ],
+  "W-D18": [
+   {
+    "task_name": "llm",
+    "course": null,
+    "deadline_iso": null,
+    "status": "uncertain",
+    "source": "闲聊群 (student_chat)",
+    "evidence_ids": [
+     "W8-2:llm1"
+    ],
+    "sources": [
+     "闲聊群 (student_chat)"
+    ],
+    "confidence": 0.4,
+    "resolution_note": "时间表达无法可靠解析，标记 uncertain 交人工",
+    "alternatives": [],
     "updated_at": null
    }
   ]

@@ -24,6 +24,11 @@ _TASK_PATTERNS = [
         r"\s*[-_ ]?(?:No\.?\s*)?\d+)",
         re.IGNORECASE,
     ),
+    # 【机器学习作业三】这类通知标题：保留中文科目前缀，避免只抽到「作业三」
+    re.compile(
+        r"【[^】]{0,20}】\s*(?P<name>(?:[\u4e00-\u9fff]{2,8})?"
+        r"(?:作业|实验报告|报告|项目|论文|考试|课程设计)\s*[一二三四五六七八九十\d]+)"
+    ),
     re.compile(r"(?P<name>(?:大作业|作业|实验|报告|项目|论文|考试)\s*[一二三四五六七八九十\d]+)"),
     re.compile(r"(?P<name>(?:Midterm|Final)\s+(?:Exam|Project|Report|Presentation))", re.IGNORECASE),
 ]
