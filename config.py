@@ -105,7 +105,10 @@ WECHAT_INPUT_RESOURCE_ID = "com.tencent.mm:id/b4z"
 # ============================================================
 
 # 最大执行步数：与 test.md 实验规程的 30 步保持一致，可用环境变量覆盖（如 MAX_STEPS=20）
+# 步数按「模型请求」计：一次响应里用 actions 数组返回多个连续动作也只算一步。
 MAX_STEPS = int(os.getenv("MAX_STEPS", "30"))
+# 一次响应最多接受几个连续动作；超出部分截断，避免单个请求里塞入不可控的动作序列
+MAX_ACTIONS_PER_STEP = int(os.getenv("MAX_ACTIONS_PER_STEP", "3"))
 STEP_RETRIES = 2            # 单步失败后的重试次数，避免一次 API 抖动直接判任务失败
 # 生产读屏默认只读：拒绝 send / press_enter / type 等会在群内发言或改动内容的动作。
 # 单独跑任务脚本（run.py / multi_agent.py）时可设 READ_ONLY_MODE=0 关闭。

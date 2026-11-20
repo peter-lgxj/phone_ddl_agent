@@ -208,7 +208,8 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 |---|---|
 | `ACTIVE_PROVIDER` | 执行模型（视觉），默认 `deepseek` → `deepseek-flash`，需要 `DEEPSEEK_API_KEY`；可设 `qwen` / `zhipu` / `openai` / `local` |
 | `PLANNER_PROVIDER` | 规划/语义模型，默认 `deepseek`（`deepseek-flash`），单任务与多应用模式都读这一项；可切回 `qwen3` |
-| `MAX_STEPS` / `STEP_RETRIES` | 最大步数（默认 30，可用同名环境变量覆盖）与单步失败重试次数 |
+| `MAX_STEPS` / `STEP_RETRIES` | 最大步数（默认 30，可用同名环境变量覆盖）与单步失败重试次数。步数按**模型请求**计：一次响应用 `actions` 数组返回多个连续动作也只算一步 |
+| `MAX_ACTIONS_PER_STEP` | 一次响应最多接受的连续动作数，默认 3；超出截断。动作按顺序执行，`step_NNN.json` 里记 `action_type="sequence"` 与 `actions` 数组 |
 | `READ_ONLY_MODE` | 只读保护，默认开启：拒绝 `send` / `press_enter` / `type`，monitor 生产读屏强制开启；单独跑任务脚本时可置 0 |
 | `SCREEN_DRIVER` | 屏幕驱动：`auto`（默认，u2 不可用时自动回退 `adb_dump`）/ `uiautomator2`（强制 u2，失败明确报错）/ `adb_dump`（Android 17 回退） |
 | `LLM_TEMPERATURE` | 决策与观察调用温度，默认 0.0，保证重复实验可比 |

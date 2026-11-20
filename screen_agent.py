@@ -73,13 +73,27 @@ def consecutive_unresolved_targets(steps: list[dict], target: str) -> int:
     return count
 
 
+def effective_action_type(action: dict) -> str:
+    """多动作序列按最后一个子动作判断类型（观察问题、滚动 OCR 都依赖它）。"""
+    if not isinstance(action, dict):
+        return ""
+    if action.get("action_type") == "sequence":
+        items = action.get("actions") or []
+        return str((items[-1] if items else {}).get("action_type") or "").lower()
+    return str(action.get("action_type") or "").lower()
+
+
 def build_observe_question(last_action: dict, memory) -> str:
     """按动作类型构造观察问题。
 
     滚动类动作不能只让模型说一句“这是某界面”，否则聊天正文永远进不了
     observation；这里要求逐条列出可见消息，作为 OCR 之外的第一层文本来源。
     """
-    action_type = str(last_action.get("action_type") or "").lower()
+    action_type = effective_action_type(last_action)
+    if last_action.get("action_type") == "sequence":
+        items = last_action.get("actions") or []
+        if items:
+            last_action = items[-1]
     action_desc = last_action.get("description", "")
 
     if action_type == "type":
@@ -361,7 +375,7 @@ class ScreenAgent:
     {coord_rule}
     2. 已打开的 App 不要重复 open_app
     {progress_rule}
-    4. 每次只返回一个动作
+    4. 默认每次只返回一个动作；只有连续动作彼此不依赖时（例如连续两次 swipe、swipe 后 back）才可用 "actions" 数组一次返回，程序按顺序执行、仍只算一步；需要看执行结果再决定的一律只返回一个动作
     5. 可直接打开的 App：{known_apps}
     6. 搜索框输入后，查看搜索结果并选择目标；聊天消息输入后才使用 send
     7. 历史中验证结果包含"输入成功"只表示文字已输入，不表示搜索或发送已完成
@@ -387,7 +401,8 @@ class ScreenAgent:
     "summary": "（finish时填）",
     "description": "本步操作一句话描述",
     "target": "（tap时填）要点击元素的文字或描述，用于精确定位",
-    "task_done": 布尔值（整项任务是否已全部完成，未完成填 false）
+    "task_done": 布尔值（整项任务是否已全部完成，未完成填 false）,
+    "actions": [{{"action_type": "swipe", "x": 数字, "y": 数字, "x2": 数字, "y2": 数字}}]
     }}
 
     ## 只返回 JSON，注意：
@@ -475,7 +490,7 @@ class ScreenAgent:
             ocr_result = self.ocr.format_for_prompt("screen_current.png")
         # 合并观察时，上一步若为滚动动作，仍然把当前屏幕 OCR 原文并入 observation
         if merged and memory.steps:
-            prev_type = str((memory.steps[-1].get("action") or {}).get("action_type") or "").lower()
+            prev_type = effective_action_type(memory.steps[-1].get("action") or {})
             if (getattr(config, "OBSERVE_OCR_ENABLED", False)
                     and prev_type in getattr(config, "OBSERVE_OCR_ACTIONS", {"swipe", "scroll"})):
                 try:
@@ -562,7 +577,7 @@ class ScreenAgent:
 
         if merged:
             if (not isinstance(action, dict) or "observation" not in action
-                    or not action.get("action_type")):
+                    or not (action.get("action_type") or action.get("actions"))):
                 print(f"  ⚠️  合并响应缺少 observation/action，回退两段式")
                 self._last_merged_parse_failed = True
                 self._last_decision_timings = timings
@@ -574,6 +589,42 @@ class ScreenAgent:
                     f"{self._last_merged_observation}\n[OCR]\n{self._last_merged_ocr_text}"
                 ).strip()
 
+        # 一次响应可返回多个连续动作（步骤语义仍按请求计）
+        raw_actions = None
+        if isinstance(action.get("actions"), list):
+            raw_actions = [
+                item for item in action["actions"]
+                if isinstance(item, dict) and item.get("action_type")
+            ]
+        if raw_actions:
+            limit = max(1, int(getattr(config, "MAX_ACTIONS_PER_STEP", 3)))
+            raw_actions = raw_actions[:limit]
+            cache = {}
+            mapped_actions = []
+            for item in raw_actions:
+                item = image_preprocess.map_action_coords(item, image_meta)
+                mapped_actions.append(
+                    self._snap_mapped_action(item, timings, memory, cache))
+            if image_meta.get("resized"):
+                self._last_model_action = {"actions": raw_actions}
+            timings["sequence_len"] = len(mapped_actions)
+            mapped = {
+                "action_type": "sequence",
+                "actions": mapped_actions,
+                "thought": action.get("thought", ""),
+                "description": "；".join(
+                    item.get("description") or item.get("action_type", "")
+                    for item in mapped_actions
+                ),
+                "target": "",
+                "task_done": bool(
+                    action.get("task_done")
+                    or any(item.get("task_done") for item in mapped_actions)
+                ),
+            }
+            self._last_decision_timings = timings
+            return mapped
+
         # 缩放过才反算；未缩放时 map_action_coords 原样返回，不引入偏移
         mapped = image_preprocess.map_action_coords(action, image_meta)
         keys = ("x", "y", "x2", "y2")
@@ -583,112 +634,127 @@ class ScreenAgent:
                   f"{ {k: mapped[k] for k in keys if k in mapped} }")
 
         # tap 后统一收集候选：单个匹配直接吸附，多个匹配按模型坐标就近吸附。
-        if should_trigger_ocr(ocr_mode, mapped.get("action_type", "")):
-            snap_mode = getattr(config, "OCR_SNAP_MODE", "tree_first")
-            max_distance = int(getattr(config, "OCR_SNAP_MAX_DISTANCE", 80))
-            snap_source = "none"
-            moves = []
-            candidates = []
-            tree_elements = []
-            tree_elapsed = ocr_elapsed = 0.0
-            yolo_elapsed = 0.0
-            tree_count = ocr_count = 0
-            ocr_meta = {}
-
-            if snap_mode in ("tree_first", "tree_only"):
-                started = time.time()
-                try:
-                    tree_elements = self.ocr.detect_tree()
-                except Exception as e:
-                    print(f"  ⚠️  控件树读取失败，继续走 OCR：{e}")
-                    tree_elements = []
-                tree_elapsed = round(time.time() - started, 2)
-                tree_count = len(tree_elements)
-                candidates.extend(tree_elements)
-
-            target = str(mapped.get("target") or "").strip()
-            description = str(mapped.get("description") or "")
-            wants_search = "搜索" in target or "放大镜" in target
-            wants_contact = any(word in description + target
-                                for word in ("联系人", "群聊", "聊天项"))
-            needs_input_boxes = wants_contact and not any(
-                item.get("type") == "input" for item in tree_elements)
-            if (snap_mode == "tree_first"
-                    and getattr(config, "SEARCH_ICON_DETECTION", True)
-                    and (wants_search or needs_input_boxes)):
-                started = time.time()
-                try:
-                    detector = getattr(self, "_gui_detector", None)
-                    if detector is None:
-                        from input_detector import InputDetector
-                        detector = self._gui_detector = InputDetector()
-                    detections = detector.detect("screen_current.png", conf=0.45)
-                    candidates.extend(item for item in detections
-                                      if (wants_search and item.get("class_name") == "search_icon")
-                                      or (needs_input_boxes and item.get("class_name") == "input_box"
-                                          and item.get("confidence", 0) >= 0.65))
-                except Exception as e:
-                    print(f"  ⚠️  YOLO 元素检测失败，继续走 OCR：{e}")
-                yolo_elapsed = round(time.time() - started, 2)
-
-            if snap_mode in ("tree_first", "ocr_only"):
-                started = time.time()
-                try:
-                    ocr_elements = mark_text_in_input_boxes(
-                        self.ocr.detect_ocr("screen_current.png"), candidates)
-                except Exception as e:
-                    print(f"  ⚠️  OCR 失败，保留模型坐标：{e}")
-                    ocr_elements = []
-                ocr_elapsed = round(time.time() - started, 2)
-                ocr_count = len(ocr_elements)
-                candidates.extend(ocr_elements)
-                ocr_meta = dict(getattr(self.ocr, "last_meta", {}) or {})
-
-            found = resolve_action_element(mapped, candidates, max_distance)
-            if found:
-                snap_source = found[0].get("source", "unknown")
-                mapped, moves = snap_action_coords(mapped, candidates, max_distance)
-
-            timings["ocr"] = round(
-                timings.get("ocr", 0.0) + tree_elapsed + yolo_elapsed + ocr_elapsed, 2
-            )
-            timings["ocr_triggered"] = True
-            timings["ocr_reason"] = "tap"
-            timings["snap_source"] = snap_source
-            timings["snap_tree"] = {"elapsed": tree_elapsed, "elements": tree_count}
-            timings["snap_yolo"] = {"elapsed": yolo_elapsed}
-            timings["snap_ocr"] = {"elapsed": ocr_elapsed, "elements": ocr_count,
-                                   "scale": ocr_meta.get("scale"),
-                                   "scaled_size": ocr_meta.get("scaled_size"),
-                                   "engine": ocr_meta.get("engine")}
-            timings["ocr_snap"] = {"moves": moves}
-            if moves:
-                print(f"  🎯 {snap_source} 吸附：{moves}")
-            if target and not found:
-                mapped = dict(mapped)
-                timings["target_unresolved"] = target
-                prior = consecutive_unresolved_targets(memory.steps, target)
-                if prior >= 1 and mapped.get("x") is not None and mapped.get("y") is not None:
-                    # 连续两轮都定位不到（常见于返回键、发送键等无文字图标）：
-                    # 不再终止任务，回退到模型给出的坐标继续，保留可恢复路径。
-                    mapped["localization_fallback"] = True
-                    mapped["thought"] = (
-                        f"连续 {prior + 1} 次未匹配到目标「{target}」的文字元素，"
-                        "回退到模型坐标继续尝试。"
-                    )
-                    mapped["description"] = f"目标「{target}」未定位，按原坐标点击"
-                    timings["localization_fallback"] = True
-                    print(f"  ⚠️  {mapped['thought']}")
-                else:
-                    mapped["action_type"] = "wait"
-                    mapped["localization_failed"] = True
-                    mapped["thought"] = (
-                        f"未找到与目标「{target}」文字及类型匹配的元素，避免误点。"
-                    )
-                    mapped["description"] = f"目标「{target}」未定位，保持当前界面并重新观察"
-                    print(f"  ⚠️  {mapped['thought']}")
+        mapped = self._snap_mapped_action(mapped, timings, memory)
 
         self._last_decision_timings = timings
+        return mapped
+
+    def _snap_mapped_action(self, mapped: dict, timings: dict, memory: TaskMemory,
+                            cache: dict | None = None) -> dict:
+        """对 tap 做控件树/OCR 吸附；多动作序列共享同一次树与 OCR 结果。"""
+        ocr_mode = getattr(config, "OCR_MODE", "on_demand")
+        if not should_trigger_ocr(ocr_mode, mapped.get("action_type", "")):
+            return mapped
+        cache = cache if cache is not None else {}
+        snap_mode = getattr(config, "OCR_SNAP_MODE", "tree_first")
+        max_distance = int(getattr(config, "OCR_SNAP_MAX_DISTANCE", 80))
+        snap_source = "none"
+        moves = []
+        candidates = []
+        tree_elements = []
+        tree_elapsed = ocr_elapsed = 0.0
+        yolo_elapsed = 0.0
+        tree_count = ocr_count = 0
+        ocr_meta = {}
+
+        if snap_mode in ("tree_first", "tree_only"):
+            if "tree" not in cache:
+                started = time.time()
+                try:
+                    cache["tree"] = self.ocr.detect_tree()
+                except Exception as e:
+                    print(f"  ⚠️  控件树读取失败，继续走 OCR：{e}")
+                    cache["tree"] = []
+                cache["tree_elapsed"] = round(time.time() - started, 2)
+            tree_elements = cache["tree"]
+            tree_elapsed = cache["tree_elapsed"]
+            tree_count = len(tree_elements)
+            candidates.extend(tree_elements)
+
+        target = str(mapped.get("target") or "").strip()
+        description = str(mapped.get("description") or "")
+        wants_search = "搜索" in target or "放大镜" in target
+        wants_contact = any(word in description + target
+                            for word in ("联系人", "群聊", "聊天项"))
+        needs_input_boxes = wants_contact and not any(
+            item.get("type") == "input" for item in tree_elements)
+        if (snap_mode == "tree_first"
+                and getattr(config, "SEARCH_ICON_DETECTION", True)
+                and (wants_search or needs_input_boxes)):
+            started = time.time()
+            try:
+                detector = getattr(self, "_gui_detector", None)
+                if detector is None:
+                    from input_detector import InputDetector
+                    detector = self._gui_detector = InputDetector()
+                detections = detector.detect("screen_current.png", conf=0.45)
+                candidates.extend(item for item in detections
+                                  if (wants_search and item.get("class_name") == "search_icon")
+                                  or (needs_input_boxes and item.get("class_name") == "input_box"
+                                      and item.get("confidence", 0) >= 0.65))
+            except Exception as e:
+                print(f"  ⚠️  YOLO 元素检测失败，继续走 OCR：{e}")
+            yolo_elapsed = round(time.time() - started, 2)
+
+        if snap_mode in ("tree_first", "ocr_only"):
+            if "ocr_raw" not in cache:
+                started = time.time()
+                try:
+                    cache["ocr_raw"] = self.ocr.detect_ocr("screen_current.png")
+                except Exception as e:
+                    print(f"  ⚠️  OCR 失败，保留模型坐标：{e}")
+                    cache["ocr_raw"] = []
+                cache["ocr_elapsed"] = round(time.time() - started, 2)
+                cache["ocr_meta"] = dict(getattr(self.ocr, "last_meta", {}) or {})
+            ocr_elements = mark_text_in_input_boxes(cache["ocr_raw"], candidates)
+            ocr_elapsed = cache["ocr_elapsed"]
+            ocr_count = len(ocr_elements)
+            candidates.extend(ocr_elements)
+            ocr_meta = cache["ocr_meta"]
+
+        found = resolve_action_element(mapped, candidates, max_distance)
+        if found:
+            snap_source = found[0].get("source", "unknown")
+            mapped, moves = snap_action_coords(mapped, candidates, max_distance)
+
+        timings["ocr"] = round(
+            timings.get("ocr", 0.0) + tree_elapsed + yolo_elapsed + ocr_elapsed, 2
+        )
+        timings["ocr_triggered"] = True
+        timings["ocr_reason"] = "tap"
+        timings["snap_source"] = snap_source
+        timings["snap_tree"] = {"elapsed": tree_elapsed, "elements": tree_count}
+        timings["snap_yolo"] = {"elapsed": yolo_elapsed}
+        timings["snap_ocr"] = {"elapsed": ocr_elapsed, "elements": ocr_count,
+                               "scale": ocr_meta.get("scale"),
+                               "scaled_size": ocr_meta.get("scaled_size"),
+                               "engine": ocr_meta.get("engine")}
+        timings["ocr_snap"] = {"moves": moves}
+        if moves:
+            print(f"  🎯 {snap_source} 吸附：{moves}")
+        if target and not found:
+            mapped = dict(mapped)
+            timings["target_unresolved"] = target
+            prior = consecutive_unresolved_targets(memory.steps, target)
+            if prior >= 1 and mapped.get("x") is not None and mapped.get("y") is not None:
+                # 连续两轮都定位不到（常见于返回键、发送键等无文字图标）：
+                # 不再终止任务，回退到模型给出的坐标继续，保留可恢复路径。
+                mapped["localization_fallback"] = True
+                mapped["thought"] = (
+                    f"连续 {prior + 1} 次未匹配到目标「{target}」的文字元素，"
+                    "回退到模型坐标继续尝试。"
+                )
+                mapped["description"] = f"目标「{target}」未定位，按原坐标点击"
+                timings["localization_fallback"] = True
+                print(f"  ⚠️  {mapped['thought']}")
+            else:
+                mapped["action_type"] = "wait"
+                mapped["localization_failed"] = True
+                mapped["thought"] = (
+                    f"未找到与目标「{target}」文字及类型匹配的元素，避免误点。"
+                )
+                mapped["description"] = f"目标「{target}」未定位，保持当前界面并重新观察"
+                print(f"  ⚠️  {mapped['thought']}")
         return mapped
 
     # ══════════════════════════════════════════════════════════
@@ -849,6 +915,15 @@ class ScreenAgent:
             y2 = self._parse_coord(action["y2"])
             self.phone.swipe(x, y, x2, y2)
 
+        return False
+
+    def _execute_sequence(self, actions: list[dict]) -> bool:
+        """顺序执行一次响应里的多个连续动作；任一步被只读拦截则停止后续动作。"""
+        for item in actions:
+            if self._execute(item):
+                return True
+            if item.get("blocked"):
+                return False
         return False
 
     # ══════════════════════════════════════════════════════════
@@ -1079,7 +1154,11 @@ class ScreenAgent:
         # 动作执行后旧截图作废，观察成功才重新有效
         self._observe_valid = False
         started = time.time()
-        finished = self._execute(action)
+        if action.get("action_type") == "sequence":
+            finished = self._execute_sequence(action.get("actions") or [])
+            timings["actions"] = len(action.get("actions") or [])
+        else:
+            finished = self._execute(action)
         timings["execute"] = round(time.time() - started, 2)
 
         if merged_active:
