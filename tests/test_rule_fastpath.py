@@ -77,19 +77,43 @@ def test_scroll_only_after_entering_target_group():
 
 def test_scroll_stops_when_screen_stops_changing():
     state = {"entered_group": "2026 计算机班级群", "scrolls": 0}
-    ctx = make_ctx(CHAT_XML, "读取群消息", state=state)
+    ctx = make_ctx(CHAT_XML, "读取群消息", state=state, max_scrolls=6)
 
     assert rule_policy.decide(ctx) is not None       # 第一次：记录当前文字并滚动
     assert rule_policy.decide(ctx) is not None       # 文字未变化：再给一次机会
     assert rule_policy.decide(ctx) is None           # 连续两次未变化：交回 VLM
-    assert state["disabled"] is True
+    assert state["scroll_disabled"] is True
 
 
 def test_scroll_stops_at_message_end_marker():
     xml = CHAT_XML.replace("群里禁水，只发通知", "没有更多消息")
     state = {"entered_group": "2026 计算机班级群", "scrolls": 0}
     assert rule_policy.decide(make_ctx(xml, "读取群消息", state=state)) is None
-    assert state["disabled"] is True
+    assert state["scroll_disabled"] is True
+
+
+def test_scroll_stops_when_screen_already_has_answer_keyword():
+    state = {"entered_group": "2026 计算机班级群", "scrolls": 0}
+    # 聊天页已经显示「实验报告二」「11.22 23:59」，再滚没有收益
+    action = rule_policy.decide(make_ctx(
+        CHAT_XML, "在「2026 计算机班级群」里找实验报告二的截止时间", state=state))
+
+    assert action is None
+    assert state["scroll_disabled"] is True
+    assert state["scroll_stop_keyword"] in ("实验报告二", "截止")
+
+
+def test_task_keywords_excludes_navigation_group_name():
+    words = rule_policy.task_keywords(
+        "在 QQ 中查找「COMP7503 作业通知群」里实验报告二的截止时间")
+    assert "实验报告二" in words
+    assert "截止" in words
+    assert "作业通知群" not in words
+
+
+def test_scroll_respects_default_max_scrolls_of_two():
+    state = {"entered_group": "2026 计算机班级群", "scrolls": 2}
+    assert rule_policy.decide(make_ctx(CHAT_XML, "读取群消息", state=state)) is None
 
 
 def test_scroll_respects_max_scrolls():
@@ -201,7 +225,7 @@ def test_two_rule_steps_make_no_model_calls(tmp_path, monkeypatch):
         tmp_path, monkeypatch,
         [GROUPS_XML, CHAT_XML, CHAT_XML, CHAT_XML],
     )
-    memory = TaskMemory("在 QQ 中查找「COMP7503 作业通知群」里实验报告二的截止时间")
+    memory = TaskMemory("查看「COMP7503 作业通知群」里的群消息")
 
     agent._execute_step(1, memory)
     agent._execute_step(2, memory)

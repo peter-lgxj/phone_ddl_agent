@@ -24,6 +24,16 @@ _QUOTED_RE = re.compile(r"[「“\"]([^」”\"]{2,40})[」”\"]|‘([^’]{2,4
 # 界面已经翻到底/顶的提示词；命中后停止规则滚动，交回模型做语义判断
 _END_MARKERS = ("没有更多", "已加载全部", "查看更多消息", "没有更多消息")
 
+# 任务答案关键词：当前屏幕已经出现这些内容时，继续规则滚动没有收益。
+# 「作业通知群」这类群名不会被 _HOMEWORK_RE 命中（作业后面不是序号），
+# 避免标题栏里的群名把滚动永远卡在第 0 步。
+_HOMEWORK_RE = re.compile(
+    r"(?:实验报告|作业|报告|任务|项目|论文|实验|lab|hw|quiz)\s*[一二三四五六七八九十0-9]+",
+    re.IGNORECASE,
+)
+_DATE_RE = re.compile(r"\d{1,4}[./月-]\d{1,2}(?:[./月-]\d{1,2})?")
+_DEADLINE_MARKERS = ("截止", "ddl", "deadline")
+
 # 规则动作黑名单：即使配置或调用方出错，也不可能从规则快路发出写操作
 _MUTATING_ACTIONS = {"send", "press_enter", "type"}
 
@@ -36,7 +46,7 @@ class RuleContext:
     xml: str
     last_action: dict = field(default_factory=dict)
     state: dict = field(default_factory=dict)
-    max_scrolls: int = 6
+    max_scrolls: int = 2
     known_input_resource_ids: tuple[str, ...] = ()
     screen_size: tuple[int, int] | None = None
 
@@ -117,6 +127,42 @@ def screen_text(xml_text: str, limit: int = 60) -> str:
         if len(lines) >= limit:
             break
     return "\n".join(lines)
+
+
+def task_keywords(task: str) -> list[str]:
+    """从任务里抽取“答案关键词”：作业名、截止标记、目标日期。
+
+    引号目标是导航对象（群名/会话名），不参与滚动停止判断——它本身就出现在
+    标题栏，算进去会让规则永远认为“已经命中”。
+    """
+    text = task or ""
+    words: list[str] = []
+    for match in _HOMEWORK_RE.finditer(text):
+        value = _compact(match.group(0))
+        if value and value not in words:
+            words.append(value)
+    lowered = text.lower()
+    for marker in _DEADLINE_MARKERS:
+        if marker in lowered and marker not in words:
+            words.append(marker)
+    for match in _DATE_RE.finditer(text):
+        value = match.group(0)
+        if value not in words:
+            words.append(value)
+    return words
+
+
+def screen_has_task_keyword(xml_text: str, task: str,
+                            exclude: tuple[str, ...] = ()) -> str:
+    """当前控件树文字里是否已出现任务关键词；返回命中的关键词，空串表示未命中。"""
+    text = _compact(screen_text(xml_text))
+    if not text:
+        return ""
+    skip = {_compact(item) for item in exclude if item}
+    for word in task_keywords(task):
+        if word and word not in skip and word in text:
+            return word
+    return ""
 
 
 def _nearest_clickable(node, parents: dict) -> object | None:
@@ -274,16 +320,24 @@ def decide(ctx: RuleContext) -> dict | None:
                 resource_id=box["resource_id"],
             )
 
-    # 4) 已进入目标会话：固定手势向上翻，直到文字不再变化或达到上限
-    if state.get("entered_group") and state.get("scrolls", 0) < ctx.max_scrolls:
+    # 4) 已进入目标会话：固定手势向上翻，直到屏幕已含答案/文字不再变化/达到上限
+    if (state.get("entered_group") and not state.get("scroll_disabled")
+            and state.get("scrolls", 0) < ctx.max_scrolls):
         text = screen_text(ctx.xml)
         if not text or any(marker in text for marker in _END_MARKERS):
-            state["disabled"] = True
+            state["scroll_disabled"] = True
+            return None
+        keyword = screen_has_task_keyword(
+            ctx.xml, ctx.task, exclude=(state.get("entered_group") or "",))
+        if keyword:
+            # 当前屏幕已经能看到任务要的答案，再滚只会多花一次 dump 和一次手势
+            state["scroll_disabled"] = True
+            state["scroll_stop_keyword"] = keyword
             return None
         if text == state.get("last_scroll_text"):
             state["stagnant"] = state.get("stagnant", 0) + 1
             if state["stagnant"] >= 2:
-                state["disabled"] = True
+                state["scroll_disabled"] = True
                 return None
         else:
             state["stagnant"] = 0

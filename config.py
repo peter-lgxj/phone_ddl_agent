@@ -192,8 +192,9 @@ OBSERVE_OCR_ACTIONS = {
 RULE_FASTPATH = os.getenv("RULE_FASTPATH", "1").strip().lower() not in (
     "0", "false", "off", ""
 )
-# 同一次会话里规则最多连续滚多少步；到上限后交回 VLM，避免无限翻页
-RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "6"))
+# 同一次会话里规则最多连续滚多少步；到上限后交回 VLM，避免无限翻页。
+# 默认 2：真实群消息翻两屏仍未出现答案时，规则继续滚的收益抵不过每次 dump 的开销。
+RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "2"))
 
 ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "runs")  # 每步截图与动作记录的归档目录
 
