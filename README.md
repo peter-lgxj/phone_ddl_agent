@@ -321,7 +321,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 9. **自适应 settle（`OBSERVE_SETTLE_MODE=adaptive`，默认）**：动作后连续两次截图哈希相同就提前返回，最多等 `OBSERVE_SETTLE_SECONDS`；`fixed` 保留旧的固定等待；
 10. 每步 `step_NNN.json` 新增 `timings`（screenshot/ocr_pre/ocr/ocr_triggered/ocr_reason/snap_source/snap_tree/snap_yolo/snap_ocr/ocr_snap/preprocess/semantic/decision/decide_total/execute/observe/settle/completion/merged_fallback），便于统计触发率与省下的时间；`timings.ocr` 已包含控件树、YOLO 与 OCR 三段定位耗时，`snap_yolo` 单独记录 YOLO 段。
 
-按上表估算：旧流程每步最多 4 次模型请求；完成判断并入决策、语义分析关闭后为 2 次；`MERGED_OBSERVE=1` 默认再合并观察与决策，**正常每步 1 次带图请求**。整步耗时按旧阶段耗时推算约 **8–10s → 5–7s**（未做真机 A/B，属于估算）；OCR 预热只省启动后的第一步约 6–7s，自适应 settle 每步最多省约 1s。真机单次实测见上方报告链接，不作为稳定性能指标。
+按上表估算：旧流程每步最多 4 次模型请求；完成判断并入决策、语义分析关闭后为 2 次；`MERGED_OBSERVE=1` 默认再合并观察与决策，**正常每步 1 次带图请求**。整步耗时按旧阶段耗时推算约 **8–10s → 5–7s**（估算）。真机 A/B 见下一节：235deea 上合并观察反而更慢，原因是同期的规则快路固定滚动 6 次，不是合并观察本身；该问题已按成本核算默认关闭。OCR 预热只省启动后的第一步约 6–7s，自适应 settle 每步最多省约 1s。真机单次实测见上方报告链接，不作为稳定性能指标。
 
 合并观察的回退路径：若合并响应不合法，本步总计 3 次请求（1 次失败的合并请求 + 1 次 observe + 1 次 decide），动作仍只执行一次；`COMPLETION_CHECK=every_step` 时不做合并，保持原两段式 + 完成检测，避免退化出额外的 task_done 调用。`tests/test_ocr_on_demand.py` 用假客户端断言了默认每步 1 次、关闭合并时 2 次、回退时动作只执行一次。
 
@@ -358,6 +358,20 @@ Get-Content runs\20261120-102000-on\usage_summary.json
 ```
 
 A/B 时保持同一任务文本、同一设备、同一网络与同一 provider；否则数字不可比。`--json` 可把 `summarize_timings.py` 结果交给其他脚本。
+
+### 验证标签：真机实测 / 离线回放 / 未执行
+
+报告和判分表必须带上来源标签，**离线回放 ≠ 真机实测**：
+
+| 标签 | 含义 | 当前结论 |
+| --- | --- | --- |
+| 真机实测 | 设备截图、`step_*.json`、`usage_summary.json` 直接产生 | 235deea、同一任务同群、`adb_dump`：`MERGED_OBSERVE=0` 20.63s / 3 请求；`=1` 71.07s / 1 请求；两组动作序列不一致（`tap→finish` vs `tap→swipe×6→finish`），是策略差异，不能写成提速 |
+| 真机实测 | 规则步耗时 | 规则 7 步（open_group×1 + scroll×6）58.29–60.92s；`adb_dump` 单次 dump ≈2.5s，规则步估算 6.3s > 一次合并决策约 5–7s，故默认关闭规则快路 |
+| 离线回放 | 冻结真机抽取候选，用当前裁决/聚焦重算；不联网、不碰手机 | 判分复跑 20/21 = 95.24%（D02/D03 未采集，已剔除分母）；证据 `runs/_verify/judge_replay_result.json`（`runs/` 不入库） |
+| 离线回放 | 规则停止条件 | 归档聊天页已显示「操作系统作业一」时规则 0 次滚动；群列表仍 `open_group (540,1375)`；发送区域坐标被拒 |
+| 未执行 | 修复后的真机 A/B、真机判分复跑 | 设备在修改期间断开，尚无可引用的修复后真机数字；不把回放结果写成实测 |
+
+同屏复用与连接预热不列为收益项：6 次归档 A/B 中 `reused_frame` 均为 0；复用只在桌面静态页命中，聊天页因光标/动画导致哈希变化；复用最多省 `preprocess` 0.11–0.15s/步；连接预热 0.22–0.43s 仅启动一次，每步收益 0.00s。
 
 ### 脱敏证据
 
@@ -576,7 +590,7 @@ CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
 ## 已知限制（部分真机验证）
 
 - 单机、单账号、微信「文件传输助手」自聊会话做过一次只读读取与端到端抽取验证（`docs/real-device-test-report.md`）；真实课程群、QQ / Outlook App、图片型 DDL、点击与输入、跨 App 信息传递仍未在真实环境跑通。
-- Android 17（API 37）上 uiautomator2 3.7.1 仍不可用（[#1209](https://github.com/openatx/uiautomator2/issues/1209)），程序会回退到 `adb_dump`；回退链路的真机 A/B 尚未完成，`runs` 下的样本只用于离线解析测试。
+- Android 17（API 37）上 uiautomator2 3.7.1 仍不可用（[#1209](https://github.com/openatx/uiautomator2/issues/1209)），程序会回退到 `adb_dump`。回退链路的真机 A/B 已完成一次（235deea，合并观察两组各 1 次，见「验证标签」），但**修复规则成本后尚未复跑**；修复前的回退样本只用于离线解析，不作为提速证据。
 - 依赖版本：`requirements-lock.txt` 是在 Windows + Python 3.12 的虚拟环境里实际解析得到的；换机器（尤其 GPU/系统不同）需重新 `pip freeze` 替换。
 - 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）的命令、输出解析与配置要求已按上游代码写实，协议用假上游测过；但三个真实系统仍未在本机安装、未接真机联调，命令未实跑。
 - 任务前重置只做「回桌面 + force-stop 已知包名」，**无法自动清除应用内草稿、聊天输入框、剪贴板与输入法状态**；`reset` 字段会区分 `stopped` / `failed` / `not_installed` / `not_mapped`。
