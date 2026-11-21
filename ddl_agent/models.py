@@ -148,6 +148,9 @@ class ResolvedRecord:
     # 跨来源冲突记录：两侧原文、各自时间与裁决依据
     conflicts: list[dict] = field(default_factory=list)
     updated_at: str | None = None
+    # 最近一次证据的发布时间与读取顺序，供「最近一条作业」类查询聚焦
+    latest_published_at: str | None = None
+    latest_source_order: int | None = None
 
 
 @dataclass

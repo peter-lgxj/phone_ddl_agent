@@ -140,6 +140,7 @@ class AdbDumpController:
         self.device = None  # 兼容少数按 ``phone.device`` 取字段的调用方
         self._last_dump: str | None = None
         self._last_dump_at = 0.0
+        self.dump_count = 0  # 实际执行的 uiautomator dump 次数，供步级统计
         if probe:
             self._probe()
 
@@ -232,6 +233,7 @@ class AdbDumpController:
             )
         self._last_dump = xml_text
         self._last_dump_at = now
+        self.dump_count += 1
         return xml_text
 
     def screen_text(self) -> str:
@@ -288,8 +290,10 @@ class AdbDumpController:
         self._ensure_writable("send")
         self.press_enter()
 
-    def type_text(self, text: str):
-        self._ensure_writable("type_text")
+    def type_text(self, text: str, allow_search: bool = False):
+        # 允许搜索框输入：不经过 _ensure_writable，但调用方必须证明是搜索框
+        if not allow_search:
+            self._ensure_writable("type_text")
         if not text:
             return
         # input text 只可靠支持 ASCII；中文输入需要 ADBKeyboard，只读模式默认关闭

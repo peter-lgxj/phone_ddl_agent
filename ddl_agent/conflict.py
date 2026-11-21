@@ -56,6 +56,7 @@ class ConflictResolver:
         result = ResolveResult()
         for cluster in clusters:
             record, rounds = self._resolve_cluster(cluster, plan, retrieval, result.warnings)
+            _stamp_evidence_time(record, cluster)
             result.supplementary_rounds += rounds
             result.records.append(record)
         return result
@@ -75,19 +76,19 @@ class ConflictResolver:
                 status, confidence = "uncertain", CONFIDENCE_UNCERTAIN
             else:
                 status, confidence = "missing_deadline", CONFIDENCE_MISSING
-            result.records.append(
-                ResolvedRecord(
-                    task_name=cluster.task_name,
-                    course=cluster.course,
-                    deadline_iso=winner.deadline_iso if winner else None,
-                    status=status,
-                    source=_describe(winner),
-                    evidence_ids=[candidate.candidate_id for candidate in cluster.candidates],
-                    sources=_sources(cluster.candidates),
-                    confidence=confidence,
-                    resolution_note="消融：未做冲突验证与追加检索，直接采用首个候选",
-                )
+            record = ResolvedRecord(
+                task_name=cluster.task_name,
+                course=cluster.course,
+                deadline_iso=winner.deadline_iso if winner else None,
+                status=status,
+                source=_describe(winner),
+                evidence_ids=[candidate.candidate_id for candidate in cluster.candidates],
+                sources=_sources(cluster.candidates),
+                confidence=confidence,
+                resolution_note="消融：未做冲突验证与追加检索，直接采用首个候选",
             )
+            _stamp_evidence_time(record, cluster)
+            result.records.append(record)
         return result
 
     # ------------------------------------------------------------------ #
@@ -404,6 +405,21 @@ class ConflictResolver:
 
 def _time_key(candidate: DeadlineCandidate) -> tuple[datetime, int]:
     return (candidate.published_at or _MIN_TIME, candidate.source_order or 0)
+
+
+def _stamp_evidence_time(record: ResolvedRecord, cluster: TaskCluster) -> None:
+    """把最近一条证据的发布时间/读取顺序写到记录上，供“最近一条”查询排序。"""
+    evidence = set(record.evidence_ids)
+    candidates = [
+        candidate for candidate in cluster.candidates
+        if candidate.candidate_id in evidence
+    ] or list(cluster.candidates)
+    latest = max(candidates, key=_time_key) if candidates else None
+    if latest is None:
+        return
+    if latest.published_at is not None:
+        record.latest_published_at = latest.published_at.isoformat()
+    record.latest_source_order = latest.source_order
 
 
 def _time_text(candidate: DeadlineCandidate) -> str:

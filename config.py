@@ -189,11 +189,35 @@ OBSERVE_OCR_ACTIONS = {
 # 规则快路：开群、返回、滚动、点已知 resource-id 的输入框这类能被控件树证明的动作
 # 不调用视觉模型，直接执行。只有需要看懂截图语义时才走 VLM。命中与省下的调用数
 # 会写进 step JSON 的 timings.rule_* 与 usage_summary.json 的 rule_fastpath。
-RULE_FASTPATH = os.getenv("RULE_FASTPATH", "1").strip().lower() not in (
-    "0", "false", "off", ""
+#
+# 成本核算：规则步至少要两次控件树 dump（判断 + 观察取文字）加一次截图；
+# adb_dump 下单次 dump 实测约 2.5s，规则步估算 6.3s，已高于一次合并决策请求
+# （235deea 真机 A/B：MERGED_OBSERVE=1 反而从 20.63s 变 71.07s）。
+# auto（默认）：规则步估算 <= 模型决策耗时才开；on/off 强制开关。
+_rule_env = os.getenv("RULE_FASTPATH", "auto").strip().lower()
+RULE_FASTPATH_MODE = (
+    "off" if _rule_env in ("0", "false", "off")
+    else "on" if _rule_env in ("1", "true", "on")
+    else "auto"
 )
-# 同一次会话里规则最多连续滚多少步；到上限后交回 VLM，避免无限翻页
-RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "6"))
+# 兼容旧读取点：只有显式 off 才是 False，auto 交由启动时的成本核算决定
+RULE_FASTPATH = RULE_FASTPATH_MODE != "off"
+RULE_DUMP_SECONDS = float(os.getenv("RULE_DUMP_SECONDS", "2.5"))        # adb_dump
+RULE_DUMP_SECONDS_U2 = float(os.getenv("RULE_DUMP_SECONDS_U2", "0.3"))  # uiautomator2
+RULE_SCREENSHOT_SECONDS = float(os.getenv("RULE_SCREENSHOT_SECONDS", "1.0"))
+RULE_EXECUTE_SECONDS = float(os.getenv("RULE_EXECUTE_SECONDS", "0.3"))
+# 一次合并决策请求（含截图预处理与模型往返）的实测耗时上界。235deea 之后的
+# 真机 A/B：模型步 5.20–5.58s，规则步（轻观察）5.52–5.59s；规则步能省掉一次
+# 列表导航请求，任务总耗时 11.44s vs 17.81s，因此默认开启。可用环境变量覆盖。
+RULE_MODEL_DECISION_SECONDS = float(os.getenv("RULE_MODEL_DECISION_SECONDS", "5.6"))
+# 同一次会话里规则最多连续滚多少步；到上限后交回 VLM，避免无限翻页。
+# 默认 2：真实群消息翻两屏仍未出现答案时，规则继续滚的收益抵不过每次 dump 的开销。
+RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "2"))
+# 实验开关：1 时目标即使在可见行也强制走搜索，用于对比搜索/列表两条路径；
+# 默认 0，正常行为是「可见行优先 open_group，不可见才搜索」。
+RULE_SEARCH_FORCE = os.getenv("RULE_SEARCH_FORCE", "0").strip().lower() in (
+    "1", "true", "on"
+)
 
 ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "runs")  # 每步截图与动作记录的归档目录
 

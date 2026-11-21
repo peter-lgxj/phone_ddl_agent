@@ -2,16 +2,18 @@
 
 原则是「有明确目标才过滤，没有明确目标保守放行」：
 - 只把带序号的任务（作业三/实验报告二/Assignment 3/Final Report）当成明确目标；
+- 引号里像任务的短语（「数据库作业」）也算明确目标，无匹配时返回空结果并标
+  ``no_match``，不再用无关记录凑数；
+- 查询问「最近一条作业/课程 DDL」这类泛称时，按最近一次通知取一条，不扩大过滤；
 - 查询里没有明确任务时不裁剪记录，避免 D15 这类「只报课程 DDL」的题被误清空；
-- 任务过滤找不到任何匹配时保留原记录，避免中英任务名差异（如「期末报告」vs
-  ``Final report``）把正确答案误删。
+- 有明确任务但一条都不匹配时输出空结果并标 ``no_match``，不再用无关记录凑数。
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .dedupe import normalize_task_name
 from .extract.courses import find_courses, normalize_course
@@ -30,6 +32,18 @@ _TASK_ALIASES = {"期末报告": "final report"}
 _COURSE_RESTRICT_RE = re.compile(r"(只报告|只查|只看|只要|仅|不要报|别报|不报)")
 _CLAUSE_SPLIT_RE = re.compile(r"[，。；;！？（）()]")
 _DISTRACTOR_RE = re.compile(r"(旧|不要|别报|不是|诱饵|干扰|还有|误|错误|注意不要)")
+# 引号里带这些词才当成任务名；「2026 计算机班级群」「LLM小组」不会被误当任务
+_QUOTED_RE = re.compile(r"[「“\"]([^」”\"]{2,40})[」”\"]|‘([^’]{2,40})’")
+_QUOTED_TASK_RE = re.compile(
+    r"(作业|报告|assignment|homework|project|lab|quiz)", re.IGNORECASE
+)
+# 泛称查询：没有点名第几份作业，但要求“最近一条/课程 DDL”
+_GENERIC_DDL_RE = re.compile(r"(作业|报告|ddl|截止)", re.IGNORECASE)
+_LATEST_RE = re.compile(r"(最近|最新|上周|本周|近期)")
+_NUMBERED_HOMEWORK_RE = re.compile(
+    r"(作业|实验报告|assignment|homework|hw|lab|quiz)\s*[一二三四五六七八九十0-9]+",
+    re.IGNORECASE,
+)
 
 
 def task_hints(query: str) -> list[str]:
@@ -49,7 +63,24 @@ def task_hints(query: str) -> list[str]:
                     _canonical_task(item) for item in hints
                 }:
                     hints.append(text)
+        for match in _QUOTED_RE.finditer(clause):
+            text = (match.group(1) or match.group(2) or "").strip()
+            if not text or not _QUOTED_TASK_RE.search(text):
+                continue
+            if _canonical_task(text) not in {_canonical_task(item) for item in hints}:
+                hints.append(text)
     return hints
+
+
+def wants_latest_homework(query: str) -> bool:
+    """查询是否在问“最近一条作业/课程 DDL”这类泛称，而不是点名某份作业。"""
+    if task_hints(query) or not _GENERIC_DDL_RE.search(query or ""):
+        return False
+    if _LATEST_RE.search(query or ""):
+        return True
+    if wants_course_restriction(query):
+        return True
+    return bool(re.search(r"(作业通知|作业截止|课程作业)", query or ""))
 
 
 def wants_course_restriction(query: str) -> bool:
@@ -77,6 +108,24 @@ def task_matches(hint: str, task_name: str) -> bool:
     return len(left) >= 3 and (left in right or right in left)
 
 
+def _record_time_key(record) -> tuple[datetime, int]:
+    """记录最近一次证据的时间；缺失时排在最旧，避免“最近一条”选到无时间记录。"""
+    published = getattr(record, "latest_published_at", None)
+    if isinstance(published, str):
+        try:
+            published = datetime.fromisoformat(published)
+        except ValueError:
+            published = None
+    if not isinstance(published, datetime):
+        published = None
+    if published is not None and published.tzinfo is None:
+        published = published.replace(tzinfo=TZ)
+    return (
+        published or datetime.min.replace(tzinfo=TZ),
+        int(getattr(record, "latest_source_order", None) or 0),
+    )
+
+
 def focus_records(query: str, records: list) -> tuple[list, dict]:
     """按查询里的明确任务/课程裁剪最终记录；无明确目标时原样返回。"""
     hints = task_hints(query)
@@ -96,11 +145,12 @@ def focus_records(query: str, records: list) -> tuple[list, dict]:
         "course_restriction": restrict_course,
         "task_filter": "disabled",
         "course_filter": "disabled",
+        "no_match": False,
         "before": len(records),
         "after": len(records),
         "dropped": [],
     }
-    if not hints and not restrict_course:
+    if not hints and not restrict_course and not wants_latest_homework(query):
         return list(records), decision
 
     filtered = list(records)
@@ -113,8 +163,14 @@ def focus_records(query: str, records: list) -> tuple[list, dict]:
             filtered = matched
             decision["task_filter"] = "applied"
         else:
-            # 中英命名或同义表达可能对不上；找不到时不要清空
-            decision["task_filter"] = "no_match_keep_all"
+            # 明确点名了任务却一条都没命中：输出空结果并标 no_match，不用无关记录凑数
+            decision["task_filter"] = "no_match"
+            decision["no_match"] = True
+            decision["after"] = 0
+            decision["dropped"] = [
+                getattr(record, "task_name", "") for record in records
+            ]
+            return [], decision
 
     if restrict_course:
         wanted = {normalize_course(code) for code in codes}
@@ -128,6 +184,20 @@ def focus_records(query: str, records: list) -> tuple[list, dict]:
             decision["course_filter"] = "applied"
         else:
             decision["course_filter"] = "no_match_keep_all"
+
+    if not hints and wants_latest_homework(query):
+        # 「最近一条作业/课程 DDL」：只保留最近一次编号作业通知，避免多报同群旧任务
+        numbered = [
+            record for record in filtered
+            if _NUMBERED_HOMEWORK_RE.search(getattr(record, "task_name", "") or "")
+        ]
+        if numbered:
+            latest = max(numbered, key=_record_time_key)
+            filtered = [latest]
+            decision["task_filter"] = "latest_homework"
+            decision["latest"] = getattr(latest, "task_name", "")
+        else:
+            decision["task_filter"] = "latest_homework_no_match"
 
     kept = {id(record) for record in filtered}
     decision["after"] = len(filtered)

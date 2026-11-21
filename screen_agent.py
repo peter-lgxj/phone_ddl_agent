@@ -166,6 +166,12 @@ def format_ocr_observation(elements: list[dict]) -> str:
 
 READ_ONLY_BLOCKED_ACTIONS = {"send", "press_enter", "type"}
 
+# 这些规则步骤只改变导航位置，观察用一次控件树 dump 即可，不必截图+settle
+_LIGHT_RULE_OBSERVE = {
+    "open_group", "search_entry", "search_type", "search_result",
+    "tap_input", "back_after_miss",
+}
+
 
 class ScreenAgent:
 
@@ -247,6 +253,8 @@ class ScreenAgent:
         self.read_only = (
             getattr(config, "READ_ONLY_MODE", True) if read_only is None else read_only
         )
+        # 规则快路开关由成本核算决定：adb_dump 下规则步要付两次 dump
+        self.rule_fastpath_enabled, self._rule_cost = self._resolve_rule_fastpath()
         self.run_dir   = None
         self.last_status = "idle"   # done / timeout / failed / idle
         self._observe_valid = False  # 当前 screen_observe.png 是否是本步真实截图
@@ -260,6 +268,8 @@ class ScreenAgent:
         self._rule_state = {}             # 规则快路跨步状态（已进入的群、滚动次数等）
         self._rule_hits = []              # 规则命中记录，任务结束写汇总
         self._last_rule_seconds = 0.0     # 本步规则检查（控件树 dump）耗时
+        self._total_step_seconds = 0.0    # 全部步骤墙钟耗时合计（统计规则步占比）
+        self._model_decision_seconds = []  # 模型步的决策耗时样本
         self._last_frame_hash = None      # 上一帧截图哈希，用于同屏复用
         self._last_frame_bytes = None     # 上一帧编码后的字节
         self._last_frame_meta = None      # 上一帧图片元数据
@@ -292,6 +302,49 @@ class ScreenAgent:
             print(f"  ⚠️  设备通道预热失败（首步会重新握手）：{e}")
         self._warmup_seconds = round(time.perf_counter() - started, 2)
         print(f"连接预热完成：{self._warmup_seconds}s（HTTP keep-alive + 设备通道）")
+
+    def _resolve_rule_fastpath(self) -> tuple[bool, dict]:
+        """按实测成本决定规则快路是否启用，并在启动日志说明原因。
+
+        规则一步的本地成本 = 判断用的 dump + 观察用的截图与 dump + 动作执行；
+        adb_dump 下单次 dump 实测约 2.5s，合计约 6.3s，已高于一次合并决策请求。
+        显式 RULE_FASTPATH=1/0 可覆盖；auto 模式按成本比较结果决定。
+        """
+        mode = getattr(config, "RULE_FASTPATH_MODE", "auto")
+        driver = getattr(self, "driver_kind", "adb_dump")
+        if driver == "uiautomator2":
+            dump = float(getattr(config, "RULE_DUMP_SECONDS_U2", 0.3))
+        else:
+            dump = float(getattr(config, "RULE_DUMP_SECONDS", 2.5))
+        shot = float(getattr(config, "RULE_SCREENSHOT_SECONDS", 1.0))
+        execute = float(getattr(config, "RULE_EXECUTE_SECONDS", 0.3))
+        decision = float(getattr(config, "RULE_MODEL_DECISION_SECONDS", 5.6))
+        # 开群/搜索等导航规则用轻观察（一次 dump，不截图/不 settle）；
+        # 滚动规则仍保留截图，按 2 次 dump + 截图估算。
+        estimate = round(dump * 2 + execute, 2)
+        estimate_with_shot = round(dump * 2 + shot + execute, 2)
+        enabled = mode != "off" and (mode == "on" or estimate <= decision)
+        cost = {
+            "mode": mode,
+            "driver": driver,
+            "dump_seconds": dump,
+            "rule_step_estimate": estimate,
+            "rule_step_estimate_with_screenshot": estimate_with_shot,
+            "model_decision_seconds": decision,
+            "enabled": enabled,
+        }
+        if mode == "off":
+            print("规则快路：已按 RULE_FASTPATH=0 关闭")
+        elif mode == "on":
+            print(f"规则快路：已按 RULE_FASTPATH=1 强制开启（估算规则步 {estimate:.1f}s）")
+        elif enabled:
+            print(f"规则快路：自动开启（规则步估算 {estimate:.1f}s <= "
+                  f"一次模型决策 {decision:.1f}s）")
+        else:
+            print(f"规则快路：默认关闭——{driver} 单次 dump 实测约 {dump:.1f}s，"
+                  f"规则步估算 {estimate:.1f}s 高于一次模型决策 {decision:.1f}s；"
+                  f"需要时设 RULE_FASTPATH=1 强制开启")
+        return enabled, cost
 
     # ══════════════════════════════════════════════════════════
     #  语义分析：在决策前，用文字大模型理解历史 observation
@@ -999,13 +1052,35 @@ class ScreenAgent:
 
     def _execute(self, action: dict) -> bool:
         t = action.get("action_type", "wait")
+        search_type_allowed = False
 
         if self.read_only and t in READ_ONLY_BLOCKED_ACTIONS:
-            reason = f"只读模式拒绝动作「{t}」：读屏任务不允许发言或改动输入内容"
-            action["blocked"] = True
-            action["blocked_reason"] = reason
-            print(f"  ⛔  {reason}")
-            return False
+            rule_name = (action.get("rule") or {}).get("name")
+            # 只放行「搜索框输入」：它只改搜索框，不产生外发；
+            # 消息输入框的 type、send、press_enter 仍一律拒绝。
+            allowed_search = (
+                t == "type"
+                and action.get("search_input") is True
+                and rule_name == "search_type"
+            )
+            if t == "type" and not allowed_search:
+                # 模型自己选的搜索输入：按当前控件树判断，不看坐标
+                try:
+                    current_xml = self.phone.dump_hierarchy()
+                except Exception:
+                    current_xml = ""
+                allowed_search = rule_policy.is_search_input(current_xml)
+            if allowed_search:
+                search_type_allowed = True
+                assert not action.get("send") and "发送" not in str(
+                    action.get("target") or ""), "搜索输入不得携带发送语义"
+                print("  🔎  只读模式放行搜索框输入（不产生外发）")
+            else:
+                reason = f"只读模式拒绝动作「{t}」：读屏任务不允许发言或改动输入内容"
+                action["blocked"] = True
+                action["blocked_reason"] = reason
+                print(f"  ⛔  {reason}")
+                return False
 
         if t == "open_app":
             self.launcher.launch(action.get("app_name", ""))
@@ -1016,7 +1091,8 @@ class ScreenAgent:
             if not text:
                 print("  ⚠️  type 动作缺少 text 字段，跳过本步")
                 return False
-            self.phone.type_text(text)
+            self.phone.type_text(
+                text, allow_search=search_type_allowed or bool(action.get("search_input")))
         elif t == "send":
             self.phone.send()
             print("回车发送")
@@ -1125,7 +1201,8 @@ class ScreenAgent:
         命中时省掉一次决策请求（合并观察模式下也就是本步唯一的一次视觉调用）。
         """
         self._last_rule_seconds = 0.0
-        if not getattr(config, "RULE_FASTPATH", True):
+        if not getattr(self, "rule_fastpath_enabled",
+                       getattr(config, "RULE_FASTPATH", True)):
             return None
         state = getattr(self, "_rule_state", None)
         if state is None:
@@ -1155,13 +1232,34 @@ class ScreenAgent:
             xml=xml,
             last_action=last_action,
             state=state,
-            max_scrolls=int(getattr(config, "RULE_MAX_SCROLLS", 6)),
+            max_scrolls=int(getattr(config, "RULE_MAX_SCROLLS", 2)),
+            search_ascii_only=self.driver_kind != "uiautomator2",
+            search_force=bool(getattr(config, "RULE_SEARCH_FORCE", False)),
+            search_allowed=(
+                self.driver_kind == "uiautomator2"
+                or bool(getattr(config, "RULE_SEARCH_FORCE", False))
+            ),
             known_input_resource_ids=(
                 getattr(config, "WECHAT_INPUT_RESOURCE_ID", ""),
             ),
         ))
         if action is None:
             return None
+        if action.get("action_type") == "tap":
+            # 只读保护之外的硬约束：规则 tap 绝不允许落在发送按钮文案或坐标区域
+            reason = rule_policy.tap_hits_send(
+                xml, int(action["x"]), int(action["y"]),
+                str(action.get("target") or ""))
+            if reason:
+                raise AssertionError(
+                    f"规则快路 tap 落在发送按钮区域（{reason}）：{action}")
+        elif action.get("action_type") == "type":
+            # 规则只允许搜索框输入；缺 search_input 或换了规则名直接失败
+            assert action.get("search_input") is True, "规则 type 只能是搜索框输入"
+            assert (action.get("rule") or {}).get("name") == "search_type", \
+                "规则 type 必须来自 search_type"
+            assert rule_policy.is_search_input(xml, str(action.get("resource_id") or "")), \
+                "当前界面不是搜索框，拒绝规则输入"
 
         record = {"name": action["rule"]["name"], "step": len(memory.steps) + 1,
                   "saved_calls": 1}
@@ -1171,7 +1269,21 @@ class ScreenAgent:
         return action
 
     def _rule_observe(self, action: dict, memory: TaskMemory) -> str:
-        """规则步骤的观察：截图 + 控件树文字，不调用视觉模型。"""
+        """规则步骤的观察：截图 + 控件树文字，不调用视觉模型。
+
+        开群/搜索这类导航步骤只要知道「现在到了哪个界面」，用一次控件树 dump
+        就够；截图与 settle 留给滚动手势（需要视觉证据判断是否到顶/到底）。
+        """
+        head = f"[规则] {action.get('description') or action.get('action_type')}"
+        rule_name = (action.get("rule") or {}).get("name")
+        if rule_name in _LIGHT_RULE_OBSERVE:
+            try:
+                text = rule_policy.screen_text(self.phone.dump_hierarchy())
+            except Exception as e:
+                text = ""
+                print(f"  ⚠️  规则步骤读取控件树失败：{e}")
+            return f"{head}\n{text}".strip() if text else head
+
         self._settle_screen()
         self._clear_observe_shot()
         try:
@@ -1180,14 +1292,13 @@ class ScreenAgent:
         except Exception as e:
             self._observe_valid = False
             print(f"  ⚠️  规则步骤截图失败：{e}")
-            return f"[规则] {action.get('description') or action.get('action_type')}"
+            return head
 
         try:
             text = rule_policy.screen_text(self.phone.dump_hierarchy())
         except Exception as e:
             text = ""
             print(f"  ⚠️  规则步骤读取控件树失败：{e}")
-        head = f"[规则] {action.get('description') or action.get('action_type')}"
         return f"{head}\n{text}".strip() if text else head
 
     # ══════════════════════════════════════════════════════════
@@ -1250,6 +1361,9 @@ class ScreenAgent:
         timings = dict(getattr(self, "_last_decision_timings", {}) or {})
         self._last_reused_frame = False
         self._last_step_usage = []
+        self._step_started = time.time()
+        raw_dumps = getattr(self.phone, "dump_count", 0)
+        self._step_dump_start = raw_dumps if isinstance(raw_dumps, int) else 0
         merged_active = (
             getattr(config, "MERGED_OBSERVE", True)
             and getattr(config, "COMPLETION_CHECK", "decision") == "decision"
@@ -1327,6 +1441,7 @@ class ScreenAgent:
                 done = True
                 print("│  🔍  决策模型标记任务完成")
             timings["completion"] = round(time.time() - started, 2)
+            self._finalize_step_metrics(timings)
             self._last_step_timings = timings
             self._archive_step(step, action, observation)
             return self._step_summary(finished, done, action, memory)
@@ -1372,10 +1487,31 @@ class ScreenAgent:
                 print("│  🔍  决策模型标记任务完成")
         timings["completion"] = round(time.time() - started, 2)
 
+        self._finalize_step_metrics(timings)
         self._last_step_timings = timings
         self._archive_step(step, action, observation)
 
         return self._step_summary(finished, done, action, memory)
+
+    def _finalize_step_metrics(self, timings: dict) -> None:
+        """记录本步墙钟耗时，供规则步/模型步分组统计（写进 step timings 与汇总）。"""
+        elapsed = round(time.time() - getattr(self, "_step_started", time.time()), 2)
+        timings["step_seconds"] = elapsed
+        raw_dumps = getattr(self.phone, "dump_count", None)
+        if isinstance(raw_dumps, int):
+            timings["dumps"] = raw_dumps - int(getattr(self, "_step_dump_start", 0))
+        self._total_step_seconds = round(
+            getattr(self, "_total_step_seconds", 0.0) + elapsed, 2)
+        if timings.get("rule_hit"):
+            if self._rule_hits:
+                self._rule_hits[-1]["seconds"] = elapsed
+            return
+        decision = timings.get("decision")
+        if isinstance(decision, (int, float)):
+            samples = getattr(self, "_model_decision_seconds", None)
+            if samples is None:
+                self._model_decision_seconds = samples = []
+            samples.append(float(decision))
 
     @staticmethod
     def _step_summary(finished, done, action, memory):
@@ -1499,6 +1635,10 @@ class ScreenAgent:
         for item in rule_hits:
             name = item.get("name", "unknown")
             rule_by_name[name] = rule_by_name.get(name, 0) + 1
+        rule_seconds = round(
+            sum(float(item.get("seconds") or 0.0) for item in rule_hits), 2)
+        total_seconds = round(float(getattr(self, "_total_step_seconds", 0.0)), 2)
+        decision_samples = list(getattr(self, "_model_decision_seconds", []) or [])
         return {
             "provider": getattr(config, "ACTIVE_PROVIDER", "unknown"),
             "model": getattr(self, "model", ""),
@@ -1521,12 +1661,24 @@ class ScreenAgent:
             "per_step_total_tokens": round(total / denominator, 2),
             # 启动期连接预热耗时（不计入第一步）
             "warmup_seconds": getattr(self, "_warmup_seconds", 0.0),
-            # 规则快路：命中几次、省掉几次模型调用、按规则拆分
+            # 规则快路：命中几次、省掉几次模型调用、按规则拆分、启动时的成本核算
             "rule_fastpath": {
                 "hits": len(rule_hits),
                 "saved_calls": sum(int(item.get("saved_calls", 0)) for item in rule_hits),
                 "by_rule": rule_by_name,
+                "rule_hit_steps": len(rule_hits),
+                "rule_step_seconds": rule_seconds,
+                "total_step_seconds": total_seconds,
+                "rule_time_ratio": (
+                    round(rule_seconds / total_seconds, 3) if total_seconds else 0.0
+                ),
+                "cost": getattr(self, "_rule_cost", {}) or {},
             },
+            # 模型步决策耗时均值：与规则步耗时对比，判断规则快路是否真的省时间
+            "model_decision_seconds_mean": (
+                round(sum(decision_samples) / len(decision_samples), 2)
+                if decision_samples else 0.0
+            ),
             "by_provider": by_provider,
             "calls_detail": events,
         }

@@ -51,7 +51,8 @@ def test_tap_parses_string_coordinates(agent):
 
 def test_type_with_text_calls_controller(agent):
     agent._execute({"action_type": "type", "text": "测试消息123"})
-    assert agent.phone.calls == [("type_text", ("测试消息123",), {})]
+    assert agent.phone.calls == [
+        ("type_text", ("测试消息123",), {"allow_search": False})]
 
 
 def test_unknown_action_returns_false(agent):
@@ -68,4 +69,5 @@ def test_read_only_blocks_mutating_actions(action_type):
     assert obj._execute(action) is False
     assert action["blocked"] is True
     assert "只读" in action["blocked_reason"]
-    assert obj.phone.calls == []
+    # type 会先 dump 判断是否搜索框，但绝不能真正输入或发送
+    assert not any(call[0] == "type_text" for call in obj.phone.calls)
