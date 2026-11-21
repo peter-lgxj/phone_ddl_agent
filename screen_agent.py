@@ -166,6 +166,12 @@ def format_ocr_observation(elements: list[dict]) -> str:
 
 READ_ONLY_BLOCKED_ACTIONS = {"send", "press_enter", "type"}
 
+# 这些规则步骤只改变导航位置，观察用一次控件树 dump 即可，不必截图+settle
+_LIGHT_RULE_OBSERVE = {
+    "open_group", "search_entry", "search_type", "search_result",
+    "tap_input", "back_after_miss",
+}
+
 
 class ScreenAgent:
 
@@ -312,14 +318,18 @@ class ScreenAgent:
             dump = float(getattr(config, "RULE_DUMP_SECONDS", 2.5))
         shot = float(getattr(config, "RULE_SCREENSHOT_SECONDS", 1.0))
         execute = float(getattr(config, "RULE_EXECUTE_SECONDS", 0.3))
-        decision = float(getattr(config, "RULE_MODEL_DECISION_SECONDS", 5.0))
-        estimate = round(dump * 2 + shot + execute, 2)
+        decision = float(getattr(config, "RULE_MODEL_DECISION_SECONDS", 5.6))
+        # 开群/搜索等导航规则用轻观察（一次 dump，不截图/不 settle）；
+        # 滚动规则仍保留截图，按 2 次 dump + 截图估算。
+        estimate = round(dump * 2 + execute, 2)
+        estimate_with_shot = round(dump * 2 + shot + execute, 2)
         enabled = mode != "off" and (mode == "on" or estimate <= decision)
         cost = {
             "mode": mode,
             "driver": driver,
             "dump_seconds": dump,
             "rule_step_estimate": estimate,
+            "rule_step_estimate_with_screenshot": estimate_with_shot,
             "model_decision_seconds": decision,
             "enabled": enabled,
         }
@@ -1042,13 +1052,35 @@ class ScreenAgent:
 
     def _execute(self, action: dict) -> bool:
         t = action.get("action_type", "wait")
+        search_type_allowed = False
 
         if self.read_only and t in READ_ONLY_BLOCKED_ACTIONS:
-            reason = f"只读模式拒绝动作「{t}」：读屏任务不允许发言或改动输入内容"
-            action["blocked"] = True
-            action["blocked_reason"] = reason
-            print(f"  ⛔  {reason}")
-            return False
+            rule_name = (action.get("rule") or {}).get("name")
+            # 只放行「搜索框输入」：它只改搜索框，不产生外发；
+            # 消息输入框的 type、send、press_enter 仍一律拒绝。
+            allowed_search = (
+                t == "type"
+                and action.get("search_input") is True
+                and rule_name == "search_type"
+            )
+            if t == "type" and not allowed_search:
+                # 模型自己选的搜索输入：按当前控件树判断，不看坐标
+                try:
+                    current_xml = self.phone.dump_hierarchy()
+                except Exception:
+                    current_xml = ""
+                allowed_search = rule_policy.is_search_input(current_xml)
+            if allowed_search:
+                search_type_allowed = True
+                assert not action.get("send") and "发送" not in str(
+                    action.get("target") or ""), "搜索输入不得携带发送语义"
+                print("  🔎  只读模式放行搜索框输入（不产生外发）")
+            else:
+                reason = f"只读模式拒绝动作「{t}」：读屏任务不允许发言或改动输入内容"
+                action["blocked"] = True
+                action["blocked_reason"] = reason
+                print(f"  ⛔  {reason}")
+                return False
 
         if t == "open_app":
             self.launcher.launch(action.get("app_name", ""))
@@ -1059,7 +1091,8 @@ class ScreenAgent:
             if not text:
                 print("  ⚠️  type 动作缺少 text 字段，跳过本步")
                 return False
-            self.phone.type_text(text)
+            self.phone.type_text(
+                text, allow_search=search_type_allowed or bool(action.get("search_input")))
         elif t == "send":
             self.phone.send()
             print("回车发送")
@@ -1200,6 +1233,12 @@ class ScreenAgent:
             last_action=last_action,
             state=state,
             max_scrolls=int(getattr(config, "RULE_MAX_SCROLLS", 2)),
+            search_ascii_only=self.driver_kind != "uiautomator2",
+            search_force=bool(getattr(config, "RULE_SEARCH_FORCE", False)),
+            search_allowed=(
+                self.driver_kind == "uiautomator2"
+                or bool(getattr(config, "RULE_SEARCH_FORCE", False))
+            ),
             known_input_resource_ids=(
                 getattr(config, "WECHAT_INPUT_RESOURCE_ID", ""),
             ),
@@ -1214,6 +1253,13 @@ class ScreenAgent:
             if reason:
                 raise AssertionError(
                     f"规则快路 tap 落在发送按钮区域（{reason}）：{action}")
+        elif action.get("action_type") == "type":
+            # 规则只允许搜索框输入；缺 search_input 或换了规则名直接失败
+            assert action.get("search_input") is True, "规则 type 只能是搜索框输入"
+            assert (action.get("rule") or {}).get("name") == "search_type", \
+                "规则 type 必须来自 search_type"
+            assert rule_policy.is_search_input(xml, str(action.get("resource_id") or "")), \
+                "当前界面不是搜索框，拒绝规则输入"
 
         record = {"name": action["rule"]["name"], "step": len(memory.steps) + 1,
                   "saved_calls": 1}
@@ -1223,7 +1269,21 @@ class ScreenAgent:
         return action
 
     def _rule_observe(self, action: dict, memory: TaskMemory) -> str:
-        """规则步骤的观察：截图 + 控件树文字，不调用视觉模型。"""
+        """规则步骤的观察：截图 + 控件树文字，不调用视觉模型。
+
+        开群/搜索这类导航步骤只要知道「现在到了哪个界面」，用一次控件树 dump
+        就够；截图与 settle 留给滚动手势（需要视觉证据判断是否到顶/到底）。
+        """
+        head = f"[规则] {action.get('description') or action.get('action_type')}"
+        rule_name = (action.get("rule") or {}).get("name")
+        if rule_name in _LIGHT_RULE_OBSERVE:
+            try:
+                text = rule_policy.screen_text(self.phone.dump_hierarchy())
+            except Exception as e:
+                text = ""
+                print(f"  ⚠️  规则步骤读取控件树失败：{e}")
+            return f"{head}\n{text}".strip() if text else head
+
         self._settle_screen()
         self._clear_observe_shot()
         try:
@@ -1232,14 +1292,13 @@ class ScreenAgent:
         except Exception as e:
             self._observe_valid = False
             print(f"  ⚠️  规则步骤截图失败：{e}")
-            return f"[规则] {action.get('description') or action.get('action_type')}"
+            return head
 
         try:
             text = rule_policy.screen_text(self.phone.dump_hierarchy())
         except Exception as e:
             text = ""
             print(f"  ⚠️  规则步骤读取控件树失败：{e}")
-        head = f"[规则] {action.get('description') or action.get('action_type')}"
         return f"{head}\n{text}".strip() if text else head
 
     # ══════════════════════════════════════════════════════════
@@ -1303,6 +1362,8 @@ class ScreenAgent:
         self._last_reused_frame = False
         self._last_step_usage = []
         self._step_started = time.time()
+        raw_dumps = getattr(self.phone, "dump_count", 0)
+        self._step_dump_start = raw_dumps if isinstance(raw_dumps, int) else 0
         merged_active = (
             getattr(config, "MERGED_OBSERVE", True)
             and getattr(config, "COMPLETION_CHECK", "decision") == "decision"
@@ -1436,6 +1497,9 @@ class ScreenAgent:
         """记录本步墙钟耗时，供规则步/模型步分组统计（写进 step timings 与汇总）。"""
         elapsed = round(time.time() - getattr(self, "_step_started", time.time()), 2)
         timings["step_seconds"] = elapsed
+        raw_dumps = getattr(self.phone, "dump_count", None)
+        if isinstance(raw_dumps, int):
+            timings["dumps"] = raw_dumps - int(getattr(self, "_step_dump_start", 0))
         self._total_step_seconds = round(
             getattr(self, "_total_step_seconds", 0.0) + elapsed, 2)
         if timings.get("rule_hit"):

@@ -206,11 +206,18 @@ RULE_DUMP_SECONDS = float(os.getenv("RULE_DUMP_SECONDS", "2.5"))        # adb_du
 RULE_DUMP_SECONDS_U2 = float(os.getenv("RULE_DUMP_SECONDS_U2", "0.3"))  # uiautomator2
 RULE_SCREENSHOT_SECONDS = float(os.getenv("RULE_SCREENSHOT_SECONDS", "1.0"))
 RULE_EXECUTE_SECONDS = float(os.getenv("RULE_EXECUTE_SECONDS", "0.3"))
-# 一次合并决策请求（含截图预处理与模型往返）的实测耗时下界；用于成本比较
-RULE_MODEL_DECISION_SECONDS = float(os.getenv("RULE_MODEL_DECISION_SECONDS", "5.0"))
+# 一次合并决策请求（含截图预处理与模型往返）的实测耗时上界。235deea 之后的
+# 真机 A/B：模型步 5.20–5.58s，规则步（轻观察）5.52–5.59s；规则步能省掉一次
+# 列表导航请求，任务总耗时 11.44s vs 17.81s，因此默认开启。可用环境变量覆盖。
+RULE_MODEL_DECISION_SECONDS = float(os.getenv("RULE_MODEL_DECISION_SECONDS", "5.6"))
 # 同一次会话里规则最多连续滚多少步；到上限后交回 VLM，避免无限翻页。
 # 默认 2：真实群消息翻两屏仍未出现答案时，规则继续滚的收益抵不过每次 dump 的开销。
 RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "2"))
+# 实验开关：1 时目标即使在可见行也强制走搜索，用于对比搜索/列表两条路径；
+# 默认 0，正常行为是「可见行优先 open_group，不可见才搜索」。
+RULE_SEARCH_FORCE = os.getenv("RULE_SEARCH_FORCE", "0").strip().lower() in (
+    "1", "true", "on"
+)
 
 ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "runs")  # 每步截图与动作记录的归档目录
 

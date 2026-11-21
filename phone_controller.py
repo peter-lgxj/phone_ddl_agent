@@ -125,7 +125,7 @@ class PhoneController:
         print(f"滑动：({x1},{y1}) → ({x2},{y2})")
         time.sleep(0.8)
 
-    def type_text(self, text: str):
+    def type_text(self, text: str, allow_search: bool = False):
         """
         输入文字，自动激活输入框，支持中文。
         只负责输入，不自动发送——发送由智能体的 send 动作单独完成，

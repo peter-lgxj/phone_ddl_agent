@@ -20,7 +20,7 @@ from ddl_agent.extract.message_context import detect_correction
 from ddl_agent.models import DeadlineCandidate, RawMessage
 from ddl_agent.pipeline import DdlAgent
 from ddl_agent.planner import select_sources
-from ddl_agent.query_focus import focus_records
+from ddl_agent.query_focus import focus_records, task_matches
 from ddl_agent.settings import TZ
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -356,6 +356,14 @@ def test_d07_latest_homework_notice_from_last_week():
     assert len(filtered) == 1
     assert _task(filtered[0].task_name) == _task("作业三")
     assert filtered[0].deadline_iso == "2026-11-29T23:59:00+08:00"
+
+
+def test_d12_english_task_name_matches_chinese_alias():
+    # 图片任务里写 Final Report / Final report，对应中文「期末报告」；
+    # 只做已知映射，不认识的英文名保留原名（task_matches 返回 False 而不是硬猜）
+    assert task_matches("期末报告", "Final Report")
+    assert task_matches("Final report", "期末报告")
+    assert not task_matches("期末报告", "Final Presentation")
 
 
 def test_d09_month_end_stays_uncertain_and_null_deadline():

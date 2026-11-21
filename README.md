@@ -321,7 +321,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 9. **自适应 settle（`OBSERVE_SETTLE_MODE=adaptive`，默认）**：动作后连续两次截图哈希相同就提前返回，最多等 `OBSERVE_SETTLE_SECONDS`；`fixed` 保留旧的固定等待；
 10. 每步 `step_NNN.json` 新增 `timings`（screenshot/ocr_pre/ocr/ocr_triggered/ocr_reason/snap_source/snap_tree/snap_yolo/snap_ocr/ocr_snap/preprocess/semantic/decision/decide_total/execute/observe/settle/completion/merged_fallback），便于统计触发率与省下的时间；`timings.ocr` 已包含控件树、YOLO 与 OCR 三段定位耗时，`snap_yolo` 单独记录 YOLO 段。
 
-按上表估算：旧流程每步最多 4 次模型请求；完成判断并入决策、语义分析关闭后为 2 次；`MERGED_OBSERVE=1` 默认再合并观察与决策，**正常每步 1 次带图请求**。整步耗时按旧阶段耗时推算约 **8–10s → 5–7s**（估算）。真机 A/B 见下一节：235deea 上合并观察反而更慢，原因是同期的规则快路固定滚动 6 次，不是合并观察本身；该问题已按成本核算默认关闭。OCR 预热只省启动后的第一步约 6–7s，自适应 settle 每步最多省约 1s。真机单次实测见上方报告链接，不作为稳定性能指标。
+按上表估算：旧流程每步最多 4 次模型请求；完成判断并入决策、语义分析关闭后为 2 次；`MERGED_OBSERVE=1` 默认再合并观察与决策，**正常每步 1 次带图请求**。整步耗时按旧阶段耗时推算约 **8–10s → 5–7s**（估算）。真机 A/B 见下一节：235deea 上合并观察反而更慢，原因是同期的规则快路固定滚动 6 次，不是合并观察本身；该问题已按「滚动上限 2 + 轻观察」修复：规则开关实测 11.44s vs 17.81s，规则快路在 adb_dump 下默认开启。OCR 预热只省启动后的第一步约 6–7s，自适应 settle 每步最多省约 1s。真机单次实测见上方报告链接，不作为稳定性能指标。
 
 合并观察的回退路径：若合并响应不合法，本步总计 3 次请求（1 次失败的合并请求 + 1 次 observe + 1 次 decide），动作仍只执行一次；`COMPLETION_CHECK=every_step` 时不做合并，保持原两段式 + 完成检测，避免退化出额外的 task_done 调用。`tests/test_ocr_on_demand.py` 用假客户端断言了默认每步 1 次、关闭合并时 2 次、回退时动作只执行一次。
 
@@ -365,13 +365,16 @@ A/B 时保持同一任务文本、同一设备、同一网络与同一 provider�
 
 | 标签 | 含义 | 当前结论 |
 | --- | --- | --- |
-| 真机实测 | 设备截图、`step_*.json`、`usage_summary.json` 直接产生 | 235deea、同一任务同群、`adb_dump`：`MERGED_OBSERVE=0` 20.63s / 3 请求；`=1` 71.07s / 1 请求；两组动作序列不一致（`tap→finish` vs `tap→swipe×6→finish`），是策略差异，不能写成提速 |
-| 真机实测 | 规则步耗时 | 规则 7 步（open_group×1 + scroll×6）58.29–60.92s；`adb_dump` 单次 dump ≈2.5s，规则步估算 6.3s > 一次合并决策约 5–7s，故默认关闭规则快路 |
+| 真机实测（基线 235deea） | 设备截图、`step_*.json`、`usage_summary.json` 直接产生 | 同一任务同群、`adb_dump`：`MERGED_OBSERVE=0` 20.63s / 3 请求；`=1` 71.07s / 1 请求；序列不一致（`tap→finish` vs `tap→swipe×6→finish`），是策略差异 |
+| 真机实测（2026-11-22 改后，默认规则开启） | 同上 | `MERGED_OBSERVE=0` 21.03s / 5 请求 / 2 dumps；`=1` 11.45s / 1 请求 / 3 dumps（规则 `open_group` + 1 次模型完成，规则步 5.47–5.65s）。两组序列不同（模型导航 vs 规则导航），只能算策略差异 |
+| 真机实测（合并观察，规则关闭） | 同上 | 0/1 各 3 次：21.27s vs 17.81s（前两次；第三次超时 56.3s），序列一致（`wait→tap→finish`），合并观察约快 16% |
+| 真机实测（规则开关） | 同上 | 强制规则 11.44s / 1 请求 vs 默认关闭 17.81s / 3 请求；规则步 5.5s ≈ 模型步 5.3s，但少一次请求，故默认开启 |
+| 真机实测（搜索 vs 列表） | 同上 | 同群各 3 次：搜索 39.01s / 7 dumps / 4 步；列表 11.48s / 3 dumps / 2 步。`adb_dump` 下搜索页 dump 明显更慢，搜索不作为默认（`RULE_SEARCH_FORCE=1` 可强制） |
+| 真机实测（monitor） | 单进程 `run_cycle`（QQ 单群） | 7 步 / 51.2s / 19,591 tokens；`fetch→extract→dedupe→resolve→write` 全链路，输出 `data.json`、`deadlines.ics`、`calendar.html`；手机日历测试事件写入后已删除，.ics 生成 VEVENT+VALARM |
 | 离线回放 | 冻结真机抽取候选，用当前裁决/聚焦重算；不联网、不碰手机 | 判分复跑 20/21 = 95.24%（D02/D03 未采集，已剔除分母）；证据 `runs/_verify/judge_replay_result.json`（`runs/` 不入库） |
-| 离线回放 | 规则停止条件 | 归档聊天页已显示「操作系统作业一」时规则 0 次滚动；群列表仍 `open_group (540,1375)`；发送区域坐标被拒 |
-| 未执行 | 修复后的真机 A/B、真机判分复跑 | 设备在修改期间断开，尚无可引用的修复后真机数字；不把回放结果写成实测 |
+| 离线回放 | 规则停止条件 | 真机实时控件树：聊天页已显示「操作系统作业一」时规则 0 次滚动；群列表 `open_group`；发送区域坐标/文案均拒绝 |
 
-同屏复用与连接预热不列为收益项：6 次归档 A/B 中 `reused_frame` 均为 0；复用只在桌面静态页命中，聊天页因光标/动画导致哈希变化；复用最多省 `preprocess` 0.11–0.15s/步；连接预热 0.22–0.43s 仅启动一次，每步收益 0.00s。
+同屏复用与连接预热不列为收益项：6 次归档 A/B 中 `reused_frame` 均为 0；复用只在静态页命中，聊天页因光标/动画哈希变化；复用最多省 `preprocess` 0.11–0.15s/步（monitor 中出现过 1 次同屏复用，但不足以改变任务耗时结论）；连接预热 0.22–0.43s 仅启动一次，每步收益 0.00s。
 
 ### 脱敏证据
 
