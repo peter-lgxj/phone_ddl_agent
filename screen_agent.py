@@ -247,6 +247,8 @@ class ScreenAgent:
         self.read_only = (
             getattr(config, "READ_ONLY_MODE", True) if read_only is None else read_only
         )
+        # 规则快路开关由成本核算决定：adb_dump 下规则步要付两次 dump
+        self.rule_fastpath_enabled, self._rule_cost = self._resolve_rule_fastpath()
         self.run_dir   = None
         self.last_status = "idle"   # done / timeout / failed / idle
         self._observe_valid = False  # 当前 screen_observe.png 是否是本步真实截图
@@ -292,6 +294,45 @@ class ScreenAgent:
             print(f"  ⚠️  设备通道预热失败（首步会重新握手）：{e}")
         self._warmup_seconds = round(time.perf_counter() - started, 2)
         print(f"连接预热完成：{self._warmup_seconds}s（HTTP keep-alive + 设备通道）")
+
+    def _resolve_rule_fastpath(self) -> tuple[bool, dict]:
+        """按实测成本决定规则快路是否启用，并在启动日志说明原因。
+
+        规则一步的本地成本 = 判断用的 dump + 观察用的截图与 dump + 动作执行；
+        adb_dump 下单次 dump 实测约 2.5s，合计约 6.3s，已高于一次合并决策请求。
+        显式 RULE_FASTPATH=1/0 可覆盖；auto 模式按成本比较结果决定。
+        """
+        mode = getattr(config, "RULE_FASTPATH_MODE", "auto")
+        driver = getattr(self, "driver_kind", "adb_dump")
+        if driver == "uiautomator2":
+            dump = float(getattr(config, "RULE_DUMP_SECONDS_U2", 0.3))
+        else:
+            dump = float(getattr(config, "RULE_DUMP_SECONDS", 2.5))
+        shot = float(getattr(config, "RULE_SCREENSHOT_SECONDS", 1.0))
+        execute = float(getattr(config, "RULE_EXECUTE_SECONDS", 0.3))
+        decision = float(getattr(config, "RULE_MODEL_DECISION_SECONDS", 5.0))
+        estimate = round(dump * 2 + shot + execute, 2)
+        enabled = mode != "off" and (mode == "on" or estimate <= decision)
+        cost = {
+            "mode": mode,
+            "driver": driver,
+            "dump_seconds": dump,
+            "rule_step_estimate": estimate,
+            "model_decision_seconds": decision,
+            "enabled": enabled,
+        }
+        if mode == "off":
+            print("规则快路：已按 RULE_FASTPATH=0 关闭")
+        elif mode == "on":
+            print(f"规则快路：已按 RULE_FASTPATH=1 强制开启（估算规则步 {estimate:.1f}s）")
+        elif enabled:
+            print(f"规则快路：自动开启（规则步估算 {estimate:.1f}s <= "
+                  f"一次模型决策 {decision:.1f}s）")
+        else:
+            print(f"规则快路：默认关闭——{driver} 单次 dump 实测约 {dump:.1f}s，"
+                  f"规则步估算 {estimate:.1f}s 高于一次模型决策 {decision:.1f}s；"
+                  f"需要时设 RULE_FASTPATH=1 强制开启")
+        return enabled, cost
 
     # ══════════════════════════════════════════════════════════
     #  语义分析：在决策前，用文字大模型理解历史 observation
@@ -1125,7 +1166,8 @@ class ScreenAgent:
         命中时省掉一次决策请求（合并观察模式下也就是本步唯一的一次视觉调用）。
         """
         self._last_rule_seconds = 0.0
-        if not getattr(config, "RULE_FASTPATH", True):
+        if not getattr(self, "rule_fastpath_enabled",
+                       getattr(config, "RULE_FASTPATH", True)):
             return None
         state = getattr(self, "_rule_state", None)
         if state is None:
@@ -1521,11 +1563,12 @@ class ScreenAgent:
             "per_step_total_tokens": round(total / denominator, 2),
             # 启动期连接预热耗时（不计入第一步）
             "warmup_seconds": getattr(self, "_warmup_seconds", 0.0),
-            # 规则快路：命中几次、省掉几次模型调用、按规则拆分
+            # 规则快路：命中几次、省掉几次模型调用、按规则拆分、启动时的成本核算
             "rule_fastpath": {
                 "hits": len(rule_hits),
                 "saved_calls": sum(int(item.get("saved_calls", 0)) for item in rule_hits),
                 "by_rule": rule_by_name,
+                "cost": getattr(self, "_rule_cost", {}) or {},
             },
             "by_provider": by_provider,
             "calls_detail": events,

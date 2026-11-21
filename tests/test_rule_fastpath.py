@@ -259,9 +259,45 @@ def test_two_rule_steps_make_no_model_calls(tmp_path, monkeypatch):
     assert step2["observation"].startswith("[规则]")
 
     summary = agent._usage_summary(len(memory.steps))
-    assert summary["rule_fastpath"] == {
-        "hits": 2, "saved_calls": 2, "by_rule": {"open_group": 1, "scroll": 1}
-    }
+    fastpath = summary["rule_fastpath"]
+    assert fastpath["hits"] == 2
+    assert fastpath["saved_calls"] == 2
+    assert fastpath["by_rule"] == {"open_group": 1, "scroll": 1}
+
+
+# ---------------------------------------------------------------- 成本核算
+def _cost_agent(monkeypatch, driver: str, mode: str):
+    monkeypatch.setattr(config, "RULE_FASTPATH_MODE", mode)
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent.driver_kind = driver
+    return agent
+
+
+def test_adb_dump_cost_disables_rule_fastpath_by_default(monkeypatch):
+    agent = _cost_agent(monkeypatch, "adb_dump", "auto")
+    enabled, cost = agent._resolve_rule_fastpath()
+
+    # 2 x 2.5s dump + 1.0s 截图 + 0.3s 动作 = 6.3s > 5.0s 模型决策
+    assert enabled is False
+    assert cost["rule_step_estimate"] == 6.3
+    assert cost["dump_seconds"] == 2.5
+    assert cost["driver"] == "adb_dump"
+
+
+def test_uiautomator2_keeps_rule_fastpath_enabled(monkeypatch):
+    agent = _cost_agent(monkeypatch, "uiautomator2", "auto")
+    enabled, cost = agent._resolve_rule_fastpath()
+
+    assert enabled is True
+    assert cost["rule_step_estimate"] == 1.9
+
+
+def test_explicit_switch_overrides_cost_estimate(monkeypatch):
+    agent = _cost_agent(monkeypatch, "adb_dump", "on")
+    assert agent._resolve_rule_fastpath()[0] is True
+
+    agent = _cost_agent(monkeypatch, "uiautomator2", "off")
+    assert agent._resolve_rule_fastpath()[0] is False
 
 
 def test_read_only_still_blocks_mutating_actions_after_rule_hit(tmp_path, monkeypatch):
