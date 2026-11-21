@@ -64,6 +64,25 @@ def test_missing_group_falls_back_to_vlm():
     assert action is None
 
 
+def test_chat_page_with_input_box_never_taps_group_title():
+    # 会话页标题「2026 计算机班级群」可点击且与任务群名一致；已有输入框时不得当群列表行点
+    action = rule_policy.decide(make_ctx(
+        CHAT_XML, "在「2026 计算机班级群」里找实验报告二的截止时间"))
+    assert action is None
+
+
+def test_title_bar_row_is_rejected_even_without_input_box():
+    xml = (
+        '<hierarchy><node bounds="[0,0][1080,2374]">'
+        '<node text="2026 计算机班级群" class="android.widget.TextView" '
+        'clickable="true" bounds="[103,156][488,218]" />'
+        '<node text="历史消息" class="android.widget.TextView" '
+        'clickable="true" bounds="[100,900][900,1000]" />'
+        '</node></hierarchy>'
+    )
+    assert rule_policy.decide(make_ctx(xml, "打开「2026 计算机班级群」")) is None
+
+
 def test_scroll_only_after_entering_target_group():
     state = {"entered_group": "2026 计算机班级群", "scrolls": 0}
     action = rule_policy.decide(make_ctx(CHAT_XML, "读取群消息", state=state))

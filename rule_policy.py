@@ -165,6 +165,17 @@ def screen_has_task_keyword(xml_text: str, task: str,
     return ""
 
 
+def _in_title_bar(row: dict, screen_height: int) -> bool:
+    """命中行是否落在顶部标题栏区域。
+
+    会话页标题文字与任务点名的群名完全一致，且可点击；若把它当群列表行点击，
+    会停在原页面空转一步。标题栏高度按屏幕 12% 估算（1080x2374 下约 285px）。
+    """
+    if screen_height <= 0:
+        return False
+    return row["center"][1] < screen_height * 0.12
+
+
 def _nearest_clickable(node, parents: dict) -> object | None:
     current = node
     while current is not None:
@@ -288,14 +299,19 @@ def decide(ctx: RuleContext) -> dict | None:
 
     targets = extract_quoted_targets(ctx.task)
 
-    # 2) 开群/打开会话：任务里点名的目标在控件树里有唯一可点击行
-    if targets and not state.get("entered_group"):
+    # 2) 开群/打开会话：任务里点名的目标在控件树里有唯一可点击行。
+    #    已经进群（state）、或页面已有输入框（说明已在会话/详情页）时一律不点：
+    #    会话页标题栏文字与群名完全相同且可点击，点它等于原地空转一步。
+    if (targets and not state.get("entered_group")
+            and find_input(ctx.xml) is None):
         found = []
         for target in targets:
             row = find_target_row(ctx.xml, target)
             if row is not None:
                 found.append((target, row))
-        if len(found) == 1:
+        size = root_size(ctx.xml)
+        height = size[1] if size else 0
+        if len(found) == 1 and not _in_title_bar(found[0][1], height):
             target, row = found[0]
             state["entered_group"] = row["text"] or target
             state["scrolls"] = 0
