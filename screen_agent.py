@@ -991,6 +991,10 @@ class ScreenAgent:
             with open("screen_current.png", "rb") as f:
                 digest = hashlib.md5(f.read()).hexdigest()
 
+        # 截图指纹供控件树缓存复用；界面变了指纹就变，旧 dump 自动失效
+        if hasattr(self.phone, "set_frame_fingerprint"):
+            self.phone.set_frame_fingerprint(digest)
+
         last_hash = getattr(self, "_last_frame_hash", None)
         last_bytes = getattr(self, "_last_frame_bytes", None)
         last_meta = getattr(self, "_last_frame_meta", None)

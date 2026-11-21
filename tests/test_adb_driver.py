@@ -181,6 +181,43 @@ def test_capture_with_dump_degrades_when_dump_fails(tmp_path):
     assert "dump" in report["errors"]
 
 
+def test_dump_reuses_cache_only_for_same_frame_fingerprint():
+    controller = RecordingController()
+    controller._exec_out = lambda *args, timeout=30.0: (
+        b"<hierarchy><node bounds=\"[0,0][1080,2374]\" /></hierarchy>"
+        if args and args[0] == "cat" else PNG_BYTES
+    )
+
+    controller.set_frame_fingerprint("frame-a")
+    controller.dump_hierarchy()
+    assert controller.dump_count == 1
+
+    # 同一帧指纹：即使 TTL 已过也复用，不再 dump
+    assert controller.dump_hierarchy(use_cache=True) == controller._last_dump
+    assert controller.dump_count == 1
+    assert controller.dump_reuse_count == 1
+
+    # 指纹变化：视为界面已变，必须重新 dump
+    controller.set_frame_fingerprint("frame-b")
+    controller.dump_hierarchy(use_cache=True)
+    assert controller.dump_count == 2
+
+
+def test_invalidate_dump_forces_fresh_dump_after_action():
+    controller = RecordingController()
+    controller._exec_out = lambda *args, timeout=30.0: (
+        b"<hierarchy><node bounds=\"[0,0][1080,2374]\" /></hierarchy>"
+        if args and args[0] == "cat" else PNG_BYTES
+    )
+    controller.set_frame_fingerprint("frame-a")
+    controller.dump_hierarchy()
+    controller.tap(10, 20)  # 动作后界面可能已变
+    controller.set_frame_fingerprint("frame-a")  # 即使截图哈希碰巧相同也不得复用
+
+    controller.dump_hierarchy(use_cache=True)
+    assert controller.dump_count == 2
+
+
 def test_screenshot_uses_screencap_and_saves_png(tmp_path):
     controller = RecordingController()
 
