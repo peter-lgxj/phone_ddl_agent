@@ -1406,7 +1406,9 @@ class ScreenAgent:
         )
         self._last_observation_scope = "pre_action" if merged_active else "post_action"
         started = time.time()
-        rule_action = self._rule_action(memory) if merged_active else None
+        # 纯控件树决策开关打开时，非合并模式也先试规则快路：命中就不截图、不发视觉请求
+        tree_only = bool(getattr(config, "TREE_ONLY_DECISION", False))
+        rule_action = self._rule_action(memory) if (merged_active or tree_only) else None
         if rule_action is not None:
             action = rule_action
             timings["rule_hit"] = True
@@ -1487,7 +1489,12 @@ class ScreenAgent:
         else:
             started = time.time()
             try:
-                observation = self._observe(action, memory)
+                if timings.get("rule_hit"):
+                    # 纯控件树步骤：用控件树文字作为观察，不截图
+                    timings["tree_only"] = True
+                    observation = self._rule_observe(action, memory)
+                else:
+                    observation = self._observe(action, memory)
                 self._observe_valid = True
             except Exception as e:
                 observation = f"观察失败（动作已执行，未重试）：{e}"
