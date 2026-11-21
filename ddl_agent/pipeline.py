@@ -137,6 +137,8 @@ class DdlAgent:
             # 内容粗扫选源与查询聚焦过滤的依据
             "content_probe": content_decision,
             "focus_filter": focus_decision,
+            # 明确任务在语料里不存在时：records 为空且 no_match=true
+            "no_match": bool(focus_decision.get("no_match")),
             "ablation": {
                 "dedupe": self.dedupe_enabled,
                 "verify": self.verify_enabled,

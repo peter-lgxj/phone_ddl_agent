@@ -275,15 +275,17 @@ def test_d10_course_restriction_keeps_target_and_drops_other_course():
     assert not any(record.course == "COMP7415" for record in filtered)
 
 
-def test_d15_no_concrete_task_keeps_records():
+def test_d15_course_ddl_picks_latest_homework_only():
     records = _plain_records([("W1", True)])
     filtered, decision = focus_records(
         "查找课程作业 DDL。实习内推群里「网申截止 11-21」、家人群「报名截止」都是诱饵，不要报",
         records,
     )
-    assert decision["task_filter"] == "disabled"
-    assert len(filtered) == len(records)
-    assert any(_task(record.task_name) == _task("机器学习作业三") for record in filtered)
+    # 泛称“课程作业 DDL”按最近一次作业通知聚焦，只留作业三，不多报作业二
+    assert decision["task_filter"] == "latest_homework"
+    assert len(filtered) == 1
+    assert _task(filtered[0].task_name) == _task("作业三")
+    assert filtered[0].deadline_iso == "2026-11-29T23:59:00+08:00"
 
 
 def test_d16_similar_group_choice_and_no_task_filter():
@@ -313,7 +315,7 @@ def test_d16_similar_group_choice_and_no_task_filter():
     )
 
 
-def test_d17_and_d18_invalid_or_missing_task_are_not_filtered_out():
+def test_d17_invalid_time_keeps_records():
     w8 = _plain_records([("W8", True)])
     d17, decision17 = focus_records(
         "群里写「llm 的 ddl 是 11.31」，请报告该 DDL 的截止时间", w8
@@ -322,8 +324,46 @@ def test_d17_and_d18_invalid_or_missing_task_are_not_filtered_out():
     assert len(d17) == len(w8)
     assert any(_task(record.task_name) == _task("llm") for record in d17)
 
+
+def test_d18_missing_task_returns_empty_with_no_match():
+    w8 = _plain_records([("W8", True)])
     d18, decision18 = focus_records(
         "进入一个只有闲聊的群，查找「数据库作业」的截止时间（实际没有这条消息）", w8
     )
-    assert decision18["task_filter"] == "disabled"
-    assert len(d18) == len(w8)
+    # 明确点名「数据库作业」但语料没有：输出空结果并标 no_match，不拿 llm 记录凑数
+    assert decision18["task_filter"] == "no_match"
+    assert decision18["no_match"] is True
+    assert d18 == []
+
+
+def test_d01_latest_notice_keeps_one_record():
+    records = _plain_records([("W1", True)])
+    filtered, decision = focus_records("查看群消息，总结最近一条作业截止通知", records)
+
+    assert decision["task_filter"] == "latest_homework"
+    assert len(filtered) == 1
+    assert _task(filtered[0].task_name) == _task("作业三")
+    assert filtered[0].deadline_iso == "2026-11-29T23:59:00+08:00"
+
+
+def test_d07_latest_homework_notice_from_last_week():
+    records = _plain_records([("W5", True)])
+    filtered, decision = focus_records(
+        "向上翻阅到上周发的作业通知，报告最近的作业截止时间", records
+    )
+
+    assert decision["task_filter"] == "latest_homework"
+    assert len(filtered) == 1
+    assert _task(filtered[0].task_name) == _task("作业三")
+    assert filtered[0].deadline_iso == "2026-11-29T23:59:00+08:00"
+
+
+def test_d09_month_end_stays_uncertain_and_null_deadline():
+    records = _plain_records([("W3", True)])
+    target = next(
+        record for record in records
+        if _task(record.task_name) == _task("小组课程报告")
+    )
+    # 口径：「月底前」不猜日期；uncertain + deadline=null 即正确，判分表按 hit
+    assert target.status == "uncertain"
+    assert target.deadline_iso is None
