@@ -494,10 +494,10 @@ def enforce_tap_bounds(action, elements, screen_size):
         scored = [(target_match_score(element, target), element) for element in eligible]
         best = max((score for score, _ in scored), default=0.0)
         matches = [element for score, element in scored if score == best and score > 0]
-        boxes = {tuple(element.get("bbox") or ()) for element in matches
-                 if element.get("bbox")}
+        boxed = [element for element in matches if element.get("bbox")]
+        boxes = {tuple(element["bbox"]) for element in boxed}
         if len(boxes) == 1:
-            element = matches[0]
+            element = boxed[0]
             cx, cy = element["center"]
             return {**action, "x": cx, "y": cy}, {
                 "allowed": True,
@@ -507,6 +507,26 @@ def enforce_tap_bounds(action, elements, screen_size):
                 "model_point": [x, y],
                 "moved": [x, y] != [cx, cy],
             }
+        if matches and not boxes:
+            # OCR 结果只有文本框中心、没有 bbox：中心本身来自像素识别，
+            # 不是比例换算；唯一命中时直接采用。
+            centers = {tuple(element["center"]) for element in matches}
+            if len(centers) == 1:
+                cx, cy = next(iter(centers))
+                return {**action, "x": cx, "y": cy}, {
+                    "allowed": True,
+                    "source": "ocr_center",
+                    "target": target,
+                    "model_point": [x, y],
+                    "moved": [x, y] != [cx, cy],
+                }
+            if is_list:
+                return None, {
+                    "allowed": False,
+                    "reason": "ambiguous_list_target",
+                    "target": target,
+                    "candidates": len(centers),
+                }
         if len(boxes) > 1 and is_list:
             return None, {
                 "allowed": False,
