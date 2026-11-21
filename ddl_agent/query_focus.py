@@ -43,6 +43,8 @@ _LATEST_RE = re.compile(r"(最近|最新|上周|本周|近期)")
 # 置顶消息查询：只在带置顶标记的那条消息里取记录，不把同群其他 DDL 一起输出
 _PINNED_QUERY_RE = re.compile(r"(置顶|pinned)", re.IGNORECASE)
 _PINNED_BODY_MARKERS = ("【置顶】", "📌")
+# 微信/QQ 在置顶消息下方显示「“某某”置顶了一条消息」系统行；用它把上一条标记为置顶
+_PINNED_BANNER_RE = re.compile(r"置顶了一条消息|置顶了消息|pinned a message", re.IGNORECASE)
 _NUMBERED_HOMEWORK_RE = re.compile(
     r"(作业|实验报告|assignment|homework|hw|lab|quiz)\s*[一二三四五六七八九十0-9]+",
     re.IGNORECASE,
@@ -156,13 +158,21 @@ def _record_time_key(record) -> tuple[datetime, int]:
 
 
 def pinned_message_ids(messages: list) -> set[str]:
-    """带置顶标记的消息 id；置顶查询只在这些消息的证据里取记录。"""
-    return {
+    """识别置顶消息：正文标记、读屏元数据，或界面置顶横幅的前一条消息。"""
+    ordered = list(messages)
+    ids = {
         str(getattr(message, "message_id", ""))
-        for message in messages
-        if any(marker in (getattr(message, "body", "") or "")
+        for message in ordered
+        if getattr(message, "pinned", False)
+        or any(marker in (getattr(message, "body", "") or "")
                for marker in _PINNED_BODY_MARKERS)
-    } - {""}
+    }
+    # 真实置顶正文不带「【置顶】」：横幅「“某某”置顶了一条消息」紧跟在被置顶消息之后
+    for index, message in enumerate(ordered):
+        body = getattr(message, "body", "") or ""
+        if _PINNED_BANNER_RE.search(body) and index > 0:
+            ids.add(str(getattr(ordered[index - 1], "message_id", "")))
+    return ids - {""}
 
 
 def _record_cites(record, message_ids: set[str]) -> bool:
@@ -174,8 +184,36 @@ def _record_cites(record, message_ids: set[str]) -> bool:
     return False
 
 
+def _record_min_order(record, message_order: dict[str, int]) -> int:
+    positions = [
+        message_order[mid]
+        for mid in (
+            str(evidence_id).split(":", 1)[0]
+            for evidence_id in (getattr(record, "evidence_ids", []) or [])
+        )
+        if mid in message_order
+    ]
+    return min(positions) if positions else 10 ** 9
+
+
+def _heuristic_pinned(records: list, message_order: dict[str, int] | None):
+    """没有置顶标记时：取读屏顺序最靠前（列表顶部）且截止时间最早的记录。"""
+    order = message_order or {}
+
+    def key(record):
+        deadline = getattr(record, "deadline_iso", None)
+        return (
+            0 if deadline else 1,          # 优先有截止时间的记录
+            _record_min_order(record, order),  # 再取列表顶部
+            deadline or "9999",            # 最后取时间最早
+        )
+
+    return min(records, key=key) if records else None
+
+
 def focus_records(query: str, records: list,
-                  pinned_ids: set[str] | None = None) -> tuple[list, dict]:
+                  pinned_ids: set[str] | None = None,
+                  message_order: dict[str, int] | None = None) -> tuple[list, dict]:
     """按查询里的明确任务/课程裁剪最终记录；无明确目标时原样返回。"""
     hints = task_hints(query)
     pinned_query = bool(_PINNED_QUERY_RE.search(query or ""))
@@ -251,7 +289,18 @@ def focus_records(query: str, records: list,
             else:
                 decision["pinned_filter"] = "no_pinned_record"
         else:
-            decision["pinned_filter"] = "no_marker"
+            # 正文无【置顶】且界面没给元数据：按「列表顶部 + 时间最早」兜底，
+            # 不再把同群 11-29/12-05 一起输出。
+            picked = _heuristic_pinned(filtered, message_order)
+            if picked is not None:
+                filtered = [picked]
+                decision["pinned_filter"] = "heuristic"
+                decision["pinned_reason"] = (
+                    "无置顶标记：按读屏顺序最靠前（列表顶部）且截止时间最早选取"
+                )
+                pinned_applied = True
+            else:
+                decision["pinned_filter"] = "no_marker"
 
     if not hints and not pinned_applied and wants_latest_homework(query):
         # 「最近一条作业/课程 DDL」：只保留最近一次编号作业通知，避免多报同群旧任务
@@ -363,7 +412,12 @@ def select_sources_by_content(query: str, source_messages: list,
     name_matched = [item for item in scored if item["name_hit"]]
     task_matched = [item for item in scored if item["task_hits"]]
     if name_matched:
-        # 查询点名了具体群/邮箱：以名字为准，避免同课跨群内容把别的群带进来
+        # 查询点名了具体群/邮箱：以名字为准，避免同课跨群内容把别的群带进来；
+        # 但若同名的相似候选中，有的内容含查询任务、有的不含，则排除不含任务的那个。
+        if hints:
+            with_task = [item for item in name_matched if item["task_hits"]]
+            if with_task:
+                name_matched = with_task
         chosen_names = {item["name"] for item in name_matched}
         reason = "查询点名了来源名称，直接按名称选源"
     elif task_matched:

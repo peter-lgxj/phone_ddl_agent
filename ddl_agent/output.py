@@ -35,6 +35,8 @@ def _payload(records: list[ResolvedRecord], generated_at: datetime | None = None
                 "confidence": round(record.confidence, 4),
                 "evidence": record.evidence_ids,
                 "note": record.resolution_note,
+                "inferred": record.inferred,
+                "inference_basis": record.inference_basis,
                 "superseded_by": record.superseded_by,
                 "conflicts": record.conflicts,
                 "updated_at": record.updated_at,

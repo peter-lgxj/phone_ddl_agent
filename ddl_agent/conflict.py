@@ -162,6 +162,8 @@ class ConflictResolver:
                     confidence=CONFIDENCE_CONSISTENT,
                     resolution_note=note,
                     superseded_by=superseded,
+                    inferred=winner.inferred,
+                    inference_basis=winner.inference_basis,
                 ),
                 0,
             )
@@ -230,6 +232,8 @@ class ConflictResolver:
             ),
             superseded_by=superseded,
             conflicts=conflicts,
+            inferred=decision.winner.inferred,
+            inference_basis=decision.winner.inference_basis,
         )
 
     # ------------------------------------------------------------------ #

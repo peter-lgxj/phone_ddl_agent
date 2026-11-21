@@ -39,7 +39,9 @@ _PROMPT = """当前时间：{now}
   }}
 规则：
 - 课程代码优先看正文/标题；正文没写但「来源课程代码」给出了代码时，course 填该代码。
-- 相对时间按上面的当前时间换算；有歧义（如“考完试那周”“月底前”）不要猜，填 null 并 needs_review=true。
+- 相对时间按上面的当前时间换算并注明依据：`月底前/本月底` 换算为当月最后一天 23:59，
+  `下月初` 换算为次月 1 日 23:59，并在 reason 里写明「按月末/月初推断」；
+  其他有歧义的时间（如“考完试那周”）不要猜，填 null 并 needs_review=true。
 - 如果消息明确在讨论某个任务的截止时间，但日期未定、互相矛盾或无法解析，仍然输出该任务，
   deadline_iso=null、needs_review=true；不要因为日期缺失就省略。
 - 已过期的旧 DDL、他人课程任务、纯考试/上课时间不要输出。
@@ -128,8 +130,12 @@ class LLMDeadlineExtractor:
 
         deadline_text = str(item.get("deadline_text") or "").strip() or None
         iso = _validate_iso(item.get("deadline_iso"))
-        if iso is None and deadline_text:
-            iso = self.normalizer.normalize(deadline_text, now=now).iso
+        normalized = self.normalizer.normalize(deadline_text, now=now) if deadline_text else None
+        if iso is None and normalized is not None:
+            iso = normalized.iso
+        # 「月底前/下月初」即使模型直接给了 ISO，也要保留推断标记与依据
+        inferred = bool(normalized is not None and normalized.inferred)
+        inference_basis = normalized.inference_basis if inferred else ""
 
         try:
             confidence = float(item.get("confidence", 0.5))
@@ -170,6 +176,8 @@ class LLMDeadlineExtractor:
                 source_order=source_order,
                 is_correction=correction_marker is not None,
                 correction_marker=correction_marker,
+                inferred=inferred,
+                inference_basis=inference_basis,
             ),
             message.body,
             course_context=f"{message.subject}\n{message.source_name}",

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import calendar
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -37,9 +38,21 @@ _SLASH_DATE_RE = re.compile(
     r"(?<![\d/-])(?P<m>\d{1,2})/(?P<d>\d{1,2})(?![\d/-])"
     r"(?:\s+(?P<hh>\d{1,2}):(?P<mm>\d{2}))?"
 )
+# 群消息/OCR 常见的「11.20 23:59」写法：必须带时刻，避免把普通小数当日期
+_DOT_DATE_RE = re.compile(
+    r"(?<![\d.])(?P<m>\d{1,2})[.．](?P<d>\d{1,2})(?![\d.])"
+    r"\s*(?P<hh>\d{1,2})[:：](?P<mm>\d{2})"
+)
 
 _CN_REL_DAY = {"今天": 0, "今日": 0, "明天": 1, "明日": 1, "后天": 2, "大后天": 3}
 _CN_REL_DAY_RE = re.compile(r"(大后天|今天|今日|明天|明日|后天)")
+# 「月底前 / 本月底 / 下月初」这类相对表述：能确定的按月末/月初推断并标注依据
+_CN_MONTH_END_RE = re.compile(r"(下个?月|这个月|本月|当月)?\s*(?:月底|月末)")
+# 「本月底 / 下个月底」：月份前缀后直接跟「底/末」
+_CN_MONTH_END_ALT_RE = re.compile(r"(下个?月|这个月|本月|当月)\s*(?:底|末)")
+_CN_MONTH_START_RE = re.compile(r"(下个?月|这个月|本月|当月)?\s*(?:月初|月头)")
+# 「下月初 / 本月初」：月份前缀后直接跟「初/头」
+_CN_MONTH_START_ALT_RE = re.compile(r"(下个?月|这个月|本月|当月)\s*(?:初|头)")
 _CN_WEEK_RE = re.compile(
     r"(下个星期|下星期|下周|这个星期|本星期|本周|这周|星期|周)([一二三四五六日天])"
 )
@@ -69,6 +82,20 @@ _DATE_LIKE_RE = re.compile(
     r"\b(?:today|tomorrow|friday|monday)\b",
     re.IGNORECASE,
 )
+
+
+def _month_boundary(today: date, offset: int, *, end: bool) -> date:
+    """返回相对 ``today`` 偏移 ``offset`` 个月的最后一天 / 第一天。"""
+    year, month = today.year, today.month + offset
+    while month > 12:
+        month -= 12
+        year += 1
+    while month < 1:
+        month += 12
+        year -= 1
+    if end:
+        return date(year, month, calendar.monthrange(year, month)[1])
+    return date(year, month, 1)
 
 
 def cn_number(text: str) -> int | None:
@@ -126,6 +153,8 @@ class _Match:
     day: date
     time_of_day: tuple[int, int] | None
     text: str
+    inferred: bool = False
+    basis: str = ""
 
 
 class TimeNormalizer:
@@ -165,12 +194,16 @@ class TimeNormalizer:
         default_time_assumed = match.time_of_day is None
         dt = datetime.combine(match.day, time(hour=hour, minute=minute), tzinfo=self.tz)
         note = "仅有日期，按当天 23:59 处理" if default_time_assumed else ""
+        if match.inferred and match.basis:
+            note = "；".join(filter(None, [note, match.basis]))
         return NormalizedTime(
             iso=dt.isoformat(timespec="seconds"),
             matched_text=match.text,
             unresolved=False,
             note=note,
             default_time_assumed=default_time_assumed,
+            inferred=match.inferred,
+            inference_basis=match.basis,
         )
 
     # ------------------------------------------------------------------ #
@@ -209,12 +242,43 @@ class TimeNormalizer:
             time_of_day = self._groups_time(match) or _scan_time_of_day(text)
             return _Match(day_obj, time_of_day, match.group(0))
 
+        match = _DOT_DATE_RE.search(text)
+        if match:
+            month, day = int(match.group("m")), int(match.group("d"))
+            if not (1 <= month <= 12 and 1 <= day <= 31):
+                raise ValueError(f"{match.group(0)}")
+            day_obj = self._resolve_year(now, month, day)
+            time_of_day = self._groups_time(match) or _scan_time_of_day(text)
+            return _Match(day_obj, time_of_day, match.group(0))
+
         return None
 
     # ------------------------------------------------------------------ #
     #  相对时间
     # ------------------------------------------------------------------ #
     def _match_relative(self, text: str, now: datetime) -> _Match | None:
+        match = _CN_MONTH_END_ALT_RE.search(text) or _CN_MONTH_END_RE.search(text)
+        if match:
+            prefix = match.group(1) or ""
+            offset = 1 if prefix.startswith("下") else 0
+            day_obj = _month_boundary(now.date(), offset, end=True)
+            basis = (
+                f"「{match.group(0).strip()}」按"
+                f"{'下' if offset else '本'}月最后一天 23:59 推断"
+            )
+            return _Match(day_obj, (23, 59), match.group(0), inferred=True, basis=basis)
+
+        match = _CN_MONTH_START_ALT_RE.search(text) or _CN_MONTH_START_RE.search(text)
+        if match:
+            prefix = match.group(1) or ""
+            offset = 1 if prefix.startswith("下") else 0
+            day_obj = _month_boundary(now.date(), offset, end=False)
+            basis = (
+                f"「{match.group(0).strip()}」按"
+                f"{'次' if offset else '本'}月 1 日 23:59 推断"
+            )
+            return _Match(day_obj, (23, 59), match.group(0), inferred=True, basis=basis)
+
         match = _CN_REL_DAY_RE.search(text)
         if match:
             offset = _CN_REL_DAY[match.group(1)]
