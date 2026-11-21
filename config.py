@@ -213,6 +213,20 @@ RULE_MODEL_DECISION_SECONDS = float(os.getenv("RULE_MODEL_DECISION_SECONDS", "5.
 # 同一次会话里规则最多连续滚多少步；到上限后交回 VLM，避免无限翻页。
 # 默认 2：真实群消息翻两屏仍未出现答案时，规则继续滚的收益抵不过每次 dump 的开销。
 RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "2"))
+
+# 纯控件树决策：默认关（对照用）。开启后，非合并观察模式下也先尝试规则快路；
+# 规则能证明的步骤不截图、不发视觉请求，观察改用控件树文字。
+# 判据：引号点名的群/会话、已知 resource-id 的输入框、已进会话内的滚动、
+# 搜索入口/唯一搜索结果——这些都能由控件树证明。必须保留像素的步骤：
+# 需要读图片/课程表文字（D12）、目标文字歧义、图标不在控件树内、规则未命中。
+TREE_ONLY_DECISION = os.getenv("TREE_ONLY_DECISION", "0").strip().lower() in (
+    "1", "true", "on"
+)
+
+# screencap 与 uiautomator dump 是否并行发起；关闭时退回串行（旧行为）。
+PARALLEL_CAPTURE = os.getenv("PARALLEL_CAPTURE", "1").strip().lower() not in (
+    "0", "false", "off", ""
+)
 # 实验开关：1 时目标即使在可见行也强制走搜索，用于对比搜索/列表两条路径；
 # 默认 0，正常行为是「可见行优先 open_group，不可见才搜索」。
 RULE_SEARCH_FORCE = os.getenv("RULE_SEARCH_FORCE", "0").strip().lower() in (

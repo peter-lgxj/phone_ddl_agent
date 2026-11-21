@@ -22,7 +22,7 @@ from adb_controller import (
     parse_bounds,
     screen_text,
 )
-from ocr_locator import OCRLocator
+from ocr_locator import OCRLocator, enforce_tap_bounds
 from phone_controller import Uiautomator2CompatibilityError, _compatibility_message
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,7 +84,140 @@ def test_map_point_is_identity_for_same_size():
     assert map_point(321, 654, (1080, 2374), (1080, 2374)) == (321, 654)
 
 
+# ---------------------------------------------------------------- 坐标守卫
+def _list_elements() -> list[dict]:
+    return [
+        {"text": "2026 计算机班级群", "center": (540, 900),
+         "bbox": (100, 800, 980, 1000), "source": "xml", "type": "control"},
+        {"text": "家人群", "center": (540, 1400),
+         "bbox": (100, 1300, 980, 1500), "source": "xml", "type": "control"},
+    ]
+
+
+def test_tap_outside_screen_is_rejected():
+    action = {"action_type": "tap", "x": 5000, "y": 5000,
+              "target": "2026 计算机班级群", "description": "点击群聊"}
+    guarded, decision = enforce_tap_bounds(action, _list_elements(), (1080, 2374))
+
+    assert guarded is None
+    assert decision["allowed"] is False
+    assert decision["reason"] == "outside_screen"
+
+
+def test_list_tap_uses_exact_bounds_not_scaled_coordinates():
+    # 模型给的比例坐标落在两行之间；必须改成目标行的 bounds 中心
+    action = {"action_type": "tap", "x": 540, "y": 1150,
+              "target": "家人群", "description": "点击群聊家人群"}
+    guarded, decision = enforce_tap_bounds(action, _list_elements(), (1080, 2374))
+
+    assert decision["allowed"] is True
+    assert decision["source"] == "bounds"
+    assert (guarded["x"], guarded["y"]) == (540, 1400)
+    assert decision["moved"] is True
+
+
+def test_ambiguous_list_target_is_rejected():
+    elements = [
+        {"text": "群聊", "center": (540, 900), "bbox": (100, 800, 980, 1000),
+         "source": "xml", "type": "control"},
+        {"text": "群聊", "center": (540, 1700), "bbox": (100, 1600, 980, 1800),
+         "source": "xml", "type": "control"},
+    ]
+    action = {"action_type": "tap", "x": 540, "y": 1200,
+              "target": "群聊", "description": "打开群聊"}
+    guarded, decision = enforce_tap_bounds(action, elements, (1080, 2374))
+
+    assert guarded is None
+    assert decision["reason"] == "ambiguous_list_target"
+
+
+def test_non_list_tap_keeps_model_coords_when_target_unresolved():
+    action = {"action_type": "tap", "x": 20, "y": 30,
+              "target": "返回", "description": "点击返回图标"}
+    guarded, decision = enforce_tap_bounds(action, _list_elements(), (1080, 2374))
+
+    assert decision["allowed"] is True
+    assert decision["source"] == "model_coords"
+    assert (guarded["x"], guarded["y"]) == (20, 30)
+
+
 # ---------------------------------------------------------------- 截图
+def test_capture_with_dump_issues_both_and_reports_parallel(tmp_path):
+    controller = RecordingController()
+    calls = []
+
+    def fake_shot(path):
+        calls.append("shot")
+        return "image"
+
+    def fake_dump():
+        calls.append("dump")
+        return "<hierarchy />"
+
+    controller.screenshot = fake_shot
+    controller.dump_hierarchy = fake_dump
+
+    image, xml, report = controller.capture_with_dump(str(tmp_path / "screen.png"))
+
+    assert image == "image"
+    assert xml == "<hierarchy />"
+    assert report["parallel"] is True
+    assert sorted(calls) == ["dump", "shot"]
+
+
+def test_capture_with_dump_degrades_when_dump_fails(tmp_path):
+    controller = RecordingController()
+    controller.screenshot = lambda path: "image"
+
+    def failing_dump():
+        raise RuntimeError("uiautomator dump failed")
+
+    controller.dump_hierarchy = failing_dump
+
+    image, xml, report = controller.capture_with_dump(str(tmp_path / "screen.png"))
+
+    assert image == "image"
+    assert xml is None
+    assert "dump" in report["errors"]
+
+
+def test_dump_reuses_cache_only_for_same_frame_fingerprint():
+    controller = RecordingController()
+    controller._exec_out = lambda *args, timeout=30.0: (
+        b"<hierarchy><node bounds=\"[0,0][1080,2374]\" /></hierarchy>"
+        if args and args[0] == "cat" else PNG_BYTES
+    )
+
+    controller.set_frame_fingerprint("frame-a")
+    controller.dump_hierarchy()
+    assert controller.dump_count == 1
+
+    # 同一帧指纹：即使 TTL 已过也复用，不再 dump
+    assert controller.dump_hierarchy(use_cache=True) == controller._last_dump
+    assert controller.dump_count == 1
+    assert controller.dump_reuse_count == 1
+
+    # 指纹变化：视为界面已变，必须重新 dump
+    controller.set_frame_fingerprint("frame-b")
+    controller.dump_hierarchy(use_cache=True)
+    assert controller.dump_count == 2
+
+
+def test_invalidate_dump_forces_fresh_dump_after_action():
+    controller = RecordingController()
+    controller._exec_out = lambda *args, timeout=30.0: (
+        b"<hierarchy><node bounds=\"[0,0][1080,2374]\" /></hierarchy>"
+        if args and args[0] == "cat" else PNG_BYTES
+    )
+    controller.set_frame_fingerprint("frame-a")
+    controller.dump_hierarchy()
+    controller.tap(10, 20)  # 动作后界面可能已变
+    controller.set_frame_fingerprint("frame-a")  # 即使截图哈希碰巧相同也不得复用
+
+    controller.dump_hierarchy(use_cache=True)
+    assert controller.dump_count == 2
+
+
 def test_screenshot_uses_screencap_and_saves_png(tmp_path):
     controller = RecordingController()
 

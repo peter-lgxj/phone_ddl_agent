@@ -14,6 +14,7 @@ from .models import AgentRunResult, RetrievalPlan
 from .planner import QueryPlanner, SourceConfigParser, select_sources
 from .query_focus import (
     focus_records,
+    pinned_message_ids,
     select_sources_by_content,
     task_hints,
 )
@@ -110,8 +111,11 @@ class DdlAgent:
         else:
             outcome = self.resolver.resolve_without_verification(clusters)
         records = [record for record in outcome.records if _within_window(record, plan)]
-        # 查询只问某个任务时，同群其他 DDL 不进最终输出；没有明确任务时不过滤
-        records, focus_decision = focus_records(query, records)
+        # 查询只问某个任务时，同群其他 DDL 不进最终输出；没有明确任务时不过滤。
+        # 置顶查询额外只保留证据落在带「置顶」标记消息上的记录。
+        records, focus_decision = focus_records(
+            query, records, pinned_ids=pinned_message_ids(messages)
+        )
         stages["resolve"] = round(perf_counter() - begin, 4)
 
         write_result = None

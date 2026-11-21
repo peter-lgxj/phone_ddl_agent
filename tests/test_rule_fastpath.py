@@ -407,6 +407,24 @@ def _make_agent(tmp_path, monkeypatch, xmls):
     return agent
 
 
+def test_tree_only_switch_enables_rule_fastpath_without_screenshot(tmp_path, monkeypatch):
+    """非合并模式 + TREE_ONLY_DECISION：控件树能证明的步骤不截图、不调视觉模型。"""
+    agent = _make_agent(
+        tmp_path, monkeypatch,
+        [GROUPS_XML, GROUPS_XML, GROUPS_XML],
+    )
+    monkeypatch.setattr(config, "MERGED_OBSERVE", False)
+    monkeypatch.setattr(config, "TREE_ONLY_DECISION", True)
+    memory = TaskMemory("查看「COMP7503 作业通知群」里的群消息")
+
+    agent._execute_step(1, memory)
+
+    step1 = json.loads((agent.run_dir / "step_001.json").read_text(encoding="utf-8"))
+    assert step1["timings"]["rule_hit"] is True
+    assert step1["timings"]["tree_only"] is True
+    assert agent.phone.screenshot_calls == 0
+
+
 def test_two_rule_steps_make_no_model_calls(tmp_path, monkeypatch):
     agent = _make_agent(
         tmp_path, monkeypatch,

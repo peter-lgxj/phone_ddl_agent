@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from ..extract.message_context import normalize_source_type
 from ..models import RetrievalPlan
-from ..planner import QueryPlanner
+from ..planner import QueryPlanner, normalize_source_name, query_mentions_email
 from ..settings import TZ
 from .client import LLMClient, LLMUnavailable
 
@@ -59,7 +60,16 @@ class LLMQueryPlanner:
 
         names = {getattr(source, "name", "") for source in sources}
         chosen = [name for name in (data.get("sources") or []) if name in names]
-        selected = [source for source in sources if getattr(source, "name", "") in chosen] or base.sources
+        matched = [source for source in sources if getattr(source, "name", "") in chosen]
+        if not matched and chosen:
+            # 模型常把「Outlook/收件箱」写成主题片段；名称不完全相等时按归一化名再匹配一次
+            matched = _match_by_name(sources, chosen)
+        selected = matched or base.sources
+        selected, email_added = _ensure_email_sources(query, sources, selected)
+
+        reason = str(data.get("reason") or "")
+        if email_added:
+            reason = f"{reason}；查询点名邮件，保留邮件来源" if reason else "查询点名邮件，保留邮件来源"
 
         return RetrievalPlan(
             query=query,
@@ -69,8 +79,52 @@ class LLMQueryPlanner:
             date_from=_parse_dt(data.get("date_from")) or base.date_from,
             date_to=_parse_dt(data.get("date_to")) or base.date_to,
             allow_supplementary=bool(data.get("allow_supplementary", True)),
-            reason=str(data.get("reason") or ""),
+            reason=reason,
         )
+
+
+def _match_by_name(sources: list, names: list[str]) -> list:
+    """按归一化名匹配来源；主题被截断时允许子串互含，避免把邮件源整类丢掉。"""
+    wanted = [normalize_source_name(name) for name in names if name]
+    matched = []
+    for source in sources:
+        compact = normalize_source_name(str(getattr(source, "name", "")))
+        if not compact:
+            continue
+        if any(compact == item for item in wanted):
+            matched.append(source)
+        elif any(len(compact) >= 4 and len(item) >= 4
+                 and (compact in item or item in compact) for item in wanted):
+            matched.append(source)
+    return matched
+
+
+def _is_email_source(source) -> bool:
+    kind = getattr(source, "kind", None)
+    if kind in ("email", "chat"):
+        return kind == "email"
+    return normalize_source_type(getattr(source, "source_type", "")) == "official_email"
+
+
+def _ensure_email_sources(query: str, sources: list, selected: list) -> tuple[list, bool]:
+    """查询出现「邮件/Outlook/收件箱」时，邮件来源必须留在候选里。
+
+    模型规划可能只返回聊天群（D13 即如此）；来源名带主题片段时更难精确回填。
+    这里按来源类型兜底：只要查询点名邮件，就把未选中的邮件源补回，保证冲突两侧
+    都能被读到。
+    """
+    if not query_mentions_email(query):
+        return list(selected), False
+    kept = list(selected)
+    kept_ids = {id(source) for source in kept}
+    added = False
+    for source in sources:
+        if id(source) in kept_ids or not _is_email_source(source):
+            continue
+        kept.append(source)
+        kept_ids.add(id(source))
+        added = True
+    return kept, added
 
 
 def _strings(value) -> list[str]:

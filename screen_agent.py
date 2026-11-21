@@ -11,7 +11,8 @@ from phone_driver import create_phone_controller
 from app_launcher import AppLauncher
 from memory import TaskMemory, format_steps_compact
 from ocr_locator import (OCRLocator, mark_text_in_input_boxes, resolve_action_element,
-                         canonical_action_target, should_trigger_ocr, snap_action_coords)
+                         canonical_action_target, should_trigger_ocr, snap_action_coords,
+                         enforce_tap_bounds)
 import config
 import image_preprocess
 import rule_policy
@@ -836,6 +837,29 @@ class ScreenAgent:
             snap_source = found[0].get("source", "unknown")
             mapped, moves = snap_action_coords(mapped, candidates, max_distance)
 
+        # 用控件树 bounds 复核 tap 落点：群列表/会话列表禁止按比例换算定位，
+        # 越界、目标歧义或落点不在目标元素内一律拒绝执行并记录原因。
+        screen_size = tuple(
+            (getattr(self, "_last_image_meta", None) or {}).get("orig_size")
+            or (1080, 2374)
+        )
+        guarded, guard = enforce_tap_bounds(mapped, candidates, screen_size)
+        timings["coordinate_guard"] = guard
+        if guarded is None:
+            reason = guard.get("reason", "rejected")
+            print(f"  ⛔ 坐标校验拒绝点击：{reason}（{guard.get('target', '')}）")
+            return {
+                **mapped,
+                "action_type": "wait",
+                "coordinate_rejected": reason,
+                "thought": f"坐标校验拒绝：{reason}，保持当前界面重新观察",
+                "description": f"拒绝在 {guard.get('target') or '未知目标'} 上按比例坐标点击",
+            }
+        mapped = guarded
+        if guard.get("moved"):
+            print(f"  📐 采用控件树 bounds：{guard.get('model_point')} -> "
+                  f"{[mapped.get('x'), mapped.get('y')]}（{guard.get('target')}）")
+
         timings["ocr"] = round(
             timings.get("ocr", 0.0) + tree_elapsed + yolo_elapsed + ocr_elapsed, 2
         )
@@ -955,9 +979,21 @@ class ScreenAgent:
                 digest = None
 
         if not reuse_capture:
-            self.phone.screenshot("screen_current.png")
+            if hasattr(self.phone, "capture_with_dump"):
+                # screencap 与 uiautomator dump 并行发起，互不阻塞；
+                # dump 结果留在驱动缓存里，本步需要控件树时按帧指纹复用。
+                _, xml, report = self.phone.capture_with_dump("screen_current.png")
+                timings["parallel_capture"] = report
+                if xml is None:
+                    timings["capture_dump"] = "failed"
+            else:
+                self.phone.screenshot("screen_current.png")
             with open("screen_current.png", "rb") as f:
                 digest = hashlib.md5(f.read()).hexdigest()
+
+        # 截图指纹供控件树缓存复用；界面变了指纹就变，旧 dump 自动失效
+        if hasattr(self.phone, "set_frame_fingerprint"):
+            self.phone.set_frame_fingerprint(digest)
 
         last_hash = getattr(self, "_last_frame_hash", None)
         last_bytes = getattr(self, "_last_frame_bytes", None)
@@ -1370,7 +1406,9 @@ class ScreenAgent:
         )
         self._last_observation_scope = "pre_action" if merged_active else "post_action"
         started = time.time()
-        rule_action = self._rule_action(memory) if merged_active else None
+        # 纯控件树决策开关打开时，非合并模式也先试规则快路：命中就不截图、不发视觉请求
+        tree_only = bool(getattr(config, "TREE_ONLY_DECISION", False))
+        rule_action = self._rule_action(memory) if (merged_active or tree_only) else None
         if rule_action is not None:
             action = rule_action
             timings["rule_hit"] = True
@@ -1451,7 +1489,12 @@ class ScreenAgent:
         else:
             started = time.time()
             try:
-                observation = self._observe(action, memory)
+                if timings.get("rule_hit"):
+                    # 纯控件树步骤：用控件树文字作为观察，不截图
+                    timings["tree_only"] = True
+                    observation = self._rule_observe(action, memory)
+                else:
+                    observation = self._observe(action, memory)
                 self._observe_valid = True
             except Exception as e:
                 observation = f"观察失败（动作已执行，未重试）：{e}"

@@ -106,6 +106,50 @@ def test_llm_planner_falls_back_on_bad_output():
     assert plan.course_filters == ["COMP7608"]
 
 
+def test_llm_planner_keeps_email_source_when_query_mentions_mail():
+    """D13：模型只选了群聊，但查询点名「邮件」，邮件来源必须补回候选。"""
+
+    class Source:
+        def __init__(self, name, source_type):
+            self.name = name
+            self.source_type = source_type
+
+    chat = Source("微信/COMP7503课程群", "student_chat")
+    mail = Source("Outlook/[COMP7503] Assignment 3 ", "email")
+    client = FakeClient([{
+        "sources": ["微信/COMP7503课程群"],
+        "reason": "群里和邮件各有一条",
+    }])
+    plan = LLMQueryPlanner(client).plan(
+        "同一作业群里说 11-29、邮件说 11-30，分别读取两个来源，报告冲突并给出结论",
+        [chat, mail],
+        NOW,
+    )
+
+    assert [source.name for source in plan.sources] == [chat.name, mail.name]
+    assert "邮件来源" in plan.reason
+
+
+def test_llm_planner_fuzzy_matches_truncated_email_name():
+    """邮件来源名带主题片段时，模型回写被截断的名字也能匹配到实际来源。"""
+
+    class Source:
+        def __init__(self, name, source_type):
+            self.name = name
+            self.source_type = source_type
+
+    mail = Source("Outlook/[COMP7415] Final report — deadline", "official_email")
+    client = FakeClient([{
+        "sources": ["Outlook/[COMP7415] Final"],
+        "reason": "只在邮件里有",
+    }])
+    plan = LLMQueryPlanner(client).plan(
+        "查找 COMP7415 的期末报告截止时间：群里没有，只在邮件里有", [mail], NOW
+    )
+
+    assert [source.name for source in plan.sources] == [mail.name]
+
+
 # ---------------------------------------------------------------- 抽取
 def test_llm_extractor_normalizes_and_flags_review():
     client = FakeClient([[

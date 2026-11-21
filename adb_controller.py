@@ -18,6 +18,7 @@ import re
 import subprocess
 import time
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 
 from PIL import Image
 
@@ -140,7 +141,11 @@ class AdbDumpController:
         self.device = None  # 兼容少数按 ``phone.device`` 取字段的调用方
         self._last_dump: str | None = None
         self._last_dump_at = 0.0
+        # 控件树缓存指纹：同一帧截图内复用 dump；动作后清空
+        self._frame_fingerprint: str | None = None
+        self._dump_fingerprint: str | None = None
         self.dump_count = 0  # 实际执行的 uiautomator dump 次数，供步级统计
+        self.dump_reuse_count = 0  # 按帧指纹命中缓存、未重复 dump 的次数
         if probe:
             self._probe()
 
@@ -210,11 +215,74 @@ class AdbDumpController:
         print(f"截图已保存：{save_path}，尺寸：{image.size}（adb_dump）")
         return image
 
+    def set_frame_fingerprint(self, fingerprint: str | None) -> None:
+        """记录当前截图的指纹，供 dump 复用判断；指纹变化即视为界面变化。"""
+        self._frame_fingerprint = fingerprint
+
+    def invalidate_dump(self) -> None:
+        """动作执行后调用：界面已变，旧控件树不得再复用。"""
+        self._last_dump = None
+        self._last_dump_at = 0.0
+        self._dump_fingerprint = None
+        self._frame_fingerprint = None
+
+    def capture_with_dump(self, save_path: str = "screen.png") -> tuple[Image, str | None, dict]:
+        """并行发起 ``screencap`` 与 ``uiautomator dump``，互不阻塞。
+
+        降级：
+        - dump 失败：仍返回截图，``report['dump_error']`` 记录原因，控件树为空，
+          下一步需要时再单独重试（不写入缓存）；
+        - 截图失败：截图是视觉决策的必需输入，串行重试一次后仍失败则抛出；
+        - 关闭 ``PARALLEL_CAPTURE`` 时退回串行，行为与旧版一致。
+        """
+        report: dict = {"parallel": False, "errors": {}}
+        if not bool(getattr(config, "PARALLEL_CAPTURE", True)):
+            image = self.screenshot(save_path)
+            xml = self.dump_hierarchy()
+            report["parallel"] = False
+            return image, xml, report
+
+        report["parallel"] = True
+        started = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            shot_future = pool.submit(self.screenshot, save_path)
+            dump_future = pool.submit(self.dump_hierarchy)
+            image = None
+            xml = None
+            try:
+                image = shot_future.result()
+            except Exception as e:  # 截图失败：稍后串行重试
+                report["errors"]["screenshot"] = str(e)
+            try:
+                xml = dump_future.result()
+            except Exception as e:  # dump 失败：交回上层按需重试
+                report["errors"]["dump"] = str(e)
+        report["elapsed"] = round(time.perf_counter() - started, 3)
+
+        if image is None:
+            # 视觉决策必须有截图；并行失败不影响串行重试
+            image = self.screenshot(save_path)
+            report["screenshot_retry"] = True
+        if xml is None:
+            print(f"  ⚠️  并行 dump 失败，本步退回按需重试：{report['errors'].get('dump', '')}")
+        return image, xml, report
+
     def dump_hierarchy(self, use_cache: bool = False, ttl: float = 0.5) -> str:
-        """用系统 ``uiautomator dump`` 读取控件树 XML。"""
+        """用系统 ``uiautomator dump`` 读取控件树 XML。
+
+        复用条件：同一帧指纹（``set_frame_fingerprint``）或短 TTL 内。
+        任一动作（tap/swipe/back/home/type/open_app）都会清空缓存。
+        """
         now = time.monotonic()
-        if use_cache and self._last_dump and now - self._last_dump_at <= ttl:
-            return self._last_dump
+        if use_cache and self._last_dump:
+            same_frame = (
+                self._dump_fingerprint is not None
+                and self._dump_fingerprint == self._frame_fingerprint
+            )
+            fresh = self._dump_fingerprint is None and now - self._last_dump_at <= ttl
+            if same_frame or fresh:
+                self.dump_reuse_count += 1
+                return self._last_dump
         remote = "/sdcard/window_dump.xml"
         result = self._run("shell", "uiautomator", "dump", remote, timeout=30)
         if result.returncode != 0:
@@ -233,6 +301,7 @@ class AdbDumpController:
             )
         self._last_dump = xml_text
         self._last_dump_at = now
+        self._dump_fingerprint = self._frame_fingerprint
         self.dump_count += 1
         return xml_text
 
@@ -253,11 +322,13 @@ class AdbDumpController:
             )
 
     def tap(self, x, y):
+        self.invalidate_dump()
         self._run("shell", "input", "tap", str(int(x)), str(int(y)))
         print(f"点击：({int(x)}, {int(y)})（adb_dump）")
         time.sleep(0.8)
 
     def swipe(self, x1, y1, x2, y2, duration=0.3):
+        self.invalidate_dump()
         self._run(
             "shell", "input", "swipe",
             str(int(x1)), str(int(y1)), str(int(x2)), str(int(y2)),
@@ -271,11 +342,13 @@ class AdbDumpController:
         print(f"长按：({x}, {y})（adb_dump）")
 
     def press_back(self):
+        self.invalidate_dump()
         self._run("shell", "input", "keyevent", "4")
         print("按下返回键（adb_dump）")
         time.sleep(0.5)
 
     def press_home(self):
+        self.invalidate_dump()
         self._run("shell", "input", "keyevent", "3")
         print("按下 Home 键（adb_dump）")
         time.sleep(0.5)
@@ -296,6 +369,7 @@ class AdbDumpController:
             self._ensure_writable("type_text")
         if not text:
             return
+        self.invalidate_dump()
         # input text 只可靠支持 ASCII；中文输入需要 ADBKeyboard，只读模式默认关闭
         escaped = str(text).replace(" ", "%s")
         self._run("shell", "input", "text", escaped)
@@ -315,6 +389,7 @@ class AdbDumpController:
         return False
 
     def open_app(self, package_name: str):
+        self.invalidate_dump()
         self._run(
             "shell", "monkey", "-p", package_name,
             "-c", "android.intent.category.LAUNCHER", "1",
