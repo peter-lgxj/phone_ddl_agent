@@ -1197,13 +1197,21 @@ class ScreenAgent:
             xml=xml,
             last_action=last_action,
             state=state,
-            max_scrolls=int(getattr(config, "RULE_MAX_SCROLLS", 6)),
+            max_scrolls=int(getattr(config, "RULE_MAX_SCROLLS", 2)),
             known_input_resource_ids=(
                 getattr(config, "WECHAT_INPUT_RESOURCE_ID", ""),
             ),
         ))
         if action is None:
             return None
+        if action.get("action_type") == "tap":
+            # 只读保护之外的硬约束：规则 tap 绝不允许落在发送按钮文案或坐标区域
+            reason = rule_policy.tap_hits_send(
+                xml, int(action["x"]), int(action["y"]),
+                str(action.get("target") or ""))
+            if reason:
+                raise AssertionError(
+                    f"规则快路 tap 落在发送按钮区域（{reason}）：{action}")
 
         record = {"name": action["rule"]["name"], "step": len(memory.steps) + 1,
                   "saved_calls": 1}

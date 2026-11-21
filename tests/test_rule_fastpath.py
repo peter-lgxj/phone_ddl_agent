@@ -170,6 +170,29 @@ def test_rule_never_emits_mutating_actions():
         rule_policy._action("send", "bad", "不该发生")
 
 
+def test_tap_hits_send_detects_coords_and_label():
+    # 聊天页发送按钮 bounds=[843,2079][1037,2192]
+    assert rule_policy.tap_hits_send(CHAT_XML, 940, 2135) == "coords"
+    assert rule_policy.tap_hits_send(CHAT_XML, 540, 1375) == ""
+    assert rule_policy.tap_hits_send(CHAT_XML, 540, 1375, "发送") == "target_text"
+
+
+def test_rule_refuses_tap_inside_send_region():
+    xml = (
+        '<hierarchy><node bounds="[0,0][1080,2374]">'
+        '<node text="2026 计算机班级群" class="android.widget.TextView" '
+        'clickable="true" bounds="[843,2079][1037,2192]" />'
+        '<node text="发送" resource-id="com.tencent.mobileqq:id/send_btn" '
+        'class="android.widget.Button" clickable="true" '
+        'bounds="[843,2079][1037,2192]" />'
+        '</node></hierarchy>'
+    )
+    state = {}
+    assert rule_policy.decide(make_ctx(
+        xml, "打开「2026 计算机班级群」", state=state)) is None
+    assert state["rejected_tap"] == "coords"
+
+
 # ---------------------------------------------------------------- 集成
 class _StubPhone:
     def __init__(self, xmls: list[str]):
@@ -308,3 +331,15 @@ def test_read_only_still_blocks_mutating_actions_after_rule_hit(tmp_path, monkey
         assert agent._execute(action) is False
         assert action["blocked"] is True
         assert "只读" in action["blocked_reason"]
+
+
+def test_rule_action_asserts_tap_never_lands_on_send(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, monkeypatch, [CHAT_XML])
+    monkeypatch.setattr(rule_policy, "decide", lambda ctx: {
+        "action_type": "tap", "x": 940, "y": 2135, "target": "发送",
+        "rule": {"name": "bad"},
+    })
+    memory = TaskMemory("查看「2026 计算机班级群」里的群消息")
+
+    with pytest.raises(AssertionError, match="发送按钮区域"):
+        agent._rule_action(memory)

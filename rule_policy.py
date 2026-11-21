@@ -37,6 +37,9 @@ _DEADLINE_MARKERS = ("截止", "ddl", "deadline")
 # 规则动作黑名单：即使配置或调用方出错，也不可能从规则快路发出写操作
 _MUTATING_ACTIONS = {"send", "press_enter", "type"}
 
+# 发送按钮文案；规则任何 tap 落在这些节点区域或文案上都必须拒绝
+_SEND_LABELS = {"发送", "send", "发送消息", "send message"}
+
 
 @dataclass
 class RuleContext:
@@ -176,6 +179,36 @@ def _in_title_bar(row: dict, screen_height: int) -> bool:
     return row["center"][1] < screen_height * 0.12
 
 
+def find_send_bounds(xml_text: str) -> list[tuple[int, int, int, int]]:
+    """控件树里发送按钮的区域；文案或 resource-id 命中都算。"""
+    root = parse_xml(xml_text)
+    if root is None:
+        return []
+    boxes: list[tuple[int, int, int, int]] = []
+    for node in root.iter("node"):
+        if node.get("clickable") != "true":
+            continue
+        text = _compact(node.get("text") or node.get("content-desc")).lower()
+        resource_id = (node.get("resource-id") or "").lower()
+        if text not in _SEND_LABELS and not resource_id.endswith("send_btn"):
+            continue
+        box = _bounds(node.get("bounds") or "")
+        if box:
+            boxes.append(box)
+    return boxes
+
+
+def tap_hits_send(xml_text: str, x: int, y: int, target_text: str = "") -> str:
+    """规则 tap 是否碰到发送按钮；返回命中原因，空串表示安全。"""
+    label = _compact(target_text).lower()
+    if label in _SEND_LABELS or "发送" in label:
+        return "target_text"
+    for x1, y1, x2, y2 in find_send_bounds(xml_text):
+        if x1 <= x <= x2 and y1 <= y <= y2:
+            return "coords"
+    return ""
+
+
 def _nearest_clickable(node, parents: dict) -> object | None:
     current = node
     while current is not None:
@@ -284,6 +317,16 @@ def _action(action_type: str, rule: str, description: str, **extra) -> dict:
     return payload
 
 
+def _tap_action(ctx: RuleContext, rule: str, description: str,
+                x: int, y: int, target: str, **extra) -> dict | None:
+    """构造规则 tap；落在发送按钮文案或坐标区域时拒绝并记录原因。"""
+    reason = tap_hits_send(ctx.xml, x, y, target)
+    if reason:
+        ctx.state["rejected_tap"] = reason
+        return None
+    return _action("tap", rule, description, x=x, y=y, target=target, **extra)
+
+
 def decide(ctx: RuleContext) -> dict | None:
     """按优先级判断本步能否走规则；返回动作或 None（交回 VLM）。"""
     state = ctx.state
@@ -313,28 +356,33 @@ def decide(ctx: RuleContext) -> dict | None:
         height = size[1] if size else 0
         if len(found) == 1 and not _in_title_bar(found[0][1], height):
             target, row = found[0]
-            state["entered_group"] = row["text"] or target
+            x, y = row["center"]
+            label = row["text"] or target
+            action = _tap_action(
+                ctx, "open_group", f"规则快路：打开「{label}」", x, y, label)
+            if action is None:
+                return None
+            state["entered_group"] = label
             state["scrolls"] = 0
             state["last_scroll_text"] = ""
             state["stagnant"] = 0
-            x, y = row["center"]
-            return _action(
-                "tap", "open_group", f"规则快路：打开「{row['text'] or target}」",
-                x=x, y=y, target=row["text"] or target,
-            )
+            return action
 
     # 3) 点已知 resource-id 的输入框（只读模式下不点，避免下一步必然被拒的输入）
     if (not ctx.read_only and "搜索" in (ctx.task or "")
             and not state.get("input_tapped")):
         box = find_input(ctx.xml, ctx.known_input_resource_ids)
         if box is not None:
-            state["input_tapped"] = True
             x, y = box["center"]
-            return _action(
-                "tap", "tap_input", "规则快路：点击已知输入框",
-                x=x, y=y, target=box["text"] or "输入框",
+            action = _tap_action(
+                ctx, "tap_input", "规则快路：点击已知输入框",
+                x, y, box["text"] or "输入框",
                 resource_id=box["resource_id"],
             )
+            if action is None:
+                return None
+            state["input_tapped"] = True
+            return action
 
     # 4) 已进入目标会话：固定手势向上翻，直到屏幕已含答案/文字不再变化/达到上限
     if (state.get("entered_group") and not state.get("scroll_disabled")
