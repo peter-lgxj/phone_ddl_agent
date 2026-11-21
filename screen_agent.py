@@ -262,6 +262,8 @@ class ScreenAgent:
         self._rule_state = {}             # 规则快路跨步状态（已进入的群、滚动次数等）
         self._rule_hits = []              # 规则命中记录，任务结束写汇总
         self._last_rule_seconds = 0.0     # 本步规则检查（控件树 dump）耗时
+        self._total_step_seconds = 0.0    # 全部步骤墙钟耗时合计（统计规则步占比）
+        self._model_decision_seconds = []  # 模型步的决策耗时样本
         self._last_frame_hash = None      # 上一帧截图哈希，用于同屏复用
         self._last_frame_bytes = None     # 上一帧编码后的字节
         self._last_frame_meta = None      # 上一帧图片元数据
@@ -1300,6 +1302,7 @@ class ScreenAgent:
         timings = dict(getattr(self, "_last_decision_timings", {}) or {})
         self._last_reused_frame = False
         self._last_step_usage = []
+        self._step_started = time.time()
         merged_active = (
             getattr(config, "MERGED_OBSERVE", True)
             and getattr(config, "COMPLETION_CHECK", "decision") == "decision"
@@ -1377,6 +1380,7 @@ class ScreenAgent:
                 done = True
                 print("│  🔍  决策模型标记任务完成")
             timings["completion"] = round(time.time() - started, 2)
+            self._finalize_step_metrics(timings)
             self._last_step_timings = timings
             self._archive_step(step, action, observation)
             return self._step_summary(finished, done, action, memory)
@@ -1422,10 +1426,28 @@ class ScreenAgent:
                 print("│  🔍  决策模型标记任务完成")
         timings["completion"] = round(time.time() - started, 2)
 
+        self._finalize_step_metrics(timings)
         self._last_step_timings = timings
         self._archive_step(step, action, observation)
 
         return self._step_summary(finished, done, action, memory)
+
+    def _finalize_step_metrics(self, timings: dict) -> None:
+        """记录本步墙钟耗时，供规则步/模型步分组统计（写进 step timings 与汇总）。"""
+        elapsed = round(time.time() - getattr(self, "_step_started", time.time()), 2)
+        timings["step_seconds"] = elapsed
+        self._total_step_seconds = round(
+            getattr(self, "_total_step_seconds", 0.0) + elapsed, 2)
+        if timings.get("rule_hit"):
+            if self._rule_hits:
+                self._rule_hits[-1]["seconds"] = elapsed
+            return
+        decision = timings.get("decision")
+        if isinstance(decision, (int, float)):
+            samples = getattr(self, "_model_decision_seconds", None)
+            if samples is None:
+                self._model_decision_seconds = samples = []
+            samples.append(float(decision))
 
     @staticmethod
     def _step_summary(finished, done, action, memory):
@@ -1549,6 +1571,10 @@ class ScreenAgent:
         for item in rule_hits:
             name = item.get("name", "unknown")
             rule_by_name[name] = rule_by_name.get(name, 0) + 1
+        rule_seconds = round(
+            sum(float(item.get("seconds") or 0.0) for item in rule_hits), 2)
+        total_seconds = round(float(getattr(self, "_total_step_seconds", 0.0)), 2)
+        decision_samples = list(getattr(self, "_model_decision_seconds", []) or [])
         return {
             "provider": getattr(config, "ACTIVE_PROVIDER", "unknown"),
             "model": getattr(self, "model", ""),
@@ -1576,8 +1602,19 @@ class ScreenAgent:
                 "hits": len(rule_hits),
                 "saved_calls": sum(int(item.get("saved_calls", 0)) for item in rule_hits),
                 "by_rule": rule_by_name,
+                "rule_hit_steps": len(rule_hits),
+                "rule_step_seconds": rule_seconds,
+                "total_step_seconds": total_seconds,
+                "rule_time_ratio": (
+                    round(rule_seconds / total_seconds, 3) if total_seconds else 0.0
+                ),
                 "cost": getattr(self, "_rule_cost", {}) or {},
             },
+            # 模型步决策耗时均值：与规则步耗时对比，判断规则快路是否真的省时间
+            "model_decision_seconds_mean": (
+                round(sum(decision_samples) / len(decision_samples), 2)
+                if decision_samples else 0.0
+            ),
             "by_provider": by_provider,
             "calls_detail": events,
         }

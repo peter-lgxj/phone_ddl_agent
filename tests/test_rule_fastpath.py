@@ -286,6 +286,9 @@ def test_two_rule_steps_make_no_model_calls(tmp_path, monkeypatch):
     assert fastpath["hits"] == 2
     assert fastpath["saved_calls"] == 2
     assert fastpath["by_rule"] == {"open_group": 1, "scroll": 1}
+    assert fastpath["rule_hit_steps"] == 2
+    assert fastpath["rule_step_seconds"] > 0
+    assert 0 < fastpath["rule_time_ratio"] <= 1
 
 
 # ---------------------------------------------------------------- 成本核算

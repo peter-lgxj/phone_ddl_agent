@@ -50,3 +50,24 @@ def test_summarize_run_missing_stage_is_zero(tmp_path):
 
     assert summary["stages"]["settle"]["samples"] == 0
     assert summary["stages"]["settle"]["mean"] == 0.0
+
+
+def test_summarize_run_groups_rule_and_model_steps(tmp_path):
+    run = tmp_path / "run_ab"
+    _write_step(run, 1, execute=2.5, observe=4.0, rule_hit=True)
+    _write_step(run, 2, execute=0.3, observe=1.2, rule_hit=True)
+    _write_step(run, 3, decision=6.0, execute=0.3)
+
+    summary = summarize_run(run)
+
+    assert summary["steps"] == 3
+    assert summary["rule_steps"] == 2
+    assert summary["model_steps"] == 1
+    # 规则步 6.5s + 1.5s，模型步 6.3s
+    assert summary["groups"]["rule"]["step_total"]["total"] == 8.0
+    assert summary["groups"]["rule"]["step_total"]["mean"] == 4.0
+    assert summary["groups"]["model"]["step_total"]["total"] == 6.3
+    assert summary["rule_time_ratio"] == 0.559
+    # 规则步没有 decision 样本；混在一起统计会稀释差异
+    assert summary["groups"]["rule"]["stages"]["decision"]["samples"] == 0
+    assert summary["groups"]["model"]["stages"]["decision"]["samples"] == 1
