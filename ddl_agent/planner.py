@@ -171,6 +171,27 @@ def _selection_entry(kept: str, dropped: str, reason: str,
     }
 
 
+def expand_similar_sources(chosen: list, available: list) -> list:
+    """把规划器选中的来源扩到与它相似的候选，供基名优先规则比较。
+
+    LLM 规划器常只回相似群中的一个（D16 选了 ``COMP7503-2026``）；如果只在它自己
+    身上跑 ``select_sources``，基名优先永远不触发。这里先把同组候选补齐，再统一比较。
+    """
+    result = list(chosen)
+    seen = {id(source) for source in result}
+    for candidate in available:
+        if id(candidate) in seen:
+            continue
+        name = str(getattr(candidate, "name", candidate))
+        if any(
+            _is_similar_group(str(getattr(item, "name", item)), name)
+            for item in chosen
+        ):
+            result.append(candidate)
+            seen.add(id(candidate))
+    return result
+
+
 class SourceConfigParser:
     """把「跟踪课程邮件和课程群聊」这类自然语言配置转成数据源列表。
 

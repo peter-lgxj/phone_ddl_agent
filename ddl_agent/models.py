@@ -52,6 +52,8 @@ class RawMessage:
     # 读屏无法解析真实发送者/发布时间时置位，供抽取与输出标记复核
     needs_review: bool = False
     review_reason: str = ""
+    # 置顶状态元数据（群列表/聊天界面「置顶了一条消息」横幅可得时写入）
+    pinned: bool = False
 
 
 @dataclass
@@ -82,6 +84,9 @@ class NormalizedTime:
     unresolved: bool
     note: str = ""
     default_time_assumed: bool = False
+    # 「月底前/下月初」这类相对表述是推断出来的，必须显式标注依据
+    inferred: bool = False
+    inference_basis: str = ""
 
 
 @dataclass
@@ -113,6 +118,9 @@ class DeadlineCandidate:
     correction_marker: str | None = None
     # 被同源更新记录取代时，指向新记录的 candidate_id
     superseded_by: str | None = None
+    # 截止时间是否由相对表述推断（月底前/下月初），以及推断依据
+    inferred: bool = False
+    inference_basis: str = ""
 
     @property
     def has_deadline(self) -> bool:
@@ -151,6 +159,9 @@ class ResolvedRecord:
     # 最近一次证据的发布时间与读取顺序，供「最近一条作业」类查询聚焦
     latest_published_at: str | None = None
     latest_source_order: int | None = None
+    # 截止时间是否由相对表述推断（与候选同义，供输出/审计直接读取）
+    inferred: bool = False
+    inference_basis: str = ""
 
 
 @dataclass
@@ -172,3 +183,6 @@ class AgentRunResult:
     write_result: WriteResult | None = None
     warnings: list[str] = field(default_factory=list)
     trace: dict = field(default_factory=dict)
+    # 读取为空/读取失败/读到但解析不出时间时置位，和「确实读过但没有目标」的 no_match 区分
+    needs_review: bool = False
+    review_reason: str = ""

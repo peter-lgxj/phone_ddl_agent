@@ -11,7 +11,12 @@ from .dedupe import Deduplicator, clusters_without_dedup
 from .extract.normalizer import TimeNormalizer
 from .extract.rules import RuleExtractor
 from .models import AgentRunResult, RetrievalPlan
-from .planner import QueryPlanner, SourceConfigParser, select_sources
+from .planner import (
+    QueryPlanner,
+    SourceConfigParser,
+    expand_similar_sources,
+    select_sources,
+)
 from .query_focus import (
     focus_records,
     pinned_message_ids,
@@ -21,6 +26,31 @@ from .query_focus import (
 from .retrieval import RetrievalOrchestrator
 from .settings import TZ
 from .writer.base import DeadlineWriter
+
+
+def recover_relative_deadlines(candidates: list, now: datetime,
+                               normalizer: TimeNormalizer | None = None) -> list:
+    """把抽取器留空的相对时间（如「月底前」）用确定性归一化补回。
+
+    LLM 抽取器可能按「有歧义不要猜」直接给 null；但「月底前/本月底/下月初」
+    是可推断的，这里统一补成具体日期并保留 ``inferred`` 与依据。真正无法确定
+    的表达（如「考完试那周」）归一化仍返回空，保持 null + uncertain。
+    """
+    normalizer = normalizer or TimeNormalizer()
+    for candidate in candidates:
+        if candidate.deadline_iso or not candidate.deadline_raw:
+            continue
+        normalized = normalizer.normalize(candidate.deadline_raw, now=now)
+        if not normalized.iso:
+            continue
+        candidate.deadline_iso = normalized.iso
+        candidate.unresolved_time = False
+        candidate.inferred = normalized.inferred
+        candidate.inference_basis = normalized.inference_basis
+        candidate.missing_fields = [
+            field for field in candidate.missing_fields if field != "deadline"
+        ]
+    return candidates
 
 
 class DdlAgent:
@@ -72,7 +102,11 @@ class DdlAgent:
         # 课程泛查（D10/D16）仍按规划器/相似群规则走，避免把同课其他群带进来。
         probe_enabled = not self.fixed_sources and bool(hints)
         if not self.fixed_sources:
-            pool = selected if probe_enabled else plan.sources
+            # LLM 规划器可能只回相似群中的一个；先把同组候选补齐再比较，
+            # 否则「基名优先」没有另一个候选可比，D16 会一直选中带年份后缀的诱饵群。
+            pool = selected if probe_enabled else expand_similar_sources(
+                plan.sources, selected
+            )
             plan.sources, selection = select_sources(query, pool)
         stages["plan"] = round(perf_counter() - begin, 4)
 
@@ -95,6 +129,7 @@ class DdlAgent:
 
         begin = perf_counter()
         candidates = self.extractor.extract(messages, now=self.now)
+        candidates = recover_relative_deadlines(candidates, self.now, self.normalizer)
         stages["extract"] = round(perf_counter() - begin, 4)
 
         begin = perf_counter()
@@ -113,10 +148,29 @@ class DdlAgent:
         records = [record for record in outcome.records if _within_window(record, plan)]
         # 查询只问某个任务时，同群其他 DDL 不进最终输出；没有明确任务时不过滤。
         # 置顶查询额外只保留证据落在带「置顶」标记消息上的记录。
+        message_order = {
+            message.message_id: index for index, message in enumerate(messages)
+        }
         records, focus_decision = focus_records(
-            query, records, pinned_ids=pinned_message_ids(messages)
+            query, records,
+            pinned_ids=pinned_message_ids(messages),
+            message_order=message_order,
         )
         stages["resolve"] = round(perf_counter() - begin, 4)
+
+        # 读取为空/读取失败与「确实读了但没有目标」必须分开：
+        # 前者交人工复核（needs_review），后者才是 no_match。
+        read_empty = not messages
+        needs_review = False
+        review_reason = ""
+        if read_empty:
+            needs_review = True
+            review_reason = "未读到任何消息（读取为空或来源失败），无法解析，需人工复核"
+            focus_decision["no_match"] = False
+            focus_decision["no_match_reason"] = "read_empty"
+        elif not records and not focus_decision.get("no_match"):
+            needs_review = True
+            review_reason = "已读到消息但未解析出可用的截止时间，需人工复核"
 
         write_result = None
         begin = perf_counter()
@@ -143,6 +197,11 @@ class DdlAgent:
             "focus_filter": focus_decision,
             # 明确任务在语料里不存在时：records 为空且 no_match=true
             "no_match": bool(focus_decision.get("no_match")),
+            # 读取为空/失败/读到但解析不出时间：交人工，不用 no_match 冒充
+            "read_state": "empty" if read_empty else "ok",
+            "read_failed": bool(self.orchestrator.warnings),
+            "needs_review": needs_review,
+            "review_reason": review_reason,
             "ablation": {
                 "dedupe": self.dedupe_enabled,
                 "verify": self.verify_enabled,
@@ -163,6 +222,8 @@ class DdlAgent:
             write_result=write_result,
             warnings=[*self.orchestrator.warnings, *outcome.warnings],
             trace=trace,
+            needs_review=needs_review,
+            review_reason=review_reason,
         )
 
 

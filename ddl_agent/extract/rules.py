@@ -30,6 +30,8 @@ _TASK_PATTERNS = [
         r"(?:作业|实验报告|报告|项目|论文|考试|课程设计)\s*[一二三四五六七八九十\d]+)"
     ),
     re.compile(r"(?P<name>(?:大作业|作业|实验|报告|项目|论文|考试)\s*[一二三四五六七八九十\d]+)"),
+    # 「小组课程报告，月底前交」这类没有序号的固定任务名
+    re.compile(r"(?P<name>小组课程报告)"),
     re.compile(r"(?P<name>(?:Midterm|Final)\s+(?:Exam|Project|Report|Presentation))", re.IGNORECASE),
 ]
 
@@ -174,6 +176,8 @@ class RuleExtractor:
                         source_order=source_order,
                         is_correction=correction_marker is not None,
                         correction_marker=correction_marker,
+                        inferred=normalized.inferred,
+                        inference_basis=normalized.inference_basis,
                     ),
                     message.body,
                     course_context=f"{message.subject}\n{message.source_name}",

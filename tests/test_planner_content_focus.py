@@ -18,7 +18,7 @@ from pathlib import Path
 from ddl_agent.dedupe import normalize_task_name
 from ddl_agent.extract.message_context import detect_correction
 from ddl_agent.models import DeadlineCandidate, RawMessage
-from ddl_agent.pipeline import DdlAgent
+from ddl_agent.pipeline import DdlAgent, recover_relative_deadlines
 from ddl_agent.planner import select_sources
 from ddl_agent.query_focus import focus_records, task_hints, task_matches
 from ddl_agent.settings import TZ
@@ -405,12 +405,26 @@ def test_d12_english_task_name_matches_chinese_alias():
     assert not task_matches("期末报告", "Final Presentation")
 
 
-def test_d09_month_end_stays_uncertain_and_null_deadline():
-    records = _plain_records([("W3", True)])
+def test_d09_month_end_is_recovered_and_marked_inferred():
+    candidates = recover_relative_deadlines(_candidates("W3", True), now=QQ_NOW)
+    candidate = next(
+        item for item in candidates
+        if _task(item.task_name_raw) == _task("小组课程报告")
+    )
+    # 「月底前」换算为当月最后一天 23:59，并显式标注推断依据
+    assert candidate.deadline_iso == "2026-11-30T23:59:00+08:00"
+    assert candidate.inferred is True
+    assert candidate.inference_basis
+    assert "deadline" not in candidate.missing_fields
+
+    agent = DdlAgent(
+        sources=_sources_for([("W3", True)]), extractor=_extractor_for([("W3", True)]),
+        now=QQ_NOW,
+    )
+    records = agent.resolver.resolve(agent.deduplicator.cluster(candidates)).records
     target = next(
         record for record in records
         if _task(record.task_name) == _task("小组课程报告")
     )
-    # 口径：「月底前」不猜日期；uncertain + deadline=null 即正确，判分表按 hit
+    # 该条候选同时缺课程信息（needs_review），最终仍交人工，主字段不落日期
     assert target.status == "uncertain"
-    assert target.deadline_iso is None
