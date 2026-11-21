@@ -18,6 +18,7 @@ import re
 import subprocess
 import time
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 
 from PIL import Image
 
@@ -209,6 +210,47 @@ class AdbDumpController:
         image.save(save_path)
         print(f"截图已保存：{save_path}，尺寸：{image.size}（adb_dump）")
         return image
+
+    def capture_with_dump(self, save_path: str = "screen.png") -> tuple[Image, str | None, dict]:
+        """并行发起 ``screencap`` 与 ``uiautomator dump``，互不阻塞。
+
+        降级：
+        - dump 失败：仍返回截图，``report['dump_error']`` 记录原因，控件树为空，
+          下一步需要时再单独重试（不写入缓存）；
+        - 截图失败：截图是视觉决策的必需输入，串行重试一次后仍失败则抛出；
+        - 关闭 ``PARALLEL_CAPTURE`` 时退回串行，行为与旧版一致。
+        """
+        report: dict = {"parallel": False, "errors": {}}
+        if not bool(getattr(config, "PARALLEL_CAPTURE", True)):
+            image = self.screenshot(save_path)
+            xml = self.dump_hierarchy()
+            report["parallel"] = False
+            return image, xml, report
+
+        report["parallel"] = True
+        started = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            shot_future = pool.submit(self.screenshot, save_path)
+            dump_future = pool.submit(self.dump_hierarchy)
+            image = None
+            xml = None
+            try:
+                image = shot_future.result()
+            except Exception as e:  # 截图失败：稍后串行重试
+                report["errors"]["screenshot"] = str(e)
+            try:
+                xml = dump_future.result()
+            except Exception as e:  # dump 失败：交回上层按需重试
+                report["errors"]["dump"] = str(e)
+        report["elapsed"] = round(time.perf_counter() - started, 3)
+
+        if image is None:
+            # 视觉决策必须有截图；并行失败不影响串行重试
+            image = self.screenshot(save_path)
+            report["screenshot_retry"] = True
+        if xml is None:
+            print(f"  ⚠️  并行 dump 失败，本步退回按需重试：{report['errors'].get('dump', '')}")
+        return image, xml, report
 
     def dump_hierarchy(self, use_cache: bool = False, ttl: float = 0.5) -> str:
         """用系统 ``uiautomator dump`` 读取控件树 XML。"""

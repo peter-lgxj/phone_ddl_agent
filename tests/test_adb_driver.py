@@ -142,6 +142,45 @@ def test_non_list_tap_keeps_model_coords_when_target_unresolved():
 
 
 # ---------------------------------------------------------------- 截图
+def test_capture_with_dump_issues_both_and_reports_parallel(tmp_path):
+    controller = RecordingController()
+    calls = []
+
+    def fake_shot(path):
+        calls.append("shot")
+        return "image"
+
+    def fake_dump():
+        calls.append("dump")
+        return "<hierarchy />"
+
+    controller.screenshot = fake_shot
+    controller.dump_hierarchy = fake_dump
+
+    image, xml, report = controller.capture_with_dump(str(tmp_path / "screen.png"))
+
+    assert image == "image"
+    assert xml == "<hierarchy />"
+    assert report["parallel"] is True
+    assert sorted(calls) == ["dump", "shot"]
+
+
+def test_capture_with_dump_degrades_when_dump_fails(tmp_path):
+    controller = RecordingController()
+    controller.screenshot = lambda path: "image"
+
+    def failing_dump():
+        raise RuntimeError("uiautomator dump failed")
+
+    controller.dump_hierarchy = failing_dump
+
+    image, xml, report = controller.capture_with_dump(str(tmp_path / "screen.png"))
+
+    assert image == "image"
+    assert xml is None
+    assert "dump" in report["errors"]
+
+
 def test_screenshot_uses_screencap_and_saves_png(tmp_path):
     controller = RecordingController()
 

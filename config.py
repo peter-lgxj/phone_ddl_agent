@@ -213,6 +213,11 @@ RULE_MODEL_DECISION_SECONDS = float(os.getenv("RULE_MODEL_DECISION_SECONDS", "5.
 # 同一次会话里规则最多连续滚多少步；到上限后交回 VLM，避免无限翻页。
 # 默认 2：真实群消息翻两屏仍未出现答案时，规则继续滚的收益抵不过每次 dump 的开销。
 RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "2"))
+
+# screencap 与 uiautomator dump 是否并行发起；关闭时退回串行（旧行为）。
+PARALLEL_CAPTURE = os.getenv("PARALLEL_CAPTURE", "1").strip().lower() not in (
+    "0", "false", "off", ""
+)
 # 实验开关：1 时目标即使在可见行也强制走搜索，用于对比搜索/列表两条路径；
 # 默认 0，正常行为是「可见行优先 open_group，不可见才搜索」。
 RULE_SEARCH_FORCE = os.getenv("RULE_SEARCH_FORCE", "0").strip().lower() in (

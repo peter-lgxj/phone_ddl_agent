@@ -979,7 +979,15 @@ class ScreenAgent:
                 digest = None
 
         if not reuse_capture:
-            self.phone.screenshot("screen_current.png")
+            if hasattr(self.phone, "capture_with_dump"):
+                # screencap 与 uiautomator dump 并行发起，互不阻塞；
+                # dump 结果留在驱动缓存里，本步需要控件树时按帧指纹复用。
+                _, xml, report = self.phone.capture_with_dump("screen_current.png")
+                timings["parallel_capture"] = report
+                if xml is None:
+                    timings["capture_dump"] = "failed"
+            else:
+                self.phone.screenshot("screen_current.png")
             with open("screen_current.png", "rb") as f:
                 digest = hashlib.md5(f.read()).hexdigest()
 
