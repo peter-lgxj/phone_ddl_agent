@@ -18,7 +18,7 @@ from ddl_agent.conflict import ConflictResolver
 from ddl_agent.dedupe import Deduplicator, normalize_task_name
 from ddl_agent.extract.courses import find_courses
 from ddl_agent.extract.llm_extractor import LLMDeadlineExtractor
-from ddl_agent.models import DeadlineCandidate, RawMessage, SourceSpec
+from ddl_agent.models import DeadlineCandidate, RawMessage, RetrievalPlan, SourceSpec
 from ddl_agent.planner import (
     SourceConfigParser,
     select_sources,
@@ -410,6 +410,62 @@ def test_d13_before_fail_after_hit():
     )
     assert target.status == "confirmed"
     assert target.deadline_iso == "2026-11-29T23:59:00+08:00"
+
+
+class _BothSourcesPlanner:
+    """模拟修复后的规划器：查询点名邮件时，群聊与邮件都在候选里。"""
+
+    def plan(self, query, sources, now=None):
+        return RetrievalPlan(query=query, sources=list(sources))
+
+
+class _StaticExtractor:
+    def __init__(self, candidates):
+        self.candidates = candidates
+
+    def extract(self, messages, now=None):
+        ids = {message.message_id for message in messages}
+        return [item for item in self.candidates if item.message_id in ids]
+
+
+def test_d13_pipeline_reads_email_source_and_records_conflict():
+    """D13 端到端：规划保留邮件源 → 读到 11-30 → 与群里 11-29 形成冲突记录。"""
+    _, messages = _wx_messages("W1")
+    chat = _CapturedSource("微信/COMP7503课程群", "student_chat", messages)
+    email_spec = FIXTURE["wx"]["emails"]["O2"]
+    mail_message = RawMessage(
+        message_id="O2",
+        source_name="Outlook/收件箱",
+        source_type="email",
+        sender=email_spec["sender"],
+        published_at=datetime.fromisoformat(email_spec["published_at"]),
+        subject=email_spec["subject"],
+        body=email_spec["body"],
+    )
+    mail = _CapturedSource(
+        "Outlook/[COMP7503] Assignment 3 ", "email", [mail_message]
+    )
+    candidates = _saved_candidates("W1", wx=True) + [_email_candidates()["O2"]]
+    agent = DdlAgent(
+        sources=[chat, mail],
+        extractor=_StaticExtractor(candidates),
+        planner=_BothSourcesPlanner(),
+        now=WX_NOW,
+    )
+
+    result = agent.run(
+        "同一作业群里说 11-29、邮件说 11-30，分别读取两个来源，报告冲突并给出结论",
+        write=False,
+    )
+
+    assert [source.name for source in result.plan.sources] == [chat.name, mail.name]
+    target = next(
+        record for record in result.records
+        if normalize_task_name(record.task_name) == normalize_task_name("机器学习作业三")
+    )
+    assert target.deadline_iso == "2026-11-29T23:59:00+08:00"
+    assert any("2026-11-30" in json.dumps(item, ensure_ascii=False, default=str)
+               for item in target.conflicts)
 
 
 def test_d08_before_fail_after_hit():

@@ -21,6 +21,13 @@ _STOPWORDS = {
 _EMAIL_HINTS = ("邮件", "email", "outlook", "收件箱", "邮箱")
 _CHAT_HINTS = ("聊天", "群聊", "微信", "wechat", "qq", "群", "chat", "消息")
 
+
+def query_mentions_email(query: str) -> bool:
+    """查询是否点名了邮件来源（「邮件/邮件里/Outlook/收件箱」）。"""
+    lowered = (query or "").lower()
+    return any(hint in lowered for hint in _EMAIL_HINTS)
+
+
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _ALNUM_RE = re.compile(r"[a-z0-9]+")
 _GROUP_SIMILARITY = 0.88

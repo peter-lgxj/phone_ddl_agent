@@ -456,6 +456,74 @@ def resolve_action_element(action, elements, max_distance=80):
     return element, distance, False
 
 
+_LIST_TARGET_WORDS = ("群聊", "群列表", "联系人", "聊天项", "会话", "搜索结果")
+
+
+def enforce_tap_bounds(action, elements, screen_size):
+    """用控件树 bounds 校正 tap 坐标；越界/歧义时返回 None 由调用方拒绝执行。
+
+    判据：
+    - 映射后坐标落在屏幕外 → 拒绝（``outside_screen``）；
+    - 目标文字能唯一定位到一个 bbox → 直接用该 bbox 中心，不再相信比例换算；
+    - 群列表/会话列表等界面目标歧义或无法定位 → 拒绝（``ambiguous_list_target`` /
+      ``list_target_unresolved``），禁止退回比例坐标；
+    - 非列表界面且目标无法定位 → 保留模型坐标（仅要求仍在屏幕内）。
+    """
+    if action.get("action_type") != "tap":
+        return action, {"allowed": True, "reason": "not_tap"}
+    x, y = action.get("x"), action.get("y")
+    if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+        return action, {"allowed": True, "reason": "no_coords"}
+    width, height = screen_size
+    if not (0 <= x < width and 0 <= y < height):
+        return None, {
+            "allowed": False,
+            "reason": "outside_screen",
+            "target": canonical_action_target(action),
+            "point": [x, y],
+            "screen_size": [width, height],
+        }
+
+    target = canonical_action_target(action)
+    description = str(action.get("description") or "")
+    is_list = any(word in target + description for word in _LIST_TARGET_WORDS)
+    eligible = [element for element in elements
+                if element.get("center") and action_element_role_matches(action, element)]
+
+    if target:
+        scored = [(target_match_score(element, target), element) for element in eligible]
+        best = max((score for score, _ in scored), default=0.0)
+        matches = [element for score, element in scored if score == best and score > 0]
+        boxes = {tuple(element.get("bbox") or ()) for element in matches
+                 if element.get("bbox")}
+        if len(boxes) == 1:
+            element = matches[0]
+            cx, cy = element["center"]
+            return {**action, "x": cx, "y": cy}, {
+                "allowed": True,
+                "source": "bounds",
+                "target": target,
+                "bbox": list(next(iter(boxes))),
+                "model_point": [x, y],
+                "moved": [x, y] != [cx, cy],
+            }
+        if len(boxes) > 1 and is_list:
+            return None, {
+                "allowed": False,
+                "reason": "ambiguous_list_target",
+                "target": target,
+                "candidates": len(boxes),
+            }
+
+    if is_list:
+        return None, {
+            "allowed": False,
+            "reason": "list_target_unresolved",
+            "target": target,
+        }
+    return action, {"allowed": True, "source": "model_coords", "target": target}
+
+
 def snap_action_coords(action, elements, max_distance=80):
     """把 tap 解析到候选元素；具名目标按匹配数量选择。"""
     if action.get("action_type") not in OCR_TRIGGER_ACTIONS or not elements:

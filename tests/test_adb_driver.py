@@ -22,7 +22,7 @@ from adb_controller import (
     parse_bounds,
     screen_text,
 )
-from ocr_locator import OCRLocator
+from ocr_locator import OCRLocator, enforce_tap_bounds
 from phone_controller import Uiautomator2CompatibilityError, _compatibility_message
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -82,6 +82,63 @@ def test_map_point_scales_screenshot_to_device_coordinates():
 
 def test_map_point_is_identity_for_same_size():
     assert map_point(321, 654, (1080, 2374), (1080, 2374)) == (321, 654)
+
+
+# ---------------------------------------------------------------- 坐标守卫
+def _list_elements() -> list[dict]:
+    return [
+        {"text": "2026 计算机班级群", "center": (540, 900),
+         "bbox": (100, 800, 980, 1000), "source": "xml", "type": "control"},
+        {"text": "家人群", "center": (540, 1400),
+         "bbox": (100, 1300, 980, 1500), "source": "xml", "type": "control"},
+    ]
+
+
+def test_tap_outside_screen_is_rejected():
+    action = {"action_type": "tap", "x": 5000, "y": 5000,
+              "target": "2026 计算机班级群", "description": "点击群聊"}
+    guarded, decision = enforce_tap_bounds(action, _list_elements(), (1080, 2374))
+
+    assert guarded is None
+    assert decision["allowed"] is False
+    assert decision["reason"] == "outside_screen"
+
+
+def test_list_tap_uses_exact_bounds_not_scaled_coordinates():
+    # 模型给的比例坐标落在两行之间；必须改成目标行的 bounds 中心
+    action = {"action_type": "tap", "x": 540, "y": 1150,
+              "target": "家人群", "description": "点击群聊家人群"}
+    guarded, decision = enforce_tap_bounds(action, _list_elements(), (1080, 2374))
+
+    assert decision["allowed"] is True
+    assert decision["source"] == "bounds"
+    assert (guarded["x"], guarded["y"]) == (540, 1400)
+    assert decision["moved"] is True
+
+
+def test_ambiguous_list_target_is_rejected():
+    elements = [
+        {"text": "群聊", "center": (540, 900), "bbox": (100, 800, 980, 1000),
+         "source": "xml", "type": "control"},
+        {"text": "群聊", "center": (540, 1700), "bbox": (100, 1600, 980, 1800),
+         "source": "xml", "type": "control"},
+    ]
+    action = {"action_type": "tap", "x": 540, "y": 1200,
+              "target": "群聊", "description": "打开群聊"}
+    guarded, decision = enforce_tap_bounds(action, elements, (1080, 2374))
+
+    assert guarded is None
+    assert decision["reason"] == "ambiguous_list_target"
+
+
+def test_non_list_tap_keeps_model_coords_when_target_unresolved():
+    action = {"action_type": "tap", "x": 20, "y": 30,
+              "target": "返回", "description": "点击返回图标"}
+    guarded, decision = enforce_tap_bounds(action, _list_elements(), (1080, 2374))
+
+    assert decision["allowed"] is True
+    assert decision["source"] == "model_coords"
+    assert (guarded["x"], guarded["y"]) == (20, 30)
 
 
 # ---------------------------------------------------------------- 截图

@@ -20,7 +20,7 @@ from ddl_agent.extract.message_context import detect_correction
 from ddl_agent.models import DeadlineCandidate, RawMessage
 from ddl_agent.pipeline import DdlAgent
 from ddl_agent.planner import select_sources
-from ddl_agent.query_focus import focus_records, task_matches
+from ddl_agent.query_focus import focus_records, task_hints, task_matches
 from ddl_agent.settings import TZ
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -334,6 +334,45 @@ def test_d18_missing_task_returns_empty_with_no_match():
     assert decision18["task_filter"] == "no_match"
     assert decision18["no_match"] is True
     assert d18 == []
+
+
+def test_d18_unquoted_task_name_is_also_explicit_hint():
+    """数据集原文没有引号：无序号但带具体对象的「数据库作业」也要触发聚焦。"""
+    w8 = _plain_records([("W8", True)])
+    query = "进入闲聊群，查找数据库作业的截止时间"
+    d18, decision18 = focus_records(query, w8)
+    assert task_hints(query) == ["数据库作业"]
+    assert decision18["task_filter"] == "no_match"
+    assert decision18["no_match"] is True
+    assert d18 == []
+
+
+def test_d12_generic_assignment_phrases_do_not_become_hints():
+    """「写着作业」「课程作业」是泛称，不能当成明确任务把 D12 的图片结果清空。"""
+    query = ("打开微信，进入「COMP7415 课程群」，找到写着作业截止时间的课程表图片，"
+             "读出课程作业 Final Report 的截止时间")
+    assert task_hints(query) == ["Final Report"]
+
+
+def test_d01_action_verbs_are_not_task_prefixes():
+    """「报告作业名称」里的「报告」是动作词，不能被当成任务名。"""
+    query = ("打开微信，进入「COMP7503 课程群」，找到最近一条作业截止通知，"
+             "报告作业名称和截止时间")
+    assert task_hints(query) == []
+
+
+def test_d06_pinned_query_keeps_only_pinned_notice():
+    result = _run(
+        "打开微信，进入 LLM小组，找到置顶的那条 DDL 通知，报告截止时间",
+        [("W5", True)],
+        now=datetime(2026, 11, 21, 0, 50, tzinfo=TZ),
+    )
+    assert result.trace["focus_filter"]["pinned_filter"] == "applied"
+    assert len(result.records) == 1
+    record = result.records[0]
+    assert record.deadline_iso == "2026-11-20T23:59:00+08:00"
+    # 同群的 11-29 / 11-25 / 12-05 都不再连带输出
+    assert {item.deadline_iso for item in result.records} == {"2026-11-20T23:59:00+08:00"}
 
 
 def test_d01_latest_notice_keeps_one_record():

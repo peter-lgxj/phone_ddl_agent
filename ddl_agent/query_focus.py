@@ -40,9 +40,29 @@ _QUOTED_TASK_RE = re.compile(
 # 泛称查询：没有点名第几份作业，但要求“最近一条/课程 DDL”
 _GENERIC_DDL_RE = re.compile(r"(作业|报告|ddl|截止)", re.IGNORECASE)
 _LATEST_RE = re.compile(r"(最近|最新|上周|本周|近期)")
+# 置顶消息查询：只在带置顶标记的那条消息里取记录，不把同群其他 DDL 一起输出
+_PINNED_QUERY_RE = re.compile(r"(置顶|pinned)", re.IGNORECASE)
+_PINNED_BODY_MARKERS = ("【置顶】", "📌")
 _NUMBERED_HOMEWORK_RE = re.compile(
     r"(作业|实验报告|assignment|homework|hw|lab|quiz)\s*[一二三四五六七八九十0-9]+",
     re.IGNORECASE,
+)
+# 不带序号的任务名（「查找数据库作业」）：中文科目/对象 + 作业，后面不接序号。
+# 「上周发的作业」「课程作业」这类泛称/时间性说法不算明确任务。
+_UNNUMBERED_TASK_RE = re.compile(
+    r"([\u4e00-\u9fff]{2,10})作业(?!\s*[一二三四五六七八九十\d])"
+)
+_UNNUMBERED_TASK_STOP = (
+    "课程", "同一", "该", "这个", "这份", "这次", "本次", "上次", "下次",
+    "每周", "每次", "各次", "其他", "所有", "最近", "上周", "本周", "下周",
+    "旧", "新", "发的", "布置的", "写着", "写了", "提到", "包含", "关于",
+    "有关", "涉及", "这是", "那是",
+)
+# 去掉分句开头的动作词，避免「查找数据库作业」把「查找」也吃进任务名
+_LEADING_ACTIONS_RE = re.compile(
+    r"^(?:请问|请|帮我|帮忙|我想知道|想知道|打开|进入|查看|报告|列出|给出|说出|"
+    r"告诉我|说明|查一下|查查|查找|查询|查|找一下|找找|找到|找|看看|看一下|看|"
+    r"搜索|搜一下|搜)"
 )
 
 
@@ -67,6 +87,15 @@ def task_hints(query: str) -> list[str]:
             text = (match.group(1) or match.group(2) or "").strip()
             if not text or not _QUOTED_TASK_RE.search(text):
                 continue
+            if _canonical_task(text) not in {_canonical_task(item) for item in hints}:
+                hints.append(text)
+        # 无引号、无序号但带具体对象的任务名（「数据库作业」）；泛称/时间性说法跳过
+        cleaned = _LEADING_ACTIONS_RE.sub("", clause.strip())
+        for match in _UNNUMBERED_TASK_RE.finditer(cleaned):
+            prefix = match.group(1)
+            if any(stop in prefix for stop in _UNNUMBERED_TASK_STOP):
+                continue
+            text = match.group(0).strip()
             if _canonical_task(text) not in {_canonical_task(item) for item in hints}:
                 hints.append(text)
     return hints
@@ -126,9 +155,30 @@ def _record_time_key(record) -> tuple[datetime, int]:
     )
 
 
-def focus_records(query: str, records: list) -> tuple[list, dict]:
+def pinned_message_ids(messages: list) -> set[str]:
+    """带置顶标记的消息 id；置顶查询只在这些消息的证据里取记录。"""
+    return {
+        str(getattr(message, "message_id", ""))
+        for message in messages
+        if any(marker in (getattr(message, "body", "") or "")
+               for marker in _PINNED_BODY_MARKERS)
+    } - {""}
+
+
+def _record_cites(record, message_ids: set[str]) -> bool:
+    for evidence_id in getattr(record, "evidence_ids", []) or []:
+        text = str(evidence_id)
+        for message_id in message_ids:
+            if text == message_id or text.startswith(f"{message_id}:"):
+                return True
+    return False
+
+
+def focus_records(query: str, records: list,
+                  pinned_ids: set[str] | None = None) -> tuple[list, dict]:
     """按查询里的明确任务/课程裁剪最终记录；无明确目标时原样返回。"""
     hints = task_hints(query)
+    pinned_query = bool(_PINNED_QUERY_RE.search(query or ""))
     scoped_course = bool(re.search(r"COMP\d{4}\s*的", query or "", re.IGNORECASE))
     if wants_course_restriction(query):
         codes = _restricted_course_codes(query)
@@ -145,12 +195,13 @@ def focus_records(query: str, records: list) -> tuple[list, dict]:
         "course_restriction": restrict_course,
         "task_filter": "disabled",
         "course_filter": "disabled",
+        "pinned_filter": "disabled",
         "no_match": False,
         "before": len(records),
         "after": len(records),
         "dropped": [],
     }
-    if not hints and not restrict_course and not wants_latest_homework(query):
+    if not hints and not restrict_course and not pinned_query and not wants_latest_homework(query):
         return list(records), decision
 
     filtered = list(records)
@@ -185,7 +236,24 @@ def focus_records(query: str, records: list) -> tuple[list, dict]:
         else:
             decision["course_filter"] = "no_match_keep_all"
 
-    if not hints and wants_latest_homework(query):
+    pinned_applied = False
+    if pinned_query:
+        # 置顶查询：只保留证据落在带置顶标记消息上的记录，同群其他 DDL 一律不输出；
+        # 读屏没拿到置顶标记时如实记录 no_marker，不猜时间也不扩大输出。
+        if pinned_ids:
+            pinned_matched = [
+                record for record in filtered if _record_cites(record, pinned_ids)
+            ]
+            if pinned_matched:
+                filtered = pinned_matched
+                decision["pinned_filter"] = "applied"
+                pinned_applied = True
+            else:
+                decision["pinned_filter"] = "no_pinned_record"
+        else:
+            decision["pinned_filter"] = "no_marker"
+
+    if not hints and not pinned_applied and wants_latest_homework(query):
         # 「最近一条作业/课程 DDL」：只保留最近一次编号作业通知，避免多报同群旧任务
         numbered = [
             record for record in filtered

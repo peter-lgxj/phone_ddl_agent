@@ -11,7 +11,8 @@ from phone_driver import create_phone_controller
 from app_launcher import AppLauncher
 from memory import TaskMemory, format_steps_compact
 from ocr_locator import (OCRLocator, mark_text_in_input_boxes, resolve_action_element,
-                         canonical_action_target, should_trigger_ocr, snap_action_coords)
+                         canonical_action_target, should_trigger_ocr, snap_action_coords,
+                         enforce_tap_bounds)
 import config
 import image_preprocess
 import rule_policy
@@ -835,6 +836,29 @@ class ScreenAgent:
         if found:
             snap_source = found[0].get("source", "unknown")
             mapped, moves = snap_action_coords(mapped, candidates, max_distance)
+
+        # 用控件树 bounds 复核 tap 落点：群列表/会话列表禁止按比例换算定位，
+        # 越界、目标歧义或落点不在目标元素内一律拒绝执行并记录原因。
+        screen_size = tuple(
+            (getattr(self, "_last_image_meta", None) or {}).get("orig_size")
+            or (1080, 2374)
+        )
+        guarded, guard = enforce_tap_bounds(mapped, candidates, screen_size)
+        timings["coordinate_guard"] = guard
+        if guarded is None:
+            reason = guard.get("reason", "rejected")
+            print(f"  ⛔ 坐标校验拒绝点击：{reason}（{guard.get('target', '')}）")
+            return {
+                **mapped,
+                "action_type": "wait",
+                "coordinate_rejected": reason,
+                "thought": f"坐标校验拒绝：{reason}，保持当前界面重新观察",
+                "description": f"拒绝在 {guard.get('target') or '未知目标'} 上按比例坐标点击",
+            }
+        mapped = guarded
+        if guard.get("moved"):
+            print(f"  📐 采用控件树 bounds：{guard.get('model_point')} -> "
+                  f"{[mapped.get('x'), mapped.get('y')]}（{guard.get('target')}）")
 
         timings["ocr"] = round(
             timings.get("ocr", 0.0) + tree_elapsed + yolo_elapsed + ocr_elapsed, 2
