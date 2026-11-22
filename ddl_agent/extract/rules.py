@@ -178,6 +178,7 @@ class RuleExtractor:
                         correction_marker=correction_marker,
                         inferred=normalized.inferred,
                         inference_basis=normalized.inference_basis,
+                        pinned=bool(getattr(message, "pinned", False)),
                     ),
                     message.body,
                     course_context=f"{message.subject}\n{message.source_name}",

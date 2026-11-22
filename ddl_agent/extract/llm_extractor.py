@@ -178,6 +178,7 @@ class LLMDeadlineExtractor:
                 correction_marker=correction_marker,
                 inferred=inferred,
                 inference_basis=inference_basis,
+                pinned=bool(getattr(message, "pinned", False)),
             ),
             message.body,
             course_context=f"{message.subject}\n{message.source_name}",

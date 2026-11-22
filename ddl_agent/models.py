@@ -121,6 +121,8 @@ class DeadlineCandidate:
     # 截止时间是否由相对表述推断（月底前/下月初），以及推断依据
     inferred: bool = False
     inference_basis: str = ""
+    # 证据是否落在置顶消息/列表顶部最早一条上；用于置顶查询的证据链确认
+    pinned: bool = False
 
     @property
     def has_deadline(self) -> bool:

@@ -22,6 +22,7 @@ from typing import Any
 
 from ..models import RawMessage
 from ..settings import TZ
+from observation_schema import ABSENT_VALUES
 
 _NUMBER_PREFIX_RE = re.compile(r"^\s*(?:\d+[.、)]|[-*])\s*")
 _TIME_ONLY_RE = re.compile(r"^\d{1,2}:\d{2}$")
@@ -58,6 +59,8 @@ class ParsedMessage:
 def _clean_sender(value: str) -> str:
     text = value.strip(" \t\r\n:：,，;；")
     text = re.sub(r"[（(].*?[)）]", "", text).strip()
+    if text.lower() in ABSENT_VALUES:
+        return ""
     if text in {"自己", "本人", "me", "Me"}:
         return "我"
     return text
@@ -72,7 +75,7 @@ def parse_time_token(value: str, *, now: datetime | None = None
                      ) -> tuple[datetime | None, str]:
     """把读屏里的时间片段转成带时区的 datetime；不完整时返回原因。"""
     text = (value or "").strip()
-    if not text:
+    if not text or text.lower() in ABSENT_VALUES:
         return None, "未读到时间"
 
     try:
@@ -122,15 +125,21 @@ def _parse_structured(text: str, *, now: datetime) -> list[ParsedMessage]:
         if body and body not in _SKIP_LINES:
             parsed_time, reason = parse_time_token(current.get("time", ""), now=now)
             sender = _clean_sender(current.get("sender", ""))
-            needs_review = bool(reason or not sender)
+            # 屏幕确实没有时间（模型按约定写“未显示”）只留空并记原因，不整体降级；
+            # 时间片段存在但解析不了，才需要人工复核。缺发送者只记审计，不阻断确认。
+            needs_review = bool(reason) and reason != "未读到时间"
+            review_bits = []
+            if reason:
+                review_bits.append(reason)
+            if not sender:
+                review_bits.append("未读到发送者")
             records.append(
                 ParsedMessage(
                     body=body,
                     sender=sender,
                     published_at=parsed_time,
-                    needs_review=needs_review or parsed_time is None,
-                    review_reason="；".join(filter(None, [reason,
-                                                          "" if sender else "未读到发送者"])),
+                    needs_review=needs_review,
+                    review_reason="；".join(review_bits),
                 )
             )
         current = None
