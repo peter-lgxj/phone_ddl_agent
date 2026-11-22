@@ -35,6 +35,8 @@ class CycleResult:
     outputs: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     llm: dict = field(default_factory=dict)
+    status: str = "ok"
+    sources_ok: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -42,6 +44,8 @@ class CycleResult:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "engine": self.engine,
+            "status": self.status,
+            "sources_ok": self.sources_ok,
             "sources": self.sources,
             "inserted": self.inserted,
             "updated": self.updated,
@@ -95,26 +99,55 @@ def run_cycle(config: MonitorConfig, config_path: str | Path | None = None,
     for source in config.sources:
         if not source.enabled:
             continue
-        result.sources.append(_sync_source(
-            source, connector_factory, components["extractor"], now=started,
-            cursors=cursors, messages=message_store, candidates=candidate_store,
-            errors=result.errors,
-        ))
+        try:
+            entry = _sync_source(
+                source, connector_factory, components["extractor"], now=started,
+                cursors=cursors, messages=message_store, candidates=candidate_store,
+                errors=result.errors,
+            )
+        except Exception as exc:  # noqa: BLE001 - 单来源异常不能拖垮整轮
+            message = f"{source.id}: {type(exc).__name__}: {exc}"
+            result.errors.append(message)
+            entry = _failed_entry(source, message)
+        result.sources.append(entry)
+
+    enabled = [source for source in config.sources if source.enabled]
+    result.sources_ok = sum(1 for entry in result.sources if entry.get("error") is None)
+    if not enabled:
+        result.errors.append("没有启用的监控来源")
+    if result.sources_ok == 0:
+        # 全部来源失败：不写 xlsx / data.json / deadlines.ics / calendar.html，
+        # 避免把“空结果”伪装成成功；周期 JSON 仍写出，明确标注 failed。
+        result.status = "failed"
+        result.write_ok = False
+        result.finished_at = datetime.now(TZ).isoformat(timespec="seconds")
+        result.llm = tracker.since(usage_before)
+        _write_cycle(out, cycle_id, result)
+        return result
 
     clusters = Deduplicator().cluster(candidate_store.all())
     outcome = components["resolver"].resolve(clusters, plan=None, retrieval=None)
     result.records = outcome.records
 
-    writer = XlsxWriter(out / "deadlines.xlsx")
-    write_result = writer.upsert(result.records, timestamp=started)
-    result.write_ok = write_result.ok
-    result.inserted = write_result.inserted
-    result.updated = write_result.updated
-    result.skipped = write_result.skipped
-    if not write_result.ok:
-        result.errors.append(f"写入失败：{write_result.error}")
+    try:
+        writer = XlsxWriter(out / "deadlines.xlsx")
+        write_result = writer.upsert(result.records, timestamp=started)
+        result.write_ok = write_result.ok
+        result.inserted = write_result.inserted
+        result.updated = write_result.updated
+        result.skipped = write_result.skipped
+        if not write_result.ok:
+            result.errors.append(f"写入失败：{write_result.error}")
+    except Exception as exc:  # noqa: BLE001 - 写 xlsx 失败仍尽量导出其它产物
+        result.write_ok = False
+        result.errors.append(f"写入失败：{type(exc).__name__}: {exc}")
 
-    result.outputs = [str(path) for path in export_outputs(result.records, out, started)]
+    try:
+        result.outputs = [str(path) for path in export_outputs(result.records, out, started)]
+    except Exception as exc:  # noqa: BLE001
+        result.outputs = []
+        result.write_ok = False
+        result.errors.append(f"导出失败：{type(exc).__name__}: {exc}")
 
     phone = PhoneCalendarWriter(enabled=config.write_phone_calendar)
     try:
@@ -126,13 +159,33 @@ def run_cycle(config: MonitorConfig, config_path: str | Path | None = None,
 
     result.finished_at = datetime.now(TZ).isoformat(timespec="seconds")
     result.llm = tracker.since(usage_before)
+    result.status = "partial" if result.errors else "ok"
+    _write_cycle(out, cycle_id, result)
+    return result
 
+
+def _failed_entry(source: MonitorSource, message: str) -> dict:
+    """来源级异常也保留一条可审计的来源记录。"""
+    return {
+        "source_id": source.id,
+        "app": source.app,
+        "target": source.target,
+        "baseline": False,
+        "fetched": 0,
+        "new_messages": 0,
+        "new_candidates": 0,
+        "error": message,
+        "partial": False,
+        "last_status": "error",
+    }
+
+
+def _write_cycle(out: Path, cycle_id: str, result: CycleResult) -> None:
     cycles_dir = out / "cycles"
     cycles_dir.mkdir(parents=True, exist_ok=True)
     (cycles_dir / f"{cycle_id}.json").write_text(
         json.dumps(result.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    return result
 
 
 def _sync_source(source: MonitorSource, connector_factory, extractor,

@@ -75,12 +75,23 @@ def test_missing_sources_yaml_points_to_example(tmp_path, monkeypatch, capsys):
     assert not (tmp_path / "out" / "data.json").exists()
 
 
-def test_device_busy_reports_lock(tmp_path, monkeypatch, capsys):
+def test_live_total_failure_exits_nonzero_without_artifacts(tmp_path, monkeypatch, capsys):
+    """所有来源失败：demo 必须非零退出，且不得写出空产物。"""
+    from ddl_agent.monitor.runner import CycleResult
+
     monkeypatch.setattr(demo, "connected_devices", lambda: ["device-1"])
     (tmp_path / "sources.yaml").write_text(
         (ROOT / "sources.example.yaml").read_text(encoding="utf-8"), encoding="utf-8"
     )
-    monkeypatch.setattr(demo, "device_lock", lambda timeout=0: _busy())
+
+    def fake_run_cycle(*args, **kwargs):
+        return CycleResult(
+            cycle_id="20261123T000000", started_at="2026-11-23T00:00:00+08:00",
+            finished_at="2026-11-23T00:00:01+08:00", engine="rules",
+            errors=["qq-a: device offline"], status="failed", write_ok=False,
+        )
+
+    monkeypatch.setattr("ddl_agent.monitor.runner.run_cycle", fake_run_cycle)
 
     code = demo.main([
         "--live", "--no-fallback", "--sources", str(tmp_path / "sources.yaml"),
@@ -89,16 +100,40 @@ def test_device_busy_reports_lock(tmp_path, monkeypatch, capsys):
 
     output = capsys.readouterr().out
     assert code == 2
-    assert "占用" in output
+    assert "未生成产物" in output
     assert "Traceback" not in output
+    assert not (tmp_path / "out" / "data.json").exists()
+    assert not (tmp_path / "out" / "deadlines.ics").exists()
+    assert not (tmp_path / "out" / "calendar.html").exists()
 
 
-class _busy:
-    def __enter__(self):
-        return False
+def test_explicit_live_does_not_fall_back_to_offline(tmp_path, monkeypatch, capsys):
+    """显式 --live 失败时不能再悄悄改成离线回放并返回 0。"""
+    from ddl_agent.monitor.runner import CycleResult
 
-    def __exit__(self, *exc):
-        return False
+    monkeypatch.setattr(demo, "connected_devices", lambda: ["device-1"])
+    (tmp_path / "sources.yaml").write_text(
+        (ROOT / "sources.example.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    monkeypatch.setattr(
+        "ddl_agent.monitor.runner.run_cycle",
+        lambda *args, **kwargs: CycleResult(
+            cycle_id="20261123T000000", started_at="2026-11-23T00:00:00+08:00",
+            finished_at="2026-11-23T00:00:01+08:00", engine="rules",
+            errors=["qq-a: 设备锁被占用"], status="failed", write_ok=False,
+        ),
+    )
+
+    code = demo.main([
+        "--live", "--sources", str(tmp_path / "sources.yaml"),
+        "--out", str(tmp_path / "out"),
+    ])
+
+    output = capsys.readouterr().out
+    assert code == 2
+    assert "改用离线回放" not in output
+    assert not (tmp_path / "out" / "data.json").exists()
 
 
 def test_demo_never_writes_chat_or_sends(monkeypatch, tmp_path):

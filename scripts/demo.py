@@ -24,7 +24,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from adb_utils import ADB  # noqa: E402
-from device_lock import device_lock  # noqa: E402
 from ddl_agent.connectors.local_chat import LocalChatConnector  # noqa: E402
 from ddl_agent.factory import build_agent  # noqa: E402
 from ddl_agent.output import export_outputs  # noqa: E402
@@ -115,16 +114,15 @@ def _live(args) -> tuple[list, str, list[Path], datetime, list[str]]:
         raise DemoError(f"监控配置不合法：{exc}") from exc
 
     notes: list[str] = []
-    with device_lock(timeout=0) as acquired:
-        if not acquired:
-            raise DemoError(
-                "设备正被其他进程占用（runs/.device.lock）："
-                "先关闭 Web/实验脚本，或加 --offline 使用离线回放。"
-            )
-        result = run_cycle(
-            config, config_path=config_path, engine=args.engine,
-            out_dir=args.out, state_dir=args.state,
-        )
+    # 设备锁由 run_cycle 里每个来源各自获取；这里不能再持锁，
+    # 否则会与外层非重入锁自我死锁，导致所有来源都报“设备锁被占用”。
+    result = run_cycle(
+        config, config_path=config_path, engine=args.engine,
+        out_dir=args.out, state_dir=args.state,
+    )
+    if not result.write_ok:
+        detail = "；".join(result.errors[:3]) or "所有来源都未读取成功"
+        raise DemoError(f"真机读取失败，未生成产物：{detail}")
     if result.errors:
         notes.extend(result.errors)
     if result.engine == "rules" and args.engine != "rules":
@@ -201,7 +199,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if mode == "live" and not devices:
-            if args.no_fallback:
+            if args.no_fallback or args.live:
+                # 显式 --live 失败必须非零退出，不能悄悄改成离线冒充成功
                 raise DemoError(live_reason or "未检测到设备")
             print(f"提示：{live_reason} 改用离线回放。")
             mode = "offline"
@@ -210,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 records, engine, paths, _now, notes = _live(args)
             except DemoError as exc:
-                if args.no_fallback:
+                if args.no_fallback or args.live:
                     raise
                 print(f"提示：{live_reason or exc} 改用离线回放。")
                 mode = "offline"
