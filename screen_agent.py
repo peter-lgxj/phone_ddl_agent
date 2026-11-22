@@ -194,8 +194,19 @@ READ_ONLY_BLOCKED_ACTIONS = {"send", "press_enter", "type"}
 # 这些规则步骤只改变导航位置，观察用一次控件树 dump 即可，不必截图+settle
 _LIGHT_RULE_OBSERVE = {
     "open_group", "search_entry", "search_type", "search_result",
-    "tap_input", "back_after_miss",
+    "tap_input", "back_after_miss", "list_scroll", "ocr_list",
 }
+
+_QQ_TASK_RE = re.compile(r"(?:^|[^a-z])qq(?:[^a-z]|$)", re.IGNORECASE)
+
+
+def _is_qq_task(task: str) -> bool:
+    """QQ 群定位一律走列表滚动 + OCR，不使用搜索框/中文输入。"""
+    return bool(_QQ_TASK_RE.search(task or ""))
+
+
+def _compact_ocr(text: str) -> str:
+    return re.sub(r"[\s\u3000]+", "", text or "").lower()
 
 
 class ScreenAgent:
@@ -266,6 +277,9 @@ class ScreenAgent:
         self.phone    = create_phone_controller(self.ocr)
         self.driver_kind = getattr(self.phone, "kind", "uiautomator2")
         self.ocr.set_tree_provider(self.phone.dump_hierarchy)
+        # QQ 列表定位的 OCR 状态：已进入的群、滚动次数、上一屏文字
+        self._ocr_nav_state: dict = {}
+        self._list_only_mode = False
         self.launcher = AppLauncher(self.phone)
         if self.driver_kind != "uiautomator2":
             print(
@@ -1206,6 +1220,19 @@ class ScreenAgent:
         t = action.get("action_type", "wait")
         search_type_allowed = False
 
+        if getattr(self, "_list_only_mode", False) and t == "type" and (
+            self.read_only or not str(action.get("text") or "").isascii()
+        ):
+            # QQ 群定位一律列表滚动 + OCR；不允许中文输入，也不打开搜索框
+            reason = (
+                "QQ 群定位改为列表滚动 + OCR，不输入中文、不使用搜索框；"
+                "请继续滚动列表"
+            )
+            action["blocked"] = True
+            action["blocked_reason"] = reason
+            print(f"  ⛔  {reason}")
+            return False
+
         if self.read_only and t in READ_ONLY_BLOCKED_ACTIONS:
             rule_name = (action.get("rule") or {}).get("name")
             # 只放行「搜索框输入」：它只改搜索框，不产生外发；
@@ -1381,6 +1408,138 @@ class ScreenAgent:
     #  规则快路：控件树能证明的动作不调用视觉模型
     # ══════════════════════════════════════════════════════════
 
+    def _ocr_list_navigate(self, memory: TaskMemory) -> dict | None:
+        """QQ 列表定位兜底：截图 OCR 匹配群名；找不到就滚动列表。
+
+        不依赖控件树，也不打开搜索框/输入中文。命中多个时只接受标题完全相等
+        或「标题 + 少量未读数」前缀，避免把「2026 计算机班级二群」当成
+        「2026 计算机班级群」。
+        """
+        targets = rule_policy.extract_quoted_targets(memory.task or "")
+        if not targets:
+            return None
+        state = getattr(self, "_ocr_nav_state", None)
+        if state is None:
+            self._ocr_nav_state = state = {}
+        if state.get("entered") or state.get("exhausted"):
+            return None
+
+        run_dir = getattr(self, "run_dir", None)
+        image = str(Path(run_dir) / "screen_list_ocr.png") if run_dir else "screen_list_ocr.png"
+        try:
+            self.phone.screenshot(image)
+            elements = self.ocr.detect_ocr(image)
+            if not elements:
+                # adb screencap 落盘与 OCR 读文件偶发竞争，稍等重试一次
+                time.sleep(0.8)
+                elements = self.ocr.detect_ocr(image)
+        except Exception as exc:
+            print(f"  ⚠️  QQ 列表 OCR 兜底失败：{exc}")
+            return None
+
+        entries = [
+            (_compact_ocr(str(element.get("text") or "")), element)
+            for element in elements
+            if str(element.get("text") or "").strip()
+        ]
+        joined = "".join(text for text, _ in entries)
+        if "搜索指定内容" in joined or "最近搜索" in joined:
+            # 被模型带到搜索页：直接返回列表，不输入任何文字
+            return {
+                "action_type": "back",
+                "description": "OCR 兜底：QQ 搜索页不使用，返回列表",
+            }
+        for target in targets:
+            key = _compact_ocr(target)
+            if not key:
+                continue
+            # 群名出现在顶部标题栏说明已经进入会话，交给消息读取/滚动，
+            # 不能把会话里的同名标题当成列表行再点一次。
+            if any(
+                (element.get("center") or (0, 0))[1] < 260 and text.startswith(key)
+                for text, element in entries
+            ):
+                return None
+
+        for target in targets:
+            key = _compact_ocr(target)
+            if not key:
+                continue
+            exact = [element for text, element in entries if text == key]
+            prefixed = [
+                element for text, element in entries
+                if text.startswith(key) and len(text) <= len(key) + 4
+            ]
+            candidates = exact or prefixed
+            if not candidates:
+                continue
+            x, y = candidates[0].get("center") or (0, 0)
+            state["entered"] = target
+            rule_state = getattr(self, "_rule_state", None) or {}
+            rule_state.update({
+                "entered_group": target,
+                "scrolls": 0,
+                "last_scroll_text": "",
+                "stagnant": 0,
+                "list_scrolls": 0,
+                "list_last_text": "",
+            })
+            self._rule_state = rule_state
+            return {
+                "action_type": "tap",
+                "x": int(x), "y": int(y),
+                "target": target,
+                "description": f"OCR 列表命中「{target}」",
+                "ocr_list_hit": True,
+            }
+
+        max_scrolls = int(getattr(config, "QQ_LIST_MAX_SCROLLS", 8))
+        group_mode = "群聊" in (memory.task or "")
+        in_group_list = any(
+            "我创建的群聊" in text or "我的群聊" in text for text, _ in entries
+        )
+        if group_mode and not in_group_list:
+            # 消息首页找不到群时，走 联系人 -> 群聊；不打开搜索、不输入中文
+            for label in ("群聊", "联系人"):
+                entry = next(
+                    (element for text, element in entries if text == _compact_ocr(label)),
+                    None,
+                )
+                if entry is None:
+                    continue
+                x, y = entry.get("center") or (0, 0)
+                state["last_text"] = ""
+                state["stagnant"] = 0
+                return {
+                    "action_type": "tap",
+                    "x": int(x), "y": int(y),
+                    "target": label,
+                    "description": f"OCR 导航：进入{label}",
+                    "ocr_list_nav": label,
+                }
+        if joined and joined == state.get("last_text"):
+            state["stagnant"] = state.get("stagnant", 0) + 1
+        else:
+            state["stagnant"] = 0
+            state["last_text"] = joined
+        if state.get("scrolls", 0) >= max_scrolls or state.get("stagnant", 0) >= 2:
+            state["exhausted"] = True
+            print("  ⚠️  QQ 列表滚动到上限仍未命中目标")
+            return None
+        state["scrolls"] = state.get("scrolls", 0) + 1
+        try:
+            from PIL import Image
+            width, height = Image.open(image).size
+        except Exception:
+            width, height = 1080, 2374
+        return {
+            "action_type": "swipe",
+            "x": width // 2, "y": int(height * 0.72),
+            "x2": width // 2, "y2": int(height * 0.30),
+            "description": f"OCR 兜底：滚动 QQ 列表查找「{targets[0]}」",
+            "ocr_list_scroll": state["scrolls"],
+        }
+
     def _rule_action(self, memory: TaskMemory) -> dict | None:
         """尝试用规则决定本步动作；None 表示需要 VLM 判断。
 
@@ -1428,6 +1587,8 @@ class ScreenAgent:
             known_input_resource_ids=(
                 getattr(config, "WECHAT_INPUT_RESOURCE_ID", ""),
             ),
+            list_only=_is_qq_task(task),
+            list_max_scrolls=int(getattr(config, "QQ_LIST_MAX_SCROLLS", 8)),
         ))
         if action is None:
             return None
@@ -1559,6 +1720,12 @@ class ScreenAgent:
         # 纯控件树决策开关打开时，非合并模式也先试规则快路：命中就不截图、不发视觉请求
         tree_only = bool(getattr(config, "TREE_ONLY_DECISION", False))
         rule_action = self._rule_action(memory) if (merged_active or tree_only) else None
+        self._list_only_mode = _is_qq_task(memory.task)
+        if rule_action is None and self._list_only_mode:
+            # QQ 群定位兜底：控件树为空/目标不在可见行时，用截图 OCR 匹配 + 滚动
+            rule_action = self._ocr_list_navigate(memory)
+            if rule_action is not None:
+                rule_action.setdefault("rule", {"name": "ocr_list"})
         if rule_action is not None:
             action = rule_action
             timings["rule_hit"] = True
