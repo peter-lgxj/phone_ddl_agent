@@ -1,10 +1,15 @@
 # 真机读取与端到端抽取验证报告
 
-> 验证日期：2026-11-18
-> 分支：`fix/p0-run-blockers`
+> 验证日期：2026-11-18（旧记录）；2026-11-23（三群复跑，见 4.4）
+> 分支：`fix/p0-run-blockers`（2026-11-18）；`1e38364`（2026-11-23 复跑）
 > 设备：OPPO PLJ110（真机，USB + ADB）
 > 口径：标注「真机实测」的内容来自设备截图、`step_*.json`、`task_log.json` 与抽取产物；
 > 标注「推断/估算」的内容不来自日志，需按文中说明理解。
+
+> **两批记录不能合并**：
+> - 2026-11-18 微信「文件传输助手」自聊，3 条记录 = **1 confirmed / 2 uncertain**（4.2、4.3）。
+> - 2026-11-23 三个真实群，demo 与 launcher 各 3 条 = **2 confirmed / 1 uncertain**（4.4）。
+> 两批消息不同，状态分布不可互换或相加。
 
 ## 1. 设备与环境
 
@@ -151,6 +156,29 @@ OCR 转写（真机实测）：
 
 这两条不是本次目标消息；保留它们是为了说明抽取器会在同一段观察里处理相邻消息，并暴露过度关联问题。
 
+### 4.4 2026-11-23 三群复跑（demo 与 launcher）
+
+复跑主提交 `1e38364`（PR #27 之前），只读；产物在 `runs/_verify/live2_20261123/`。开始前 adb 曾 offline，执行一次 `adb reconnect` 后恢复。
+
+| 运行 | 退出码 | 耗时 | 来源与抓取量 | 记录 |
+| --- | --- | --- | --- | --- |
+| `demo --live` | 0 | 329.1 s | COMP7503 作业通知群 42 / COMP7415 课程群 137 / 2026 计算机班级群 192；候选 18 / 0 / 14 | 3 条：**2 confirmed / 1 uncertain** |
+| launcher 单次 | 0 | 289.4 s | 3 个来源成功；抓取 29 / 132 / 192 | 3 条：**2 confirmed / 1 uncertain** |
+
+两次产物的 3 条记录逐条一致：
+
+| 任务 | 课程 | 截止时间 | 状态 | 置信度 | 依据（`data.json` 的 `note`） |
+| --- | --- | --- | --- | --- | --- |
+| 操作系统作业一 | COMP7503 | `2026-11-26T23:59:00+08:00` | `confirmed` | 0.95 | 同源更正/延期，采用最新一条生效值；旧值 11.28 保留在 `superseded_by`，未并列输出 |
+| 机器学习作业三 | COMP7503 | `null` | `uncertain` | 0.40 | 抽取置信度不足，标记 `uncertain` 交人工 |
+| 实验报告二 | `null` | `2026-11-22T23:59:00+08:00` | `confirmed` | 0.95 | 所有来源一致 |
+
+- 产物：`runs/_verify/live2_20261123/demo_out/{data.json,deadlines.ics,calendar.html}`、`launcher_out/{data.json,deadlines.ics,calendar.html}`、`summary.json`。
+- `write_phone_calendar=false`，本轮未写手机日历。
+- 与 4.2/4.3 的关系：4.2/4.3 是 2026-11-18 自聊旧记录（1 confirmed / 2 uncertain）；4.4 是 2026-11-23 三群复跑（2 confirmed / 1 uncertain）。两批消息不同，**不得合并或用一个数覆盖另一个**。
+
+**QQ 向上找回记录订正**：`summary.json` 的 `item3_qq_navigation.scroll_up_recovery_passed` 为 `false`。该轮在步骤 3–6 掉头向上后，步骤 7 误判“向上滚动到顶”并放弃，随后视觉模型改向下滚并点开“展示最近不活跃的群(13)”，最终未回到目标群（`runs/20261123-011553/`，证据 `runs/_verify/live_20261123/qq_scrollup_probe.json`）。该失败发生在 PR #27 之前；PR #27 改为画面哈希/OCR 文本集合连续两次判顶并锁定方向，但其修复后的真机复跑证据不在本次产物目录，不能把本轮记作 #27 已验证。
+
 ## 5. 发现的问题
 
 1. **过度关联**：`多媒体 project` 被填上 `COMP7503`。依据只是同一屏下方的课程表图片，原文没有建立“多媒体 project = COMP7503”的关系。该记录已标 `uncertain`，但字段仍可能误导，复查时应清空或要求显式证据。
@@ -179,15 +207,15 @@ OCR 转写（真机实测）：
 
 | 能力 | 代码/单测状态 | 真机验证状态 |
 | --- | --- | --- |
-| 微信手机读屏 | 存在，单测覆盖解析与超时部分结果 | 单机、自聊会话只读验证一次 |
-| QQ 手机读屏 | 包名映射与通用读屏路径存在 | **未验证** |
+| 微信手机读屏 | 存在，单测覆盖解析与超时部分结果 | 2026-11-18 自聊 1 次；2026-11-23 三群 demo/launcher 各 1 次 |
+| QQ 手机读屏 | 包名映射与通用读屏路径存在 | 仅一次向上找回 probe，且失败（PR #27 前）；其余未验证 |
 | Outlook 手机读屏 | 包名映射与通用读屏路径存在 | **未验证** |
-| monitor 单进程读屏→抽取 | 代码与单测存在 | **未验证**；本轮是 `read_latest.py` → `extract_e2e.py` 两段式 |
-| 手机系统日历写入 | 代码存在 | **未验证** |
+| monitor 单进程读屏→抽取 | 代码与单测存在 | launcher 单次跑通（3 群、3 条记录）；monitor 专项未单独验证 |
+| 手机系统日历写入 | 代码存在 | **未验证**（live2 为 `write_phone_calendar=false`） |
 
 - **单机单系统**：只测了一台 OPPO PLJ110 / Android 17（`adb_dump` 回退），没有第二台设备或系统版本对照。
-- **单账号单会话**：只测一个微信账号的「文件传输助手」自聊会话，未测真实课程群、班级群或第三方私聊。
-- **未测 QQ 与 Outlook App**：本轮只验证微信手机读屏路径。
+- **单账号、两批场景**：2026-11-18 只测一个微信账号的「文件传输助手」自聊；2026-11-23 测同一账号的 3 个真实群（COMP7503 作业通知群、COMP7415 课程群、2026 计算机班级群），第三方私聊未测。
+- **QQ 仅一次失败 probe**：2026-11-23 的 QQ 向上找回子项在 PR #27 之前运行，`scroll_up_recovery_passed=false`；没有 #27 之后的真机复跑证据。Outlook 未测。
 - **微信版本未知**：验证后设备断开，未能读取 `versionName`。
 - **未测图片型 DDL**：同屏有课程表图片，但图片不含截止时间；没有验证“只靠图片里的截止时间”能否抽取。
 - **导航不是 Agent 自主完成**：微信由 ADB 手动打开，目标会话通过搜索/粘贴定位；ScreenAgent 负责滚动到最新、读屏与 OCR。未验证 Agent 自主搜索并进入会话。
@@ -212,10 +240,15 @@ OCR 转写（真机实测）：
 | 临时 xlsx / 审计 / JSON | `runs/real_device_e2e_20261118/output/` |
 | 聊天与结束截图 | `runs/real_device_e2e_20261118/06_chat_open.png`、`07_final.png` |
 | 端到端逐步截图 | `runs/20261118-134740/step_001..003_*.png`、`task_log.json` |
+| 2026-11-23 demo 产物 | `runs/_verify/live2_20261123/demo_out/{data.json,deadlines.ics,calendar.html}` |
+| 2026-11-23 launcher 产物 | `runs/_verify/live2_20261123/launcher_out/{data.json,deadlines.ics,calendar.html}` |
+| 2026-11-23 汇总与 QQ 子项 | `runs/_verify/live2_20261123/summary.json`、`runs/_verify/live_20261123/qq_scrollup_probe.json`、`runs/20261123-011553/` |
 
 ## 9. 结论
 
 - 修复后，屏幕文字可以进入 observation 并进入抽取链路：消息条数 0 → 10，目标消息被正确抽出。
+- 2026-11-23 三群复跑：demo 与 launcher 均产出 3 条记录（**2 confirmed / 1 uncertain**），两次明细一致；这是与 2026-11-18 自聊（1 confirmed / 2 uncertain）不同的另一批消息。
+- 2026-11-23 的 QQ 向上找回子项失败（`scroll_up_recovery_passed=false`，PR #27 之前），不能记为该能力已验证。
 - 目标记录时间 `2026-11-29T23:59:00+08:00` 与原文一致，时区无偏移；课程字段为空，需要人工补全。
 - 仍存在过度关联问题（`COMP7503` 被关联到 `多媒体 project`），当前靠 `uncertain` 暴露，不能视为可靠结果。
-- 本轮只覆盖单机、单账号、自聊会话的文本消息；真实群聊、QQ、Outlook、图片型 DDL 与稳定性统计均未验证。
+- 覆盖范围仍有限：单机、单账号；真实群聊只覆盖 3 个配置群；QQ 修复后、Outlook、图片型 DDL 与稳定性统计均未验证。
