@@ -37,7 +37,7 @@
 2. 双击仓库根目录的 `run_ddl_monitor.bat`。脚本会依次检查 adb、手机是否在线且已授权、设备锁，
    然后询问「1. 单轮扫描 / 2. 持续监控」，跑完自动刷新并打开 `output/calendar.html`。
 
-3. 产物：`output/deadlines.xlsx`（含审计表）、`data.json`、`deadlines.ics`（可导入系统日历）、`calendar.html`。
+3. 产物：`output/deadlines.xlsx`（含审计表）、`data.json`、`deadlines.ics`（可导入系统日历）、`calendar.html`。`deadlines.ics` 的 `DTSTART` 使用 `TZID=Asia/Shanghai` 本地时间（`DTSTAMP` 仍为 UTC）；`calendar.html` 是静态日历视图，只按截止时间落格并显示时间，不含倒计时或红/橙/灰状态。
 
 没插手机、未授权 USB 调试、找不到 adb、手机被其他窗口占用（设备锁）时，脚本会分别给出对应提示与下一步动作，
 不会抛 Python traceback。详细说明见 [docs/ddl-agent-monitor.md](docs/ddl-agent-monitor.md)。

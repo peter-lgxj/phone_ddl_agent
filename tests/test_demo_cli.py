@@ -72,6 +72,7 @@ def test_missing_sources_yaml_points_to_example(tmp_path, monkeypatch, capsys):
     assert code == 2
     assert "sources.example.yaml" in output
     assert "Traceback" not in output
+    assert not (tmp_path / "out" / "data.json").exists()
 
 
 def test_device_busy_reports_lock(tmp_path, monkeypatch, capsys):

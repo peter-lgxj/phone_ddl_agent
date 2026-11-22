@@ -398,7 +398,9 @@ def test_data_json_and_ics_content(tmp_path: Path):
     ics = (tmp_path / "out" / "deadlines.ics").read_text(encoding="utf-8")
     assert ics.count("BEGIN:VEVENT") == 1  # 只有 confirmed 记录进日历
     assert "VALARM" in ics and "TRIGGER:-P1D" in ics
-    assert "DTSTART:20261120T155900Z" in ics  # +08:00 转 UTC
+    # 本地时间 + TZID，跨时区客户端导入后仍是北京时间
+    assert "TZID:Asia/Shanghai" in ics
+    assert "DTSTART;TZID=Asia/Shanghai:20261120T235900" in ics
 
 
 def test_phone_calendar_defaults_to_off_and_requires_agent():
