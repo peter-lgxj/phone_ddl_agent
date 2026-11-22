@@ -42,6 +42,9 @@ _EN_TASK_PATTERNS = [
 
 _PUNCT_RE = re.compile(r"[^\w\u4e00-\u9fff]+")
 _SPACE_RE = re.compile(r"\s+")
+# 重复读取同一置顶消息时，任务名常被模型改写成「提交/截止/提醒」等流程词，
+# 判重前先去掉这些词，避免同一条 DDL 被当成两个任务。
+_MERGE_NOISE_RE = re.compile(r"提交|截止|提醒|通知|deadline|due|ddl", re.IGNORECASE)
 
 
 def normalize_task_name(name: str) -> str:
@@ -71,6 +74,79 @@ def normalize_task_name(name: str) -> str:
     text = re.sub(r"\b(?:no|number)\s+(\d+)\b", r"\1", text)
     text = _SPACE_RE.sub(" ", text).strip()
     return text
+
+
+def duplicate_name_key(name: str) -> str:
+    """判重用任务名：在通用归一化后再去掉「提交/截止/提醒」等流程词。
+
+    最后去掉全部空白：中文任务名与英文单词的分词方式不一致，
+    ``小组作业 report`` 与 ``小组作业提交（report）`` 去掉流程词后
+    只差一个空格，不能因此判成两个任务。
+    """
+    text = normalize_task_name(name)
+    text = _MERGE_NOISE_RE.sub(" ", text)
+    return _SPACE_RE.sub("", text)
+
+
+def _merge_rank(candidate: DeadlineCandidate) -> tuple[float, int, str]:
+    """同组重复候选的保留优先级：置信度高、读取更早、id 稳定者胜出。"""
+    confidence = (
+        candidate.extractor_confidence
+        if candidate.extractor_confidence is not None
+        else -1.0
+    )
+    # source_order 越小越早读到；缺省时排在已知顺序之后
+    earlier = -(candidate.source_order if candidate.source_order is not None else 10**9)
+    return (confidence, earlier, candidate.candidate_id)
+
+
+def merge_duplicate_candidates(
+    candidates: list[DeadlineCandidate],
+) -> tuple[list[DeadlineCandidate], list[dict]]:
+    """合并同来源、同截止时间、任务名归一化后一致的重复候选。
+
+    读屏超时后重读同一置顶消息，会产出两条截止时间相同、任务名只差
+    「提交」等流程词的记录。这些重复读取不能变成两条 DDL：保留一条，
+    其余设置 ``merged_duplicate_of`` 并记录合并轨迹。
+    """
+    groups: dict[tuple[str, str, str], list[DeadlineCandidate]] = {}
+    for candidate in candidates:
+        if not candidate.deadline_iso or not candidate.task_name_raw.strip():
+            continue
+        key = (
+            candidate.source_name,
+            candidate.deadline_iso,
+            duplicate_name_key(candidate.task_name_raw),
+        )
+        groups.setdefault(key, []).append(candidate)
+
+    dropped: set[str] = set()
+    merged: list[dict] = []
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        keeper = max(members, key=_merge_rank)
+        for candidate in members:
+            if candidate is keeper:
+                continue
+            candidate.merged_duplicate_of = keeper.candidate_id
+            dropped.add(candidate.candidate_id)
+            merged.append(
+                {
+                    "kept": keeper.candidate_id,
+                    "merged": candidate.candidate_id,
+                    "merged_duplicate_of": keeper.candidate_id,
+                    "source_name": candidate.source_name,
+                    "deadline": candidate.deadline_iso,
+                    "task_name_raw": candidate.task_name_raw,
+                    "kept_task_name_raw": keeper.task_name_raw,
+                    "reason": "同来源、同截止时间、任务名归一化后一致（重复读取）",
+                }
+            )
+
+    if not dropped:
+        return list(candidates), merged
+    return [c for c in candidates if c.candidate_id not in dropped], merged
 
 
 def task_similarity(left: str, right: str) -> float:
