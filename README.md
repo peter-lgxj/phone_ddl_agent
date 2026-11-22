@@ -42,6 +42,48 @@
 没插手机、未授权 USB 调试、找不到 adb、手机被其他窗口占用（设备锁）时，脚本会分别给出对应提示与下一步动作，
 不会抛 Python traceback。详细说明见 [docs/ddl-agent-monitor.md](docs/ddl-agent-monitor.md)。
 
+## 演示（一条命令）
+
+给老师和同学演示时，不需要读代码，只需要：
+
+```bash
+python scripts/demo.py
+```
+
+默认 `auto`：检测到一台已授权手机会走真机只读扫描；没有手机就自动用
+`examples/demo/` 的归档回放完整链路。也可以显式指定：
+
+```bash
+python scripts/demo.py --offline      # 不需要手机/API key，确定性回放
+python scripts/demo.py --live         # 强制真机，读取 sources.yaml
+python scripts/demo.py --live --sources my_sources.yaml --out demo_output
+```
+
+**前置条件**
+
+- 离线：只装 Python 依赖（`requirements.txt` / `requirements-dev.txt`）。
+- 真机：手机开启 USB 调试并与电脑授权；`adb devices` 能看到设备；
+  `sources.yaml` 里配置好微信 / QQ / Outlook 来源（可从 `sources.example.yaml` 复制修改）。
+
+**会看到什么**
+
+- 人读摘要：共几条 DDL、每条任务名/截止时间/状态/来源、同源延期覆盖或跨来源冲突裁决依据。
+- 产物：`demo_output/data.json`、`deadlines.ics`、`calendar.html`（真机模式还会写 `deadlines.xlsx`）。
+- 只读保证：演示不会输入聊天框、不会点发送、不会发消息；唯一会改变界面的是打开 App、滚动和点击进入目标会话。
+
+**失败怎么办**
+
+- 没手机 / 没授权：提示 `adb devices` 的下一步动作，并自动改走离线回放（加 `--no-fallback` 可要求直接失败）。
+- 没 API key：仍可用规则引擎完成演示；要演示 LLM 抽取，在 `.env` 配置 `DEEPSEEK_API_KEY` 后加 `--engine llm`。
+- 设备被占用：提示 `runs/.device.lock` 的占用来源，关闭 Web/实验进程后重试，或直接 `--offline`。
+- 没有 `sources.yaml`：提示复制 `sources.example.yaml` 后修改群名/收件箱。
+
+**离线回放怎么用**
+
+`examples/demo/sources.json` 是演示配置，`sources` 里的 `path` 指向本地聊天归档 JSON。
+把它替换成自己的归档（格式见 `ddl_agent/connectors/local_chat.py` 顶部），或改 `--demo-config`
+指向新文件即可；不需要改代码、不需要手机。
+
 ## 离线评测与消融
 
 ```bash

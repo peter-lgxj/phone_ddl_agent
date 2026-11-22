@@ -61,6 +61,7 @@ experiments/ddl_agent/results/
 /sources.yaml
 /state/
 /output/
+/demo_output/
 
 # Python tooling caches
 __pycache__/
