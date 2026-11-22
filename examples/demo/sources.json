@@ -1,0 +1,20 @@
+{
+  "now": "2026-11-22T10:00:00+08:00",
+  "sources": [
+    {
+      "name": "微信-COMP7503课程群",
+      "path": "wechat_comp7503.json",
+      "source_type": "course_announcement"
+    },
+    {
+      "name": "QQ-LLM小组",
+      "path": "qq_llm_group.json",
+      "source_type": "student_chat"
+    },
+    {
+      "name": "QQ-闲聊群",
+      "path": "qq_chat.json",
+      "source_type": "student_chat"
+    }
+  ]
+}

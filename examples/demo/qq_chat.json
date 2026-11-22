@@ -1,0 +1,17 @@
+{
+  "chat": "闲聊群",
+  "messages": [
+    {
+      "sender": "leafff",
+      "role": "student",
+      "timestamp": "2026-11-18T18:00:00+08:00",
+      "text": "今天有人去图书馆吗，帮我占个位"
+    },
+    {
+      "sender": "叶小凡",
+      "role": "student",
+      "timestamp": "2026-11-18T18:05:00+08:00",
+      "text": "llm 的 ddl 是 11.31，反正我先记这个"
+    }
+  ]
+}

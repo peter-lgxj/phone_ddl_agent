@@ -1,0 +1,23 @@
+{
+  "chat": "LLM小组",
+  "messages": [
+    {
+      "sender": "叶小凡",
+      "role": "student",
+      "timestamp": "2026-11-19T20:00:00+08:00",
+      "text": "小组作业提交：11.20 23:59 前把 report 传到共享文件夹，命名 组号_姓名.pdf"
+    },
+    {
+      "sender": "叶小凡",
+      "role": "student",
+      "timestamp": "2026-11-20T21:00:00+08:00",
+      "text": "课程 Final Report，12.05 23:59 截止，跟上面那个不是一回事，别混"
+    },
+    {
+      "sender": "leafff",
+      "role": "student",
+      "timestamp": "2026-11-20T21:05:00+08:00",
+      "text": "收到"
+    }
+  ]
+}
