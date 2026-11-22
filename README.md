@@ -483,7 +483,7 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（326 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）
+- 测试与工程化：`tests/`（326 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
@@ -609,6 +609,23 @@ python scripts/check_test_deps.py      # 校验 tests 的第三方 import 都已
 pytest -q          # 单元测试：动作容错、指标聚合、任务集校验、配置加载、baseline 协议
 ruff check .       # 只启用能发现真实错误的规则（E9/F63/F7/F82）
 ```
+
+### 用脚本创建 PR（中文不乱码）
+
+PowerShell 5 的 `Invoke-RestMethod` 会按本地 ANSI 代码页序列化 JSON，中文标题偶尔变成 `????`（曾出现 `fix: ???? UI ...`）。统一改用脚本：
+
+```bash
+# 创建 PR；仓库默认从 origin 推断
+python scripts/create_pr.py --head fix/my-branch --title "fix: 中文标题" --body-file pr_body.md
+
+# 更新已有 PR 的标题/正文
+python scripts/create_pr.py --update 19 --title "fix: 中文标题" --body-file pr_body.md
+```
+
+- 请求体由 Python 以 UTF-8 字节发送（`json.dumps(ensure_ascii=False).encode("utf-8")`），并显式声明 `charset=utf-8`；
+- token 从 `git credential fill` 读取，只放 Authorization 头，不打印明文；
+- 创建/更新后立即 GET 回读，逐字比对标题与正文（换行统一为 LF），不一致时非零退出；
+- PowerShell 5 与 PowerShell 7 都适用：脚本不依赖 shell 的默认编码。正文建议用 `--body-file`（UTF-8 文件），避免长命令行参数与引号转义。
 
 ### 新增测试依赖只改一个文件
 
