@@ -157,6 +157,11 @@ def _record_time_key(record) -> tuple[datetime, int]:
     )
 
 
+def wants_pinned_query(query: str) -> bool:
+    """查询是否明确要求置顶消息。"""
+    return bool(_PINNED_QUERY_RE.search(query or ""))
+
+
 def pinned_message_ids(messages: list) -> set[str]:
     """识别置顶消息：正文标记、读屏元数据，或界面置顶横幅的前一条消息。"""
     ordered = list(messages)
@@ -216,7 +221,7 @@ def focus_records(query: str, records: list,
                   message_order: dict[str, int] | None = None) -> tuple[list, dict]:
     """按查询里的明确任务/课程裁剪最终记录；无明确目标时原样返回。"""
     hints = task_hints(query)
-    pinned_query = bool(_PINNED_QUERY_RE.search(query or ""))
+    pinned_query = wants_pinned_query(query)
     scoped_course = bool(re.search(r"COMP\d{4}\s*的", query or "", re.IGNORECASE))
     if wants_course_restriction(query):
         codes = _restricted_course_codes(query)

@@ -832,6 +832,29 @@ class ScreenAgent:
             candidates.extend(ocr_elements)
             ocr_meta = cache["ocr_meta"]
 
+        screen_size = tuple(
+            (getattr(self, "_last_image_meta", None) or {}).get("orig_size")
+            or (1080, 2374)
+        )
+        # 屏幕外坐标一律拒绝，先于吸附判断：即使能匹配到目标文本，也不允许
+        # 用「吸附」把越界坐标洗成合法坐标。
+        original = dict(mapped)
+        px, py = original.get("x"), original.get("y")
+        if (original.get("action_type") == "tap"
+                and isinstance(px, (int, float)) and isinstance(py, (int, float))
+                and not (0 <= px < screen_size[0] and 0 <= py < screen_size[1])):
+            _, guard = enforce_tap_bounds(original, candidates, screen_size)
+            timings["coordinate_guard"] = guard
+            reason = guard.get("reason", "outside_screen")
+            print(f"  ⛔ 坐标校验拒绝点击：{reason}（{guard.get('target', '')}）")
+            return {
+                **original,
+                "action_type": "wait",
+                "coordinate_rejected": reason,
+                "thought": f"坐标校验拒绝：{reason}，保持当前界面重新观察",
+                "description": f"拒绝在 {guard.get('target') or '未知目标'} 上按比例坐标点击",
+            }
+
         found = resolve_action_element(mapped, candidates, max_distance)
         if found:
             snap_source = found[0].get("source", "unknown")
@@ -839,10 +862,6 @@ class ScreenAgent:
 
         # 用控件树 bounds 复核 tap 落点：群列表/会话列表禁止按比例换算定位，
         # 越界、目标歧义或落点不在目标元素内一律拒绝执行并记录原因。
-        screen_size = tuple(
-            (getattr(self, "_last_image_meta", None) or {}).get("orig_size")
-            or (1080, 2374)
-        )
         guarded, guard = enforce_tap_bounds(mapped, candidates, screen_size)
         timings["coordinate_guard"] = guard
         if guarded is None:

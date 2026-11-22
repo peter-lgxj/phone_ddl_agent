@@ -483,7 +483,11 @@ def _build_conflicts(cluster: TaskCluster, candidates: list[DeadlineCandidate],
             "source_name": candidate.source_name,
             "deadline": candidate.deadline_iso,
             "deadline_raw": candidate.deadline_raw,
-            "published_at": _time_text(candidate),
+            # 只用真实发布时间；解析不到就留空并标注，不用读屏时刻填充
+            "published_at": (
+                candidate.published_at.isoformat() if candidate.published_at else None
+            ),
+            "published_at_note": "" if candidate.published_at else "发布时间未知",
             "message_id": candidate.message_id,
             "evidence_id": candidate.candidate_id,
             "course_from": candidate.course_from,
@@ -507,6 +511,16 @@ def _uncertain_record(cluster: TaskCluster, candidates: list[DeadlineCandidate],
                       winner: DeadlineCandidate | None, note: str,
                       *, superseded: list[dict] | None = None,
                       include_alternatives: bool = True) -> ResolvedRecord:
+    # 即使无法裁决，也把冲突两侧（含真实发布时间）留给人工复核
+    conflicts = []
+    if len({candidate.deadline_iso for candidate in candidates if candidate.deadline_iso}) > 1:
+        decision = _Decision(
+            deadline_iso="",
+            note=note,
+            confidence=CONFIDENCE_UNCERTAIN,
+            winner=winner or candidates[0],
+        )
+        conflicts = _build_conflicts(cluster, candidates, decision)
     return ResolvedRecord(
         task_name=cluster.task_name,
         course=cluster.course,
@@ -519,6 +533,7 @@ def _uncertain_record(cluster: TaskCluster, candidates: list[DeadlineCandidate],
         resolution_note=note,
         alternatives=_other_deadlines(candidates, None) if include_alternatives else [],
         superseded_by=superseded or [],
+        conflicts=conflicts,
     )
 
 

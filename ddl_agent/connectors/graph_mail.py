@@ -56,8 +56,11 @@ class GraphMailConnector:
             received = item.get("receivedDateTime")
             try:
                 published_at = datetime.fromisoformat(str(received).replace("Z", "+00:00"))
+                review_reason = ""
             except (TypeError, ValueError):
-                published_at = datetime.now(TZ)
+                # 解析不到真实收到时间时留空并标记，不能用抓取时刻冒充发布时间
+                published_at = None
+                review_reason = "邮件收到时间解析失败，发布时间未知"
             message = RawMessage(
                 message_id=str(item.get("id") or ""),
                 source_name=self.name,
@@ -67,6 +70,8 @@ class GraphMailConnector:
                 subject=str(item.get("subject") or ""),
                 body=str(item.get("bodyPreview") or ""),
                 thread_id=item.get("conversationId"),
+                needs_review=bool(review_reason),
+                review_reason=review_reason,
             )
             if message_in_plan(message, plan):
                 messages.append(message)
