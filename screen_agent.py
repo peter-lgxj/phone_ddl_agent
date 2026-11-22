@@ -209,6 +209,50 @@ def _compact_ocr(text: str) -> str:
     return re.sub(r"[\s\u3000]+", "", text or "").lower()
 
 
+# 聊天页底部输入栏/工具栏的稳定文字；用于判断“现在不是列表，不能继续下滑”
+_CHAT_PAGE_MARKERS = ("发送", "按住说话", "表情", "相册", "拍摄", "语音输入")
+# QQ 列表页的稳定文字：群列表分组标题或底部 Tab
+_LIST_PAGE_MARKERS = ("我创建的群聊", "我管理的群聊", "我加入的群聊", "我的群聊", "消息", "联系人", "动态")
+
+
+def _is_chat_page(entries: list[tuple[str, dict]]) -> bool:
+    """OCR 结果是否来自聊天页。
+
+    列表行预览里也可能出现“发送”二字，因此要求至少两个聊天页标记；
+    只有一个标记时会落入“非列表页”分支，同样先返回，不会盲目滑动。
+    """
+    hits = [
+        element for text, element in entries
+        if any(marker in text for marker in _CHAT_PAGE_MARKERS)
+    ]
+    if not hits:
+        return False
+    return len(hits) >= 2 or any("按住说话" in text for text, _ in entries)
+
+
+def _ocr_list_signature(entries: list[tuple[str, dict]]) -> str:
+    """列表区域签名：排除状态栏时间/电量，避免时钟跳变干扰“滚到底”判断。"""
+    parts: list[str] = []
+    for text, element in entries:
+        y = (element.get("center") or (0, 0))[1]
+        if y and y < 140:
+            continue
+        if re.fullmatch(r"\d{1,2}:\d{2}", text):
+            continue
+        if text.endswith("%") or text.isdigit():
+            continue
+        parts.append(text)
+    return "".join(parts)
+
+
+def _fresh_file(path: str, since: float) -> bool:
+    """文件是否在本步开始后写过；用于避免归档上一步的旧截图。"""
+    try:
+        return Path(path).stat().st_mtime >= since - 0.05
+    except OSError:
+        return False
+
+
 class ScreenAgent:
 
     ACTIONS = """
@@ -1461,6 +1505,43 @@ class ScreenAgent:
             ):
                 return None
 
+        if _is_chat_page(entries):
+            # 已经在聊天页：绝不能把聊天内容当列表继续下滑。
+            # 未进入目标会话时先退回列表；连续退回两次仍不在列表则放弃。
+            if state.get("chat_backs", 0) >= 2:
+                state["exhausted"] = True
+                print("  ⚠️  QQ 聊天页连续返回仍未回到列表，放弃本轮 OCR 定位")
+                return None
+            state["chat_backs"] = state.get("chat_backs", 0) + 1
+            return {
+                "action_type": "back",
+                "description": "OCR 兜底：当前在聊天页，先返回列表",
+                "ocr_chat_back": state["chat_backs"],
+            }
+
+        in_group_list = any(
+            "我创建的群聊" in text or "我管理的群聊" in text
+            or "我加入的群聊" in text or "我的群聊" in text
+            for text, _ in entries
+        )
+        in_message_list = any(
+            any(marker in text for marker in _LIST_PAGE_MARKERS)
+            for text, _ in entries
+        )
+        on_list = in_group_list or in_message_list
+        if not on_list:
+            # 未知页面（桌面/其它 App）不滚动：先返回，最多两次
+            if state.get("unknown_backs", 0) >= 2:
+                state["exhausted"] = True
+                print("  ⚠️  QQ 列表 OCR 兜底：连续返回仍不在列表页，放弃")
+                return None
+            state["unknown_backs"] = state.get("unknown_backs", 0) + 1
+            return {
+                "action_type": "back",
+                "description": "OCR 兜底：当前不在 QQ 列表页，先返回",
+                "ocr_unknown_back": state["unknown_backs"],
+            }
+
         for target in targets:
             key = _compact_ocr(target)
             if not key:
@@ -1495,9 +1576,6 @@ class ScreenAgent:
 
         max_scrolls = int(getattr(config, "QQ_LIST_MAX_SCROLLS", 8))
         group_mode = "群聊" in (memory.task or "")
-        in_group_list = any(
-            "我创建的群聊" in text or "我的群聊" in text for text, _ in entries
-        )
         if group_mode and not in_group_list:
             # 消息首页找不到群时，走 联系人 -> 群聊；不打开搜索、不输入中文
             for label in ("群聊", "联系人"):
@@ -1517,27 +1595,52 @@ class ScreenAgent:
                     "description": f"OCR 导航：进入{label}",
                     "ocr_list_nav": label,
                 }
-        if joined and joined == state.get("last_text"):
+
+        # 滚动前先确认仍在列表页；签名只取列表区域，排除状态栏时间/电量，
+        # 避免时钟跳变把“滚到底”误判成界面变化。
+        signature = _ocr_list_signature(entries)
+        if signature and signature == state.get("last_text"):
             state["stagnant"] = state.get("stagnant", 0) + 1
         else:
             state["stagnant"] = 0
-            state["last_text"] = joined
-        if state.get("scrolls", 0) >= max_scrolls or state.get("stagnant", 0) >= 2:
+            state["last_text"] = signature
+
+        direction = state.get("direction") or "down"
+        if state.get("scrolls", 0) >= max_scrolls * 2:
             state["exhausted"] = True
-            print("  ⚠️  QQ 列表滚动到上限仍未命中目标")
+            print("  ⚠️  QQ 列表上下滚动到上限仍未命中目标")
             return None
+        if state.get("stagnant", 0) >= 2:
+            if direction == "down":
+                # 已经滚到底还没找到：掉头向上，找回滚过头的目标
+                state["direction"] = "up"
+                state["stagnant"] = 0
+                state["last_text"] = ""
+                direction = "up"
+            else:
+                state["exhausted"] = True
+                print("  ⚠️  QQ 列表向上滚动到顶仍未命中目标")
+                return None
         state["scrolls"] = state.get("scrolls", 0) + 1
         try:
             from PIL import Image
             width, height = Image.open(image).size
         except Exception:
             width, height = 1080, 2374
+        if direction == "down":
+            y, y2 = int(height * 0.72), int(height * 0.30)
+        else:
+            y, y2 = int(height * 0.30), int(height * 0.72)
         return {
             "action_type": "swipe",
-            "x": width // 2, "y": int(height * 0.72),
-            "x2": width // 2, "y2": int(height * 0.30),
-            "description": f"OCR 兜底：滚动 QQ 列表查找「{targets[0]}」",
+            "x": width // 2, "y": y,
+            "x2": width // 2, "y2": y2,
+            "description": (
+                f"OCR 兜底：向{'下' if direction == 'down' else '上'}滚动 QQ 列表"
+                f"查找「{targets[0]}」"
+            ),
             "ocr_list_scroll": state["scrolls"],
+            "ocr_list_direction": direction,
         }
 
     def _rule_action(self, memory: TaskMemory) -> dict | None:
@@ -2112,12 +2215,26 @@ class ScreenAgent:
                 if os.path.exists(sent_path):
                     ext = os.path.splitext(sent_path)[1]
                     shutil.copy(sent_path, self.run_dir / f"step_{step:03d}_sent{ext}")
+            step_started = float(getattr(self, "_step_started", 0.0))
+            current_src = "screen_current.png"
+            if not _fresh_file(current_src, step_started):
+                # 规则/OCR 步没有走视觉截图，screen_current.png 还是上一步的；
+                # 直接补一张当前界面，避免证据图与真实界面错位。
+                try:
+                    self.phone.screenshot(current_src)
+                except Exception as e:  # noqa: BLE001 - 归档失败不影响主流程
+                    print(f"  ⚠️  证据截图失败，跳过 current 归档：{e}")
+                    current_src = None
             for src, suffix in (("screen_current.png", "current"),
                                 ("screen_observe.png", "observe")):
                 # finish 没有执行动作，screen_observe.png 是上一步的，归档会造成证据错位
                 if suffix == "observe" and (
                         action.get("action_type") == "finish"
                         or getattr(self, "_last_observation_scope", "") == "pre_action"):
+                    continue
+                if src == "screen_current.png" and current_src is None:
+                    continue
+                if not _fresh_file(src, step_started):
                     continue
                 if os.path.exists(src):
                     shutil.copy(src, self.run_dir / f"step_{step:03d}_{suffix}.png")

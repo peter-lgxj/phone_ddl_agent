@@ -293,22 +293,40 @@ class AdbDumpController:
             if same_frame or fresh:
                 self.dump_reuse_count += 1
                 return self._last_dump
-        remote = "/sdcard/window_dump.xml"
-        result = self._run("shell", "uiautomator", "dump", remote, timeout=30)
-        if result.returncode != 0:
-            # 部分 ROM 会把实际路径与错误写到 stderr，仍尝试读默认文件
-            print(f"  ⚠️  uiautomator dump 返回非零："
-                  f"{(result.stderr or b'').decode('utf-8', 'replace').strip()}")
-        try:
-            data = self._exec_out("cat", remote)
-        except RuntimeError:
-            data = self._run("shell", "cat", remote, timeout=30).stdout or b""
-        xml_text = data.decode("utf-8", "replace")
-        if "<hierarchy" not in xml_text and "<node" not in xml_text:
+        # 每次用唯一路径：dump 失败时绝不能回落到上一次遗留的 window_dump.xml，
+        # 否则会把上一轮界面当成当前界面喂给规则快路。
+        remote = f"/sdcard/window_dump_{time.time_ns()}.xml"
+        last_error = ""
+        for attempt in (1, 2):
+            result = self._run("shell", "uiautomator", "dump", remote, timeout=30)
+            if result.returncode == 0:
+                break
+            last_error = (
+                (result.stderr or result.stdout or b"").decode("utf-8", "replace").strip()
+            )
+            print(f"  ⚠️  uiautomator dump 返回非零（第 {attempt} 次）：{last_error}")
+            if attempt == 1:
+                time.sleep(0.3)
+        else:
             raise RuntimeError(
-                "adb_dump 无法读取控件树：`uiautomator dump` 没有返回 XML。"
+                "adb_dump 无法读取控件树：`uiautomator dump` 连续两次返回非零"
+                f"（{last_error or '无错误输出'}）。"
                 "请确认系统自带的 uiautomator 可用（`adb shell uiautomator dump`）。"
             )
+        try:
+            try:
+                data = self._exec_out("cat", remote)
+            except RuntimeError:
+                data = self._run("shell", "cat", remote, timeout=30).stdout or b""
+            xml_text = data.decode("utf-8", "replace")
+            if "<hierarchy" not in xml_text and "<node" not in xml_text:
+                raise RuntimeError(
+                    "adb_dump 无法读取控件树：`uiautomator dump` 没有返回 XML。"
+                    "请确认系统自带的 uiautomator 可用（`adb shell uiautomator dump`）。"
+                )
+        finally:
+            # 清理本次临时文件；失败也不影响已读到的内容
+            self._run("shell", "rm", "-f", remote, timeout=10)
         self._last_dump = xml_text
         self._last_dump_at = now
         self._dump_fingerprint = self._frame_fingerprint

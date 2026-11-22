@@ -222,6 +222,41 @@ def test_invalidate_dump_forces_fresh_dump_after_action():
     assert controller.dump_count == 2
 
 
+def test_dump_failure_never_returns_stale_remote_file():
+    """uiautomator dump 失败时不能继续读旧 XML，否则会把上一轮界面当当前界面。"""
+    controller = RecordingController()
+    controller._run = lambda *args, timeout=30.0: subprocess.CompletedProcess(
+        args, 1, stdout=b"", stderr=b"ERROR: could not get idle state."
+    )
+    controller._exec_out = lambda *args, timeout=30.0: (
+        '<hierarchy><node text="Outlook 收件箱" /></hierarchy>'.encode("utf-8")
+    )
+
+    with pytest.raises(RuntimeError, match="uiautomator dump"):
+        controller.dump_hierarchy()
+
+
+def test_dump_uses_unique_remote_path_and_cleans_up():
+    controller = RecordingController()
+    paths = []
+
+    def fake_run(*args, timeout=30.0):
+        if "uiautomator" in args:
+            paths.append(args[3])
+        return subprocess.CompletedProcess(
+            args, 0, stdout=b'<hierarchy><node text="QQ" /></hierarchy>', stderr=b""
+        )
+
+    controller._run = fake_run
+    controller._exec_out = lambda *args, timeout=30.0: (
+        '<hierarchy><node text="QQ" /></hierarchy>'.encode("utf-8")
+    )
+
+    controller.dump_hierarchy()
+    assert paths and paths[0].startswith("/sdcard/window_dump_")
+    assert paths[0] != "/sdcard/window_dump.xml"
+
+
 def test_screenshot_uses_screencap_and_saves_png(tmp_path):
     controller = RecordingController()
 

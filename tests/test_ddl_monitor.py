@@ -338,7 +338,33 @@ def test_cycle_continues_when_one_source_fails(tmp_path: Path):
 
     result = run_cycle(config, engine="rules", now=NOW, connector_factory=factory)
     assert result.inserted == 1
+    assert result.status == "partial"
+    assert result.sources_ok == 1
+    assert result.outputs
     assert any("设备锁被占用" in error for error in result.errors)
+
+
+def test_cycle_all_sources_failed_writes_no_success_artifacts(tmp_path: Path):
+    config = _monitor_config(tmp_path)
+
+    def factory(_source):
+        raise RuntimeError("device offline")
+
+    result = run_cycle(config, engine="rules", now=NOW, connector_factory=factory)
+
+    assert result.status == "failed"
+    assert result.sources_ok == 0
+    assert result.write_ok is False
+    assert result.outputs == []
+    assert not (tmp_path / "out" / "data.json").exists()
+    assert not (tmp_path / "out" / "deadlines.ics").exists()
+    assert not (tmp_path / "out" / "calendar.html").exists()
+    cycle_log = json.loads(
+        (tmp_path / "out" / "cycles" / f"{result.cycle_id}.json").read_text(encoding="utf-8")
+    )
+    assert cycle_log["status"] == "failed"
+    assert cycle_log["sources_ok"] == 0
+    assert "device offline" in " ".join(cycle_log["errors"])
 
 
 def test_mobile_source_builds_search_task_and_reads_steps():

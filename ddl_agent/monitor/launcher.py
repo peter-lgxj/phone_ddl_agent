@@ -116,8 +116,13 @@ def check_device_lock() -> str | None:
 
 
 def _print_cycle(result: CycleResult) -> None:
+    status_label = {"ok": "成功", "partial": "部分成功", "failed": "失败"}.get(
+        result.status, result.status
+    )
     print(
-        f"[{result.cycle_id}] 新增 {result.inserted} / 更新 {result.updated} / 跳过 {result.skipped}"
+        f"[{result.cycle_id}] {status_label}"
+        f"（成功来源 {result.sources_ok}）："
+        f"新增 {result.inserted} / 更新 {result.updated} / 跳过 {result.skipped}"
     )
     for source in result.sources:
         if "source_id" not in source:
@@ -166,8 +171,10 @@ def _run_once(config, args, open_page: bool = True) -> CycleResult:
     )
     _print_cycle(result)
     out = Path(args.out or config.output_dir)
-    if open_page:
-        open_calendar(out / "calendar.html")
+    calendar = out / "calendar.html"
+    if open_page and str(calendar) in result.outputs:
+        # 失败轮不打开旧日历，避免把上一轮产物当成本轮结果
+        open_calendar(calendar)
     print(f"结果目录：{out.resolve()}")
     return result
 
@@ -217,7 +224,18 @@ def main(argv: list[str] | None = None) -> int:
 
     mode = _choose_mode(args.mode)
     if mode == "once":
-        result = _run_once(config, args)
+        try:
+            result = _run_once(config, args)
+        except KeyboardInterrupt:
+            print("\n已停止")
+            return 130
+        except Exception as exc:  # noqa: BLE001 - 单轮入口必须给人话提示，不抛栈
+            print(f"[错误] 本轮执行失败：{type(exc).__name__}: {exc}", file=sys.stderr)
+            print(
+                "下一步：检查手机连接与 sources.yaml 后重试；"
+                "没有手机可先用 `python scripts/demo.py --offline`。"
+            )
+            return 1
         return 0 if result.write_ok and not result.errors else 1
 
     first = True
