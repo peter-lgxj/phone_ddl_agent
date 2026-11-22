@@ -23,8 +23,9 @@ class TaskMemory:
     #         "action_desc": action.get("description", ""),
     #         "observation": observation,
     #     })
-    def add_step(self, thought: str, action: dict, observation: str):
-        self.steps.append({
+    def add_step(self, thought: str, action: dict, observation: str,
+                 observation_messages: list[dict] | None = None):
+        step = {
             "step": len(self.steps) + 1,
             "thought": thought,
             "action_type": action.get("action_type", ""),
@@ -32,7 +33,12 @@ class TaskMemory:
             "text": action.get("text", ""),       # ← 新增，保存输入的文字
             "action": action,                     # ← 完整动作（含坐标），供事后复盘
             "observation": observation,
-        })
+        }
+        # 结构化观察单独留存：finish 步的 observation 可能只有完成标记，
+        # 下游（build_mobile_messages）必须还能拿到本步真实消息。
+        if observation_messages is not None:
+            step["observation_messages"] = observation_messages
+        self.steps.append(step)
 
     # def format_for_prompt(self, last_n: int = 6) -> str:
     #     """
@@ -109,6 +115,9 @@ def format_steps_compact(steps: list[dict], observation_limit: int = 120) -> str
         action = s.get("action") or {}
         action_type = action.get("action_type") or s.get("action_type") or "unknown"
         desc = action.get("description") or s.get("action_desc") or ""
+        if action.get("blocked_reason"):
+            # 把失败原因带回后续 prompt，避免模型重复同一个无效动作
+            desc = f"{desc}（已拦截：{action['blocked_reason']}）"
 
         params = []
         for key in ("app_name", "x", "y", "x2", "y2", "text", "summary"):

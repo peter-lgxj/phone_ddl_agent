@@ -22,7 +22,7 @@ from typing import Any
 
 from ..models import RawMessage
 from ..settings import TZ
-from observation_schema import ABSENT_VALUES
+from observation_schema import ABSENT_VALUES, format_messages
 
 _NUMBER_PREFIX_RE = re.compile(r"^\s*(?:\d+[.、)]|[-*])\s*")
 _TIME_ONLY_RE = re.compile(r"^\d{1,2}:\d{2}$")
@@ -333,6 +333,18 @@ def split_observation(observation: str, *, now: datetime | None = None
     return records
 
 
+def _step_observation_text(step: dict) -> str:
+    """优先用 ``observation_messages`` 还原本步消息，不再只依赖 observation。
+
+    合并观察的 finish 步可能把 observation 写成「任务完成」；结构化消息已单独
+    归档在 ``observation_messages``，下游必须能直接消费它。
+    """
+    messages = step.get("observation_messages")
+    if isinstance(messages, list) and messages:
+        return format_messages(messages)
+    return str(step.get("observation") or "").strip()
+
+
 def build_mobile_messages(agent: Any, *, source_name: str, source_type: str,
                           subject: str, thread_id: str,
                           message_prefix: str = "",
@@ -340,6 +352,8 @@ def build_mobile_messages(agent: Any, *, source_name: str, source_type: str,
     """把 ScreenAgent 的逐步观察转成 ``RawMessage``。
 
     与具体连接器无关；调用方只负责传入来源名称、类型和主题。
+    每步优先读取归档里的 ``observation_messages``，没有时才回退解析
+    ``observation`` 文本。
     """
     memory = getattr(agent, "last_memory", None)
     steps = list(getattr(memory, "steps", []) or [])
@@ -349,7 +363,7 @@ def build_mobile_messages(agent: Any, *, source_name: str, source_type: str,
     seen: set[str] = set()
 
     for index, step in enumerate(steps, start=1):
-        observation = str(step.get("observation") or "").strip()
+        observation = _step_observation_text(step)
         if not observation:
             continue
         step_no = int(step.get("step") or index)

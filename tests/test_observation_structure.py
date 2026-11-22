@@ -10,7 +10,7 @@ from PIL import Image
 import config
 import screen_agent
 import ui_state
-from ddl_agent.connectors.mobile_reading import split_observation
+from ddl_agent.connectors.mobile_reading import build_mobile_messages, split_observation
 from ddl_agent.extract.rules import RuleExtractor
 from ddl_agent.models import RawMessage
 from ddl_agent.pipeline import DdlAgent
@@ -158,6 +158,110 @@ def test_merged_structured_step_still_makes_one_llm_call(tmp_path, monkeypatch):
     assert "发送者：叶小凡 时间：未显示 原文：小组作业提交" in (
         memory.get_last_observation()
     )
+
+
+def test_finish_step_keeps_structured_messages(tmp_path, monkeypatch):
+    """finish + messages 同一步：消息不能被「任务完成」覆盖。"""
+    payload = {
+        "messages": [
+            {"sender": "eNotices System", "time": "06:33",
+             "body": "HKG Daily Notices (22 NOV 2026)"},
+            {"sender": "Huang Chao (via hkumoodle)", "time": "昨天",
+             "body": "COMP7607_1A_2026: Course Project Pre..."},
+        ],
+        "observation": "Outlook 收件箱可见 2 封邮件",
+        "action_type": "finish",
+        "summary": "已读取收件箱邮件",
+        "task_done": True,
+    }
+    agent = _agent(tmp_path, monkeypatch, payload)
+    memory = TaskMemory("读 Outlook 邮件")
+
+    finished, _done, _summary = agent._execute_step(1, memory)
+
+    assert finished is True
+    observation = memory.get_last_observation()
+    assert "发送者：eNotices System 时间：06:33" in observation
+    assert "发送者：Huang Chao (via hkumoodle) 时间：昨天" in observation
+    assert "[完成] 任务完成" in observation
+
+    archived = json.loads((tmp_path / "step_001.json").read_text(encoding="utf-8"))
+    assert "发送者：eNotices System 时间：06:33" in archived["observation"]
+    assert len(archived["observation_messages"]) == 2
+    assert archived["observation_format"] == "structured"
+
+    agent.last_memory = memory
+    messages = build_mobile_messages(
+        agent, source_name="outlook:inbox", source_type="official_email",
+        subject="Outlook", thread_id="outlook", now=NOW,
+    )
+    assert [message.body for message in messages] == [
+        "HKG Daily Notices (22 NOV 2026)",
+        "COMP7607_1A_2026: Course Project Pre...",
+    ]
+
+
+def test_finish_without_messages_keeps_completion_text(tmp_path, monkeypatch):
+    agent = _agent(tmp_path, monkeypatch, {
+        "observation": "",
+        "action_type": "finish",
+        "summary": "完成",
+        "task_done": True,
+    })
+    memory = TaskMemory("读群消息")
+
+    finished, _done, _summary = agent._execute_step(1, memory)
+
+    assert finished is True
+    assert memory.get_last_observation() == "任务完成"
+    archived = json.loads((tmp_path / "step_001.json").read_text(encoding="utf-8"))
+    assert archived["observation"] == "任务完成"
+    assert "observation_messages" not in archived
+
+
+def test_non_finish_step_does_not_get_completion_marker(tmp_path, monkeypatch):
+    payload = {
+        "messages": [
+            {"sender": "叶小凡", "time": "未显示", "body": "作业三 11.29 23:59"},
+        ],
+        "observation": "群聊界面",
+        "action_type": "wait",
+        "description": "保持当前界面",
+    }
+    agent = _agent(tmp_path, monkeypatch, payload)
+    memory = TaskMemory("读群消息")
+
+    finished, _done, _summary = agent._execute_step(1, memory)
+
+    assert finished is False
+    observation = memory.get_last_observation()
+    assert "发送者：叶小凡 时间：未显示 原文：作业三 11.29 23:59" == observation
+    assert "[完成]" not in observation
+
+
+def test_build_mobile_messages_prefers_archived_observation_messages(tmp_path):
+    """下游不再依赖 observation：即使它只有「任务完成」，也能还原消息。"""
+    steps = [{
+        "step": 2,
+        "observation": "任务完成",
+        "observation_messages": [
+            {"sender": "eNotices System", "time": "06:33", "body": "第一封"},
+            {"sender": "careers@cedars.hku.hk", "time": "周五", "body": "第二封"},
+        ],
+    }]
+    agent = type("Agent", (), {
+        "last_memory": type("Memory", (), {"steps": steps})(),
+        "run_dir": str(tmp_path),
+    })()
+
+    messages = build_mobile_messages(
+        agent, source_name="outlook:inbox", source_type="official_email",
+        subject="Outlook", thread_id="outlook", now=NOW,
+    )
+
+    assert [message.body for message in messages] == ["第一封", "第二封"]
+    assert messages[0].published_time == "06:33"
+    assert messages[0].published_at is None
 
 
 def test_merged_prose_without_messages_archives_fallback_marker(tmp_path, monkeypatch):
