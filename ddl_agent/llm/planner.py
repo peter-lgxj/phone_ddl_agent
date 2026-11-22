@@ -6,7 +6,13 @@ from datetime import datetime
 
 from ..extract.message_context import normalize_source_type
 from ..models import RetrievalPlan
-from ..planner import QueryPlanner, normalize_source_name, query_mentions_email
+from ..planner import (
+    QueryPlanner,
+    expand_similar_sources,
+    normalize_source_name,
+    query_mentions_email,
+    select_sources,
+)
 from ..settings import TZ
 from .client import LLMClient, LLMUnavailable
 
@@ -34,7 +40,8 @@ _PROMPT = """当前时间：{now}
 注意：date_from/date_to 指用户关心的截止时间范围；查询没提时间就返回 null。
 只选择与查询课程/项目相关的来源；实习内推群、家人群、社团群等无关社交来源，
 以及其他课程的群，不要选择。名称高度相似（只差空格、年份后缀、序号）的群
-只选与查询最匹配的一个，不要同时选中。"""
+只选与查询最匹配的一个，不要同时选中。同名基名（不带年份/学期后缀）优先视为
+主群；带年份后缀的通常是分流/选课群，只有查询明确点名该后缀时才选它。"""
 
 
 class LLMQueryPlanner:
@@ -66,6 +73,9 @@ class LLMQueryPlanner:
             matched = _match_by_name(sources, chosen)
         selected = matched or base.sources
         selected, email_added = _ensure_email_sources(query, sources, selected)
+        # 初次选源就把「同名基名优先」前置，不依赖 pipeline 事后纠偏；
+        # pipeline 的 expand_similar_sources 仍保留为兜底。
+        selected = _prefer_similar_base_group(query, sources, selected)
 
         reason = str(data.get("reason") or "")
         if email_added:
@@ -81,6 +91,15 @@ class LLMQueryPlanner:
             allow_supplementary=bool(data.get("allow_supplementary", True)),
             reason=reason,
         )
+
+
+def _prefer_similar_base_group(query: str, sources: list, selected: list) -> list:
+    """模型选中带年份后缀的相似群时，初次选源就按基名优先换回主群。"""
+    pool = expand_similar_sources(selected, sources)
+    if len(pool) == len(selected):
+        return list(selected)
+    chosen, _ = select_sources(query, pool)
+    return chosen or list(selected)
 
 
 def _match_by_name(sources: list, names: list[str]) -> list:

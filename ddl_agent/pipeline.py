@@ -22,10 +22,52 @@ from .query_focus import (
     pinned_message_ids,
     select_sources_by_content,
     task_hints,
+    wants_pinned_query,
 )
 from .retrieval import RetrievalOrchestrator
 from .settings import TZ
 from .writer.base import DeadlineWriter
+
+
+def recover_pinned_candidates(query: str, messages: list, candidates: list,
+                              now: datetime) -> list:
+    """置顶查询的确定性兜底：LLM 漏抽置顶消息时，用规则抽取补回目标。
+
+    置顶消息由 ``pinned_message_ids``（元数据/正文标记/横幅邻接）定位；没有这些
+    信号时取列表顶部 3 条，交给 ``focus_records`` 的「顶部 + 时间最早」兜底。
+    只合并带截止时间的规则候选，补不出就保持空，由 pipeline 标记 needs_review。
+    """
+    if not wants_pinned_query(query) or not messages:
+        return candidates
+    pinned_ids = pinned_message_ids(messages)
+    targets = (
+        [message for message in messages if message.message_id in pinned_ids]
+        if pinned_ids else list(messages)[:3]
+    )
+    if not targets:
+        return candidates
+    covered = {
+        str(candidate.message_id) for candidate in candidates
+        if candidate.deadline_iso
+    }
+    if all(str(message.message_id) in covered for message in targets):
+        return candidates
+
+    recovered = RuleExtractor().extract(targets, now=now)
+    recovered = recover_relative_deadlines(recovered, now)
+    seen = {
+        (str(candidate.message_id), candidate.task_name_raw, candidate.deadline_iso)
+        for candidate in candidates
+    }
+    for candidate in recovered:
+        if not candidate.deadline_iso:
+            continue
+        key = (str(candidate.message_id), candidate.task_name_raw, candidate.deadline_iso)
+        if key in seen:
+            continue
+        candidates.append(candidate)
+        seen.add(key)
+    return candidates
 
 
 def recover_relative_deadlines(candidates: list, now: datetime,
@@ -130,6 +172,7 @@ class DdlAgent:
         begin = perf_counter()
         candidates = self.extractor.extract(messages, now=self.now)
         candidates = recover_relative_deadlines(candidates, self.now, self.normalizer)
+        candidates = recover_pinned_candidates(query, messages, candidates, self.now)
         stages["extract"] = round(perf_counter() - begin, 4)
 
         begin = perf_counter()
@@ -171,6 +214,21 @@ class DdlAgent:
         elif not records and not focus_decision.get("no_match"):
             needs_review = True
             review_reason = "已读到消息但未解析出可用的截止时间，需人工复核"
+
+        # 置顶查询补不出置顶目标时，不能把同群其他 DDL 当答案放出去。
+        if wants_pinned_query(query):
+            pinned_filter = focus_decision.get("pinned_filter")
+            if not records or pinned_filter in ("no_pinned_record", "no_marker"):
+                records = []
+                focus_decision["after"] = 0
+                focus_decision["noise_suppressed"] = True
+                if not read_empty:
+                    needs_review = True
+                    review_reason = "置顶消息未能解析出可用截止时间，需人工复核"
+            elif all(not getattr(record, "deadline_iso", None) for record in records):
+                focus_decision["noise_suppressed"] = True
+                needs_review = True
+                review_reason = "置顶消息未能解析出可用截止时间，需人工复核"
 
         write_result = None
         begin = perf_counter()
