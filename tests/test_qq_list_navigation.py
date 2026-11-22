@@ -161,24 +161,151 @@ def test_ocr_list_navigation_never_scrolls_unknown_screen(tmp_path):
     assert agent._ocr_nav_state["exhausted"] is True
 
 
-def test_ocr_list_navigation_flips_up_after_reaching_bottom(tmp_path):
+class _PagedPhone:
+    """按页滚动的假手机：滑动手势会改变当前页，页面图像用于哈希比对。"""
+
+    def __init__(self, pages_count: int, start_page: int = 0):
+        self.pages_count = pages_count
+        self.page = start_page
+        self.taps = []
+        self.path: Path | None = None
+
+    def screenshot(self, target):
+        color = (20 + self.page * 35, 60, 120)
+        Image.new("RGB", (1080, 2374), color).save(target)
+        self.path = Path(target)
+
+    def tap(self, x, y):
+        self.taps.append((x, y))
+
+    def swipe(self, action: dict) -> None:
+        if action["y"] > action["y2"]:      # 手指上移 = 向下翻页
+            self.page = min(self.pages_count - 1, self.page + 1)
+        else:                               # 手指下移 = 向上翻页
+            self.page = max(0, self.page - 1)
+
+
+class _PagedOCR:
+    def __init__(self, phone: _PagedPhone, pages: list[list[dict]]):
+        self.phone = phone
+        self.pages = pages
+
+    def detect_ocr(self, path):
+        return self.pages[self.phone.page]
+
+
+def _list_page(rows: list[str]) -> list[dict]:
+    entries = [{"text": "我创建的群聊 10/12", "center": (100, 200)}]
+    entries += [
+        {"text": row, "center": (400, 450 + index * 160)}
+        for index, row in enumerate(rows)
+    ]
+    return entries
+
+
+def _paged_agent(tmp_path, pages, start_page=0):
+    phone = _PagedPhone(len(pages), start_page=start_page)
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent.run_dir = tmp_path
+    agent.phone = phone
+    agent.ocr = _PagedOCR(phone, pages)
+    agent._ocr_nav_state = {}
+    return agent, phone
+
+
+def _drive_until_done(agent, phone, memory, limit=20):
+    actions = []
+    for _ in range(limit):
+        action = agent._ocr_list_navigate(memory)
+        actions.append(action)
+        if action["action_type"] == "swipe":
+            phone.swipe(action)
+        elif action["action_type"] == "tap":
+            return actions
+    raise AssertionError(f"未在 {limit} 步内命中目标：{actions}")
+
+
+def test_ocr_list_navigation_finds_target_below_after_scrolling_down(tmp_path):
+    pages = [
+        _list_page(["群A", "群B"]),
+        _list_page(["群C", "群D"]),
+        _list_page([TARGET, "群E"]),
+    ]
+    agent, phone = _paged_agent(tmp_path, pages, start_page=0)
+    memory = TaskMemory(f"打开QQ，滚动列表找到「{TARGET}」")
+
+    actions = _drive_until_done(agent, phone, memory)
+
+    assert actions[-1]["action_type"] == "tap"
+    assert actions[-1]["ocr_list_hit"] is True
+    directions = [
+        action.get("ocr_list_direction")
+        for action in actions if action["action_type"] == "swipe"
+    ]
+    assert directions == ["down", "down"]
+
+
+def test_ocr_list_navigation_recovers_target_above_multiple_up_scrolls(tmp_path):
+    pages = [
+        _list_page([TARGET, "群B"]),
+        _list_page(["群C", "群D"]),
+        _list_page(["群E", "群F"]),
+        _list_page(["群G", "群H"]),
+    ]
+    agent, phone = _paged_agent(tmp_path, pages, start_page=3)
+    memory = TaskMemory(f"打开QQ，滚动列表找到「{TARGET}」")
+
+    actions = _drive_until_done(agent, phone, memory)
+
+    assert actions[-1]["action_type"] == "tap"
+    assert actions[-1]["ocr_list_hit"] is True
+    directions = [
+        action.get("ocr_list_direction")
+        for action in actions if action["action_type"] == "swipe"
+    ]
+    assert "down" in directions and "up" in directions
+    first_up = directions.index("up")
+    # 方向一旦切到向上找回就锁定，后续不能翻回向下
+    assert all(direction == "up" for direction in directions[first_up:])
+    assert directions.count("up") >= 3
+
+
+def test_ocr_list_navigation_fails_at_real_top_without_structural_taps(tmp_path):
+    pages = [
+        _list_page(["群A", "群B"]),
+        _list_page(["群C", "群D"]),
+    ]
+    agent, phone = _paged_agent(tmp_path, pages, start_page=0)
+    memory = TaskMemory(f"打开QQ，滚动列表找到「{TARGET}」")
+
+    try:
+        _drive_until_done(agent, phone, memory)
+    except screen_agent.QQListNavigationError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("到顶后仍未找到目标，应显式失败")
+
+    assert "向上找回失败" in message
+    assert "到达顶部" in message
+    assert "已向下" in message and "向上" in message
+    # 找回期间只滑动，不点任何入口（包括“展示最近不活跃的群”）
+    assert phone.taps == []
+    assert agent._ocr_nav_state.get("direction") == "up"
+
+
+def test_ocr_list_navigation_never_taps_structural_expander(tmp_path):
     agent = _agent(tmp_path, [
         {"text": "我创建的群聊 10/12", "center": (100, 200)},
-        {"text": "文件传输助手", "center": (400, 1200)},
+        {"text": "展示最近不活跃的群(13)", "center": (332, 2108)},
+        {"text": "群A", "center": (400, 600)},
     ])
-    agent._ocr_nav_state = {
-        "direction": "down", "scrolls": 8, "stagnant": 1,
-        "last_text": "我创建的群聊10/12文件传输助手",
-    }
     memory = TaskMemory(f"打开QQ，滚动列表找到「{TARGET}」")
 
     action = agent._ocr_list_navigate(memory)
 
     assert action is not None
     assert action["action_type"] == "swipe"
-    assert action["ocr_list_direction"] == "up"
-    assert action["y"] < action["y2"]
-    assert agent._ocr_nav_state["scrolls"] == 9
+    assert agent.phone.taps == []
 
 
 def test_ocr_list_navigation_finds_target_after_up_scroll(tmp_path):

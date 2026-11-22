@@ -230,27 +230,66 @@ def _is_chat_page(entries: list[tuple[str, dict]]) -> bool:
     return len(hits) >= 2 or any("按住说话" in text for text, _ in entries)
 
 
-def _ocr_list_signature(entries: list[tuple[str, dict]]) -> str:
-    """列表区域签名：排除状态栏时间/电量，避免时钟跳变干扰“滚到底”判断。"""
-    parts: list[str] = []
-    for text, element in entries:
-        y = (element.get("center") or (0, 0))[1]
-        if y and y < 140:
-            continue
-        if re.fullmatch(r"\d{1,2}:\d{2}", text):
-            continue
-        if text.endswith("%") or text.isdigit():
-            continue
-        parts.append(text)
-    return "".join(parts)
-
-
 def _fresh_file(path: str, since: float) -> bool:
     """文件是否在本步开始后写过；用于避免归档上一步的旧截图。"""
     try:
         return Path(path).stat().st_mtime >= since - 0.05
     except OSError:
         return False
+
+
+class QQListNavigationError(RuntimeError):
+    """QQ 列表扫描到边界仍未找到目标：显式失败，不交给模型继续乱滚。"""
+
+
+# 会改变列表结构的入口：找回期间只滑动，不能点这些
+_STRUCTURAL_MARKERS = ("展示最近不活跃的群", "展开", "收起")
+
+
+def _list_image_hash(image: str) -> str:
+    """列表区域画面哈希：裁掉状态栏与底部导航，避免时钟/电量干扰。"""
+    try:
+        from PIL import Image
+        with Image.open(image) as img:
+            width, height = img.size
+            crop = img.convert("L").crop(
+                (0, int(height * 0.10), width, int(height * 0.90))
+            )
+            return hashlib.md5(crop.tobytes()).hexdigest()
+    except Exception:
+        return ""
+
+
+def _is_list_text(text: str) -> bool:
+    if any(marker in text for marker in _STRUCTURAL_MARKERS):
+        return False
+    if re.fullmatch(r"\d{1,2}:\d{2}", text):
+        return False
+    return not (text.endswith("%") or text.isdigit())
+
+
+def _ocr_text_set(entries: list[tuple[str, dict]]) -> str:
+    """列表区域的 OCR 文本集合（排序去重），作为到顶/到底的比对证据之一。"""
+    texts = {
+        text for text, _ in entries
+        if _is_list_text(text)
+    }
+    return "|".join(sorted(texts))
+
+
+def _list_edge_signature(entries: list[tuple[str, dict]], top: bool) -> str:
+    """列表顶部/底部前 3 行文字与纵向位置；用于确认真的到顶/到底。"""
+    rows: list[tuple[int, str]] = []
+    for text, element in entries:
+        if not _is_list_text(text):
+            continue
+        y = (element.get("center") or (0, 0))[1]
+        if y < 140:
+            continue
+        rows.append((y, text))
+    rows.sort()
+    picked = rows[:3] if top else rows[-3:]
+    return "|".join(f"{text}@{y // 12}" for y, text in picked)
 
 
 class ScreenAgent:
@@ -1546,10 +1585,10 @@ class ScreenAgent:
             key = _compact_ocr(target)
             if not key:
                 continue
-            exact = [element for text, element in entries if text == key]
+            exact = [element for text, element in entries if text == key and _is_list_text(text)]
             prefixed = [
                 element for text, element in entries
-                if text.startswith(key) and len(text) <= len(key) + 4
+                if text.startswith(key) and len(text) <= len(key) + 4 and _is_list_text(text)
             ]
             candidates = exact or prefixed
             if not candidates:
@@ -1586,8 +1625,14 @@ class ScreenAgent:
                 if entry is None:
                     continue
                 x, y = entry.get("center") or (0, 0)
-                state["last_text"] = ""
-                state["stagnant"] = 0
+                state.update({
+                    "direction": "down",
+                    "evidence": None,
+                    "down_scrolls": 0,
+                    "up_scrolls": 0,
+                    "down_stable": 0,
+                    "up_stable": 0,
+                })
                 return {
                     "action_type": "tap",
                     "x": int(x), "y": int(y),
@@ -1596,32 +1641,61 @@ class ScreenAgent:
                     "ocr_list_nav": label,
                 }
 
-        # 滚动前先确认仍在列表页；签名只取列表区域，排除状态栏时间/电量，
-        # 避免时钟跳变把“滚到底”误判成界面变化。
-        signature = _ocr_list_signature(entries)
-        if signature and signature == state.get("last_text"):
-            state["stagnant"] = state.get("stagnant", 0) + 1
-        else:
-            state["stagnant"] = 0
-            state["last_text"] = signature
-
+        # ── 单向扫描；到顶/到底必须同时满足“画面没变 + 边缘行没变” ──
+        # 方向一旦切到向上找回就锁定，不再翻回向下。
         direction = state.get("direction") or "down"
-        if state.get("scrolls", 0) >= max_scrolls * 2:
-            state["exhausted"] = True
-            print("  ⚠️  QQ 列表上下滚动到上限仍未命中目标")
-            return None
-        if state.get("stagnant", 0) >= 2:
-            if direction == "down":
-                # 已经滚到底还没找到：掉头向上，找回滚过头的目标
+        image_hash = _list_image_hash(image)
+        text_set = _ocr_text_set(entries)
+        edge_sig = _list_edge_signature(entries, top=(direction == "up"))
+        previous = state.get("evidence")
+        same_visual = bool(image_hash) and isinstance(previous, tuple) and (
+            image_hash == previous[0]
+        )
+        same_text = bool(text_set) and isinstance(previous, tuple) and (
+            text_set == previous[1] and edge_sig == previous[2]
+        )
+        same_screen = same_visual or same_text
+        state["evidence"] = (image_hash, text_set, edge_sig)
+
+        if direction == "down":
+            state["down_stable"] = (
+                state.get("down_stable", 0) + 1 if same_screen else 0
+            )
+            if state["down_stable"] >= 2:
+                # 连续两次向下滑动画面/文本/末行都不变：确认到底，锁定向上找回
                 state["direction"] = "up"
-                state["stagnant"] = 0
-                state["last_text"] = ""
+                state["direction_locked"] = True
+                state["up_stable"] = 0
+                state["evidence"] = None
                 direction = "up"
-            else:
-                state["exhausted"] = True
-                print("  ⚠️  QQ 列表向上滚动到顶仍未命中目标")
-                return None
-        state["scrolls"] = state.get("scrolls", 0) + 1
+                print("  ↩️  QQ 列表已到底，锁定向上找回")
+        else:
+            state["up_stable"] = (
+                state.get("up_stable", 0) + 1 if same_screen else 0
+            )
+            if state["up_stable"] >= 2:
+                # 连续两次向上滑动画面哈希/OCR 文本集合/顶部三行都不变：确认到顶
+                raise QQListNavigationError(
+                    f"QQ 列表向上找回失败：已向下 {state.get('down_scrolls', 0)} 次、"
+                    f"向上 {state.get('up_scrolls', 0)} 次，到达顶部仍未找到「{targets[0]}」"
+                )
+
+        if direction == "down":
+            if state.get("down_scrolls", 0) >= max_scrolls * 2:
+                raise QQListNavigationError(
+                    f"QQ 列表向下扫描失败：已向下 {state['down_scrolls']} 次仍未到底，"
+                    f"未找到「{targets[0]}」"
+                )
+            state["down_scrolls"] = state.get("down_scrolls", 0) + 1
+        else:
+            if state.get("up_scrolls", 0) >= max_scrolls * 2:
+                raise QQListNavigationError(
+                    f"QQ 列表向上找回失败：已向下 {state.get('down_scrolls', 0)} 次、"
+                    f"向上 {state['up_scrolls']} 次达到上限，仍未找到「{targets[0]}」"
+                )
+            state["up_scrolls"] = state.get("up_scrolls", 0) + 1
+        state["scrolls"] = state.get("down_scrolls", 0) + state.get("up_scrolls", 0)
+
         try:
             from PIL import Image
             width, height = Image.open(image).size
