@@ -55,6 +55,7 @@ python scripts/demo.py
 
 ```bash
 python scripts/demo.py --offline      # 不需要手机/API key，确定性回放
+python scripts/demo.py --offline --demo-config examples/demo/sources.json --engine rules
 python scripts/demo.py --live         # 强制真机，读取 sources.yaml
 python scripts/demo.py --live --sources my_sources.yaml --out demo_output
 ```
@@ -360,7 +361,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 
 ## 单步耗时与优化
 
-真机读取实测（OPPO PLJ110 / Android 16 / 1080×2374，微信自聊会话，10 步）：修复前 81.42s（8.14s/步），开启滚动观察与 OCR 后 105.59s（10.56s/步），其中 OCR 26.27s。完整记录见 `docs/real-device-test-report.md`；这是单次结果，不作为稳定性能指标。
+真机读取实测（OPPO PLJ110 / Android 17 / 1080×2374，微信自聊会话，10 步；因 Android 17 与 uiautomator2 3.7.1 不兼容，真机走 `SCREEN_DRIVER=adb_dump`）：修复前 81.42s（8.14s/步），开启滚动观察与 OCR 后 105.59s（10.56s/步），其中 OCR 26.27s。完整记录见 `docs/real-device-test-report.md`；这是单次结果，不作为稳定性能指标。
 
 | 阶段 | 耗时 | 说明 |
 |---|---|---|
@@ -548,7 +549,7 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（326 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
+- 测试与工程化：`tests/`（472 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 

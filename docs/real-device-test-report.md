@@ -11,12 +11,17 @@
 | 项目 | 值 | 来源 |
 | --- | --- | --- |
 | 型号 | OPPO PLJ110 | `adb devices -l`（真机实测） |
-| Android 版本 | 16（SDK 36） | `getprop`（真机实测） |
+| Android 版本 | 17（SDK 37） | `getprop`（真机实测） |
 | 屏幕 | 1080×2374，物理密度 560，override 480 | `wm size` / `wm density`（真机实测） |
 | 目标 App | 微信，会话「文件传输助手」 | 截图与 `topResumedActivity`（真机实测） |
 | 微信版本 | **未取到** | 验证结束后 `adb devices` 已无设备，`dumpsys package` 无法读取；不写推断值 |
 | 读屏模型 | `deepseek-flash` | ScreenAgent 启动日志（真机实测） |
 | 抽取引擎 | `engine=llm`（DeepSeek） | `extraction_result.json`（真机实测） |
+
+> 版本订正：该机实际为 **Android 17（API 37）**。`uiautomator2` 3.7.1 在 Android 17
+> 上首次 `deviceInfo` RPC 会报 `ApplicationSharedMemory not initialized`
+> （openatx/uiautomator2#1209），因此本机真机读取走 `SCREEN_DRIVER=adb_dump` 回退驱动；
+> 这是 Android 17 设备记录，不是 Android 16。仓库中没有另一台 Android 16 真机的测试记录。
 
 ## 2. 时间线
 
@@ -180,7 +185,7 @@ OCR 转写（真机实测）：
 | monitor 单进程读屏→抽取 | 代码与单测存在 | **未验证**；本轮是 `read_latest.py` → `extract_e2e.py` 两段式 |
 | 手机系统日历写入 | 代码存在 | **未验证** |
 
-- **单机单系统**：只测了一台 OPPO PLJ110 / Android 16，没有第二台设备或系统版本对照。
+- **单机单系统**：只测了一台 OPPO PLJ110 / Android 17（`adb_dump` 回退），没有第二台设备或系统版本对照。
 - **单账号单会话**：只测一个微信账号的「文件传输助手」自聊会话，未测真实课程群、班级群或第三方私聊。
 - **未测 QQ 与 Outlook App**：本轮只验证微信手机读屏路径。
 - **微信版本未知**：验证后设备断开，未能读取 `versionName`。
