@@ -13,6 +13,7 @@ from .models import ResolvedRecord
 from .settings import TZ
 
 _APP = "ddl-agent"
+_ICAL_TZID = "Asia/Shanghai"
 
 
 def _payload(records: list[ResolvedRecord], generated_at: datetime | None = None) -> dict:
@@ -63,6 +64,15 @@ def write_ics(records: list[ResolvedRecord], path: str | Path,
         "VERSION:2.0",
         f"PRODID:-//{_APP}//DDL Calendar//EN",
         "CALSCALE:GREGORIAN",
+        "BEGIN:VTIMEZONE",
+        f"TZID:{_ICAL_TZID}",
+        "BEGIN:STANDARD",
+        "DTSTART:19700101T000000",
+        "TZOFFSETFROM:+0800",
+        "TZOFFSETTO:+0800",
+        "TZNAME:CST",
+        "END:STANDARD",
+        "END:VTIMEZONE",
     ]
     for record in records:
         if record.status != "confirmed" or not record.deadline_iso:
@@ -70,7 +80,7 @@ def write_ics(records: list[ResolvedRecord], path: str | Path,
         deadline = datetime.fromisoformat(record.deadline_iso)
         if deadline.tzinfo is None:
             deadline = deadline.replace(tzinfo=TZ)
-        start = deadline.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        start = deadline.astimezone(TZ).strftime("%Y%m%dT%H%M%S")
         uid = hashlib.sha1(
             f"{record.course}|{record.task_name}|{record.deadline_iso}".encode("utf-8")
         ).hexdigest()[:20]
@@ -79,7 +89,7 @@ def write_ics(records: list[ResolvedRecord], path: str | Path,
             "BEGIN:VEVENT",
             f"UID:{uid}@{_APP}",
             f"DTSTAMP:{stamp}",
-            f"DTSTART:{start}",
+            f"DTSTART;TZID={_ICAL_TZID}:{start}",
             f"SUMMARY:{_escape(summary)}",
             f"DESCRIPTION:{_escape(record.resolution_note or record.source)}",
             "STATUS:CONFIRMED",
@@ -151,7 +161,8 @@ class PhoneCalendarWriter:
 
 def _atomic_write(path: Path, content: str) -> None:
     tmp = path.with_name(f"{path.name}.tmp")
-    tmp.write_text(content, encoding="utf-8")
+    # 必须按字节写入：文本模式的 newline 转换会把 ICS 的 CRLF 再转成 \r\r\n
+    tmp.write_bytes(content.encode("utf-8"))
     os.replace(tmp, path)
 
 
