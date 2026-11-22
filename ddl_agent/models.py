@@ -54,6 +54,13 @@ class RawMessage:
     review_reason: str = ""
     # 置顶状态元数据（群列表/聊天界面「置顶了一条消息」横幅可得时写入）
     pinned: bool = False
+    # 读屏只给出时刻（如 06:33）时保留时刻，published_at 仍为空
+    published_time: str = ""
+    # 发布日期是否按读屏日期锚定推断（昨天/本周周五），以及依据
+    published_at_inferred: bool = False
+    published_at_basis: str = ""
+    # 本消息的读屏时刻；只用于冲突排序锚定，绝不作为发布时间输出
+    observed_at: datetime | None = None
 
 
 @dataclass
@@ -123,6 +130,15 @@ class DeadlineCandidate:
     inference_basis: str = ""
     # 证据是否落在置顶消息/列表顶部最早一条上；用于置顶查询的证据链确认
     pinned: bool = False
+    # 只拿到时刻、日期未知时保留时刻；published_at 仍为空
+    published_time: str = ""
+    # 发布日期是否按读屏日期锚定推断，以及依据
+    published_at_inferred: bool = False
+    published_at_basis: str = ""
+    # 读屏时刻：仅用于冲突排序锚定，不作为发布时间输出
+    observed_at: datetime | None = None
+    # 同来源、同截止时间、任务名归一化后判重合并时，指向保留的 candidate_id
+    merged_duplicate_of: str = ""
 
     @property
     def has_deadline(self) -> bool:

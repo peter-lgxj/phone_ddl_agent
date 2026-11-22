@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,17 @@ _DATE_RE = re.compile(
     r"(?:(?P<year>20\d{2})[-/年])?(?P<month>\d{1,2})[-/月](?P<day>\d{1,2})日?"
 )
 _CLOCK_RE = re.compile(r"(?P<hour>\d{1,2})[:：](?P<minute>\d{2})")
+_UI_CLOCK_ONLY_RE = re.compile(r"^(?P<hour>\d{1,2})[:：](?P<minute>\d{2})$")
+_UI_YESTERDAY_RE = re.compile(
+    r"^(?:昨天|昨日)\s*(?:(?P<hour>\d{1,2})[:：](?P<minute>\d{2}))?$"
+)
+_UI_WEEKDAY_RE = re.compile(
+    r"^(?:周|星期)(?P<weekday>[一二三四五六日天])\s*"
+    r"(?:(?P<hour>\d{1,2})[:：](?P<minute>\d{2}))?$"
+)
+_WEEKDAY_INDEX = {
+    "一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6,
+}
 _SKIP_LINES = {
     "任务完成",
     "完成",
@@ -52,8 +63,26 @@ class ParsedMessage:
     body: str
     sender: str = ""
     published_at: datetime | None = None
+    published_time: str = ""
+    published_at_inferred: bool = False
+    published_at_basis: str = ""
     needs_review: bool = False
     review_reason: str = ""
+
+
+@dataclass
+class ParsedTime:
+    """时间片段的解析结果。
+
+    ``published_at`` 只放能确定日期的完整时间；只有时刻时保留
+    ``published_time``，不把读屏当天日期补成完整时间戳。
+    """
+
+    published_at: datetime | None = None
+    published_time: str = ""
+    date_inferred: bool = False
+    date_inference_basis: str = ""
+    reason: str = ""
 
 
 def _clean_sender(value: str) -> str:
@@ -71,28 +100,94 @@ def _extract_field(line: str, label: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def parse_time_token(value: str, *, now: datetime | None = None
-                     ) -> tuple[datetime | None, str]:
-    """把读屏里的时间片段转成带时区的 datetime；不完整时返回原因。"""
+def parse_time_details(value: str, *, now: datetime | None = None) -> ParsedTime:
+    """解析读屏时间片段，区分完整时间、只有时刻、只有日期和跨周歧义。"""
     text = (value or "").strip()
     if not text or text.lower() in ABSENT_VALUES:
-        return None, "未读到时间"
+        return ParsedTime(reason="未读到时间")
 
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=TZ)
-        return parsed.astimezone(TZ), ""
+        return ParsedTime(published_at=parsed.astimezone(TZ))
     except ValueError:
         pass
 
     current = now or datetime.now(TZ)
+
+    clock = _UI_CLOCK_ONLY_RE.fullmatch(text)
+    if clock:
+        hour, minute = int(clock.group("hour")), int(clock.group("minute"))
+        if hour > 23 or minute > 59:
+            return ParsedTime(reason="时间无法解析")
+        return ParsedTime(
+            published_time=f"{hour:02d}:{minute:02d}",
+            reason="只有时刻、日期未知",
+        )
+
+    yesterday = _UI_YESTERDAY_RE.fullmatch(text)
+    if yesterday:
+        date = (current - timedelta(days=1)).date()
+        clock_text = _clock_text(yesterday)
+        basis = "按读屏日期推断“昨天”"
+        if clock_text:
+            hour, minute = _clock_parts(yesterday)
+            return ParsedTime(
+                published_at=datetime(date.year, date.month, date.day, hour, minute,
+                                      tzinfo=TZ),
+                published_time=clock_text,
+                date_inferred=True,
+                date_inference_basis=basis,
+            )
+        return ParsedTime(
+            published_at=datetime(date.year, date.month, date.day, tzinfo=TZ),
+            date_inferred=True,
+            date_inference_basis=basis,
+            reason="只有日期没有具体时刻",
+        )
+
+    weekday = _UI_WEEKDAY_RE.fullmatch(text)
+    if weekday:
+        label = ("周" if text.startswith("周") else "星期") + weekday.group("weekday")
+        target = _WEEKDAY_INDEX[weekday.group("weekday")]
+        monday = current.date() - timedelta(days=current.weekday())
+        target_date = monday + timedelta(days=target)
+        clock_text = _clock_text(weekday)
+        if target_date > current.date():
+            # 本周还没到这一天，无法判断是上周还是下周，按约定不猜日期
+            return ParsedTime(
+                published_time=clock_text,
+                reason="星期跨周歧义，日期未知",
+            )
+        basis = f"按读屏日期锚定本周{label}"
+        if clock_text:
+            hour, minute = _clock_parts(weekday)
+            return ParsedTime(
+                published_at=datetime(target_date.year, target_date.month,
+                                      target_date.day, hour, minute, tzinfo=TZ),
+                published_time=clock_text,
+                date_inferred=True,
+                date_inference_basis=basis,
+            )
+        return ParsedTime(
+            published_at=datetime(target_date.year, target_date.month,
+                                  target_date.day, tzinfo=TZ),
+            date_inferred=True,
+            date_inference_basis=basis,
+            reason="只有日期没有具体时刻",
+        )
+
     date_match = _DATE_RE.search(text)
     clock_match = _CLOCK_RE.search(text)
     if not date_match:
         if clock_match:
-            return None, "只有时间没有日期"
-        return None, "时间无法解析"
+            hour, minute = int(clock_match.group("hour")), int(clock_match.group("minute"))
+            return ParsedTime(
+                published_time=f"{hour:02d}:{minute:02d}",
+                reason="只有时刻、日期未知",
+            )
+        return ParsedTime(reason="时间无法解析")
 
     try:
         year = int(date_match.group("year") or current.year)
@@ -102,14 +197,39 @@ def parse_time_token(value: str, *, now: datetime | None = None
         minute = int(clock_match.group("minute")) if clock_match else 0
         parsed = datetime(year, month, day, hour, minute, tzinfo=TZ)
     except (TypeError, ValueError):
-        return None, "时间无法解析"
+        return ParsedTime(reason="时间无法解析")
 
     reasons: list[str] = []
+    basis = ""
     if not date_match.group("year"):
-        reasons.append("年份按当前年份推断")
+        basis = "年份按读屏年份推断"
+        reasons.append(basis)
     if not clock_match:
-        reasons.append("只有日期没有具体时间")
-    return parsed, "；".join(reasons)
+        reasons.append("只有日期没有具体时刻")
+    return ParsedTime(
+        published_at=parsed,
+        published_time=f"{hour:02d}:{minute:02d}" if clock_match else "",
+        date_inferred=bool(basis),
+        date_inference_basis=basis,
+        reason="；".join(reasons),
+    )
+
+
+def _clock_text(match: re.Match) -> str:
+    if match.group("hour") is None:
+        return ""
+    return f"{int(match.group('hour')):02d}:{int(match.group('minute')):02d}"
+
+
+def _clock_parts(match: re.Match) -> tuple[int, int]:
+    return int(match.group("hour")), int(match.group("minute"))
+
+
+def parse_time_token(value: str, *, now: datetime | None = None
+                     ) -> tuple[datetime | None, str]:
+    """兼容旧调用：只返回完整时间与原因。"""
+    details = parse_time_details(value, now=now)
+    return details.published_at, details.reason
 
 
 def _parse_structured(text: str, *, now: datetime) -> list[ParsedMessage]:
@@ -123,21 +243,24 @@ def _parse_structured(text: str, *, now: datetime) -> list[ParsedMessage]:
             return
         body = current.get("body", "").strip()
         if body and body not in _SKIP_LINES:
-            parsed_time, reason = parse_time_token(current.get("time", ""), now=now)
+            details = parse_time_details(current.get("time", ""), now=now)
             sender = _clean_sender(current.get("sender", ""))
             # 屏幕确实没有时间（模型按约定写“未显示”）只留空并记原因，不整体降级；
-            # 时间片段存在但解析不了，才需要人工复核。缺发送者只记审计，不阻断确认。
-            needs_review = bool(reason) and reason != "未读到时间"
+            # 只有时刻/跨周歧义保留时刻和原因，不把读屏日期补成完整时间戳。
+            needs_review = bool(details.reason) and details.reason != "未读到时间"
             review_bits = []
-            if reason:
-                review_bits.append(reason)
+            if details.reason:
+                review_bits.append(details.reason)
             if not sender:
                 review_bits.append("未读到发送者")
             records.append(
                 ParsedMessage(
                     body=body,
                     sender=sender,
-                    published_at=parsed_time,
+                    published_at=details.published_at,
+                    published_time=details.published_time,
+                    published_at_inferred=details.date_inferred,
+                    published_at_basis=details.date_inference_basis,
                     needs_review=needs_review,
                     review_reason="；".join(review_bits),
                 )
@@ -253,6 +376,10 @@ def build_mobile_messages(agent: Any, *, source_name: str, source_type: str,
                     thread_id=thread_id,
                     needs_review=record.needs_review,
                     review_reason=record.review_reason,
+                    published_time=record.published_time,
+                    published_at_inferred=record.published_at_inferred,
+                    published_at_basis=record.published_at_basis,
+                    observed_at=current,
                 )
             )
     return messages

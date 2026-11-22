@@ -7,7 +7,7 @@ from time import perf_counter
 
 from .conflict import ConflictResolver
 from .connectors.base import MessageSource
-from .dedupe import Deduplicator, clusters_without_dedup
+from .dedupe import Deduplicator, clusters_without_dedup, merge_duplicate_candidates
 from .extract.normalizer import TimeNormalizer
 from .extract.rules import RuleExtractor
 from .models import AgentRunResult, RetrievalPlan
@@ -185,6 +185,11 @@ class DdlAgent:
         candidates = self.extractor.extract(messages, now=self.now)
         candidates = recover_relative_deadlines(candidates, self.now, self.normalizer)
         candidates = recover_pinned_candidates(query, messages, candidates, self.now)
+        # 读屏超时重读同一消息会产出重复候选，先按来源+截止时间+任务名合并，
+        # 再进入跨来源聚类；重复读取不能变成重复 DDL。
+        merged_duplicates: list[dict] = []
+        if self.dedupe_enabled:
+            candidates, merged_duplicates = merge_duplicate_candidates(candidates)
         stages["extract"] = round(perf_counter() - begin, 4)
 
         begin = perf_counter()
@@ -261,6 +266,8 @@ class DdlAgent:
             "elapsed_seconds": round(perf_counter() - started, 4),
             "message_count": len(messages),
             "candidate_count": len(candidates),
+            # 重复读取被合并的候选（kept/merged 映射），便于审计去重
+            "merged_duplicates": merged_duplicates,
             "cluster_count": len(clusters),
             "record_count": len(records),
             "supplementary_rounds": outcome.supplementary_rounds,

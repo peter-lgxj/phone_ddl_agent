@@ -179,6 +179,12 @@ class LLMDeadlineExtractor:
                 inferred=inferred,
                 inference_basis=inference_basis,
                 pinned=bool(getattr(message, "pinned", False)),
+                published_time=getattr(message, "published_time", ""),
+                published_at_inferred=bool(
+                    getattr(message, "published_at_inferred", False)
+                ),
+                published_at_basis=getattr(message, "published_at_basis", ""),
+                observed_at=getattr(message, "observed_at", None),
             ),
             message.body,
             course_context=f"{message.subject}\n{message.source_name}",

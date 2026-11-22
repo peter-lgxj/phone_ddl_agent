@@ -394,19 +394,27 @@ class ConflictResolver:
                 )
 
         # 同权的时间裁决：发布时间最新者生效，不再给邮件/群聊固定高低先验
-        timed = [candidate for candidate in dated if candidate.published_at is not None]
-        if len({candidate.published_at for candidate in timed}) >= 2:
-            latest = max(_time_key(candidate) for candidate in timed)
+        timed = [
+            candidate for candidate in dated
+            if _ordering_time(candidate) != _MIN_TIME
+        ]
+        if len({_ordering_time(candidate) for candidate in timed}) >= 2:
+            latest = max(_ordering_time(candidate) for candidate in timed)
             latest_group = [
-                candidate for candidate in timed if _time_key(candidate) == latest
+                candidate for candidate in timed
+                if _ordering_time(candidate) == latest
             ]
             if len({candidate.deadline_iso for candidate in latest_group}) == 1:
                 winner = _best(latest_group)
+                anchor_note = ""
+                if winner.published_at is None and winner.published_time:
+                    anchor_note = "（只有时刻，日期按读屏日期锚定排序）"
                 return _Decision(
                     deadline_iso=winner.deadline_iso,
                     note=(
                         f"按发布时间更新裁决：采用最新（{winner.source_name}，"
-                        f"{_time_text(winner)}），较早的 {len(dated) - len(latest_group)} 条视为旧值"
+                        f"{_time_text(winner)}）{anchor_note}，"
+                        f"较早的 {len(dated) - len(latest_group)} 条视为旧值"
                     ),
                     confidence=CONFIDENCE_NEWER_ANNOUNCEMENT,
                     winner=winner,
@@ -435,8 +443,29 @@ class ConflictResolver:
         return None
 
 
+def _ordering_time(candidate: DeadlineCandidate) -> datetime:
+    """排序用的时间。
+
+    完整发布时间直接用；只有时刻时用读屏日期锚定，仅参与排序，不写回
+    ``published_at``，也不作为发布时间展示。
+    """
+    if candidate.published_at is not None:
+        return candidate.published_at
+    if candidate.published_time and candidate.observed_at is not None:
+        try:
+            hour, minute = (
+                int(part) for part in candidate.published_time.split(":", 1)
+            )
+            return candidate.observed_at.replace(
+                hour=hour, minute=minute, second=0, microsecond=0
+            )
+        except (TypeError, ValueError):
+            return _MIN_TIME
+    return _MIN_TIME
+
+
 def _time_key(candidate: DeadlineCandidate) -> tuple[datetime, int]:
-    return (candidate.published_at or _MIN_TIME, candidate.source_order or 0)
+    return (_ordering_time(candidate), candidate.source_order or 0)
 
 
 def _stamp_evidence_time(record: ResolvedRecord, cluster: TaskCluster) -> None:
@@ -456,8 +485,13 @@ def _stamp_evidence_time(record: ResolvedRecord, cluster: TaskCluster) -> None:
 
 def _time_text(candidate: DeadlineCandidate) -> str:
     if candidate.published_at is None:
+        if candidate.published_time:
+            return f"只有时刻 {candidate.published_time}（日期未知）"
         return "发布时间未知"
-    return candidate.published_at.isoformat()
+    text = candidate.published_at.isoformat()
+    if candidate.published_at_inferred and candidate.published_at_basis:
+        text = f"{text}（日期推断：{candidate.published_at_basis}）"
+    return text
 
 
 def _superseded_entries(losers: list[DeadlineCandidate], winner: DeadlineCandidate) -> list[dict]:
@@ -515,7 +549,15 @@ def _build_conflicts(cluster: TaskCluster, candidates: list[DeadlineCandidate],
             "published_at": (
                 candidate.published_at.isoformat() if candidate.published_at else None
             ),
-            "published_at_note": "" if candidate.published_at else "发布时间未知",
+            # 只有时刻时明确写「只有时刻、日期未知」，与完全没读到时间区分
+            "published_at_note": (
+                ""
+                if candidate.published_at
+                else ("只有时刻、日期未知" if candidate.published_time else "发布时间未知")
+            ),
+            "published_time": candidate.published_time,
+            "date_inferred": candidate.published_at_inferred,
+            "date_inference_basis": candidate.published_at_basis,
             "message_id": candidate.message_id,
             "evidence_id": candidate.candidate_id,
             "course_from": candidate.course_from,
