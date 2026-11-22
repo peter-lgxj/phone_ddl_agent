@@ -46,6 +46,11 @@ def recover_pinned_candidates(query: str, messages: list, candidates: list,
     )
     if not targets:
         return candidates
+    target_ids = {str(message.message_id) for message in targets}
+    # 兜底目标是置顶消息或列表顶部最早一条，候选带上证据链标记，供解析器确认
+    for candidate in candidates:
+        if str(candidate.message_id) in target_ids:
+            candidate.pinned = True
     covered = {
         str(candidate.message_id) for candidate in candidates
         if candidate.deadline_iso
@@ -62,6 +67,7 @@ def recover_pinned_candidates(query: str, messages: list, candidates: list,
     for candidate in recovered:
         if not candidate.deadline_iso:
             continue
+        candidate.pinned = True
         key = (str(candidate.message_id), candidate.task_name_raw, candidate.deadline_iso)
         if key in seen:
             continue
@@ -167,6 +173,12 @@ class DdlAgent:
                 ]
                 plan.sources = chosen
         messages = [message for _, items in source_messages for message in items]
+        # 置顶标记要在抽取前落到 RawMessage 上：LLM/规则抽取的候选都继承它，
+        # 解析器才能按证据链确认置顶截止时间，而不是被缺发送者一起降级。
+        fetched_pinned_ids = pinned_message_ids(messages)
+        for message in messages:
+            if message.message_id in fetched_pinned_ids:
+                message.pinned = True
         stages["retrieve"] = round(perf_counter() - begin, 4)
 
         begin = perf_counter()
@@ -229,6 +241,12 @@ class DdlAgent:
                 focus_decision["noise_suppressed"] = True
                 needs_review = True
                 review_reason = "置顶消息未能解析出可用截止时间，需人工复核"
+
+        # 记录级 uncertain 必须让结果级 needs_review 同步，避免“记录 uncertain
+        # 但结果说不需要复核”的标注不一致。
+        if not needs_review and any(record.status == "uncertain" for record in records):
+            needs_review = True
+            review_reason = "存在 uncertain 记录，需人工复核"
 
         write_result = None
         begin = perf_counter()

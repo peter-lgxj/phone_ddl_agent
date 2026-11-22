@@ -2,6 +2,7 @@ import json
 import base64
 import hashlib
 import os
+import re
 import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -18,10 +19,10 @@ import image_preprocess
 import rule_policy
 from openai import OpenAI
 import ui_state
+from observation_schema import format_messages, validate_messages
 
 
 def _fix_json(raw: str) -> str:
-    import re
     raw = re.sub(r'"x"\s*:\s*(\d+)\s*,\s*\d+',  r'"x": \1',  raw)
     raw = re.sub(r'"y"\s*:\s*(\d+)\s*,\s*\d+',  r'"y": \1',  raw)
     raw = re.sub(r'"x2"\s*:\s*(\d+)\s*,\s*\d+', r'"x2": \1', raw)
@@ -31,6 +32,29 @@ def _fix_json(raw: str) -> str:
     raw = raw.replace('\u201c', '"').replace('\u201d', '"')
     raw = raw.replace('\u2018', "'").replace('\u2019', "'")
     return raw
+
+
+def _parse_observation_payload(raw: str) -> tuple[list[dict] | None, str, str]:
+    """解析独立观察响应。
+
+    返回 ``(records, note, error)``；``records is None`` 表示没有按结构返回，
+    调用方保留散文并在归档里标成兜底。
+    """
+    text = (raw or "").strip()
+    text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None, text, "观察响应不是 JSON"
+    if not isinstance(payload, dict):
+        return None, text, "观察响应不是 JSON 对象"
+    note = str(payload.get("note") or "").strip()
+    if "messages" not in payload:
+        return None, note or text, "观察响应缺少 messages 数组"
+    records, error = validate_messages(payload.get("messages"))
+    if error:
+        return None, note or text, error
+    return records, note, ""
 
 
 def _require_api_key(provider_name: str, provider: dict, role: str):
@@ -265,6 +289,10 @@ class ScreenAgent:
         self._last_step_timings = {}      # 整步各阶段耗时（写进 step json）
         self.usage_events = []            # 全部视觉调用 usage，任务结束写汇总
         self._last_step_usage = []        # 本步 usage 事件（可含决策/观察/完成检测）
+        self._last_observation_format = "unknown"  # structured / prose_fallback / rule_tree
+        self._last_observation_format_reason = ""
+        self._last_observation_messages: list[dict] | None = None
+        self._last_observation_note = ""
         self._last_observe_ocr_seconds = 0.0  # 本步滚动 OCR 耗时（未触发为 0）
         self._rule_state = {}             # 规则快路跨步状态（已进入的群、滚动次数等）
         self._rule_hits = []              # 规则命中记录，任务结束写汇总
@@ -438,11 +466,20 @@ class ScreenAgent:
         if merged:
             merged_section = """
     ## 本步同时完成观察
-    当前截图是上一步动作执行后的界面（第 1 步是初始界面）。先用 observation 描述截图里
-    与任务相关的关键事实（页面/会话名、消息发送者与时间、是否找到目标等），再给出下一步 action。
-    observation 只写截图事实，不要编造；找不到就写“未看到”。
+    当前截图是上一步动作执行后的界面（第 1 步是初始界面）。除了给出下一步 action，
+    还必须用 "messages" 数组逐条返回截图中可见的消息，每条固定三项：
+    sender（发送者）、time（屏幕上显示的时间）、body（消息原文）。
+    - 每条消息一个对象，不要合并、不要概括、不要用一段叙述代替；
+    - 屏幕确实没有发送者或时间时写 "未显示"，三项都必须出现，不要猜测；
+    - 按钮、导航、输入框等非消息文字不要放进 messages；
+    - 当前屏幕没有消息时 messages 返回 []。
+    observation 只写一句总览；逐条事实以 messages 为准。
 """
-            observation_schema = '    "observation": "当前截图事实描述（本步动作执行前）",\n'
+            observation_schema = (
+                '    "messages": [{"sender": "发送者或未显示", '
+                '"time": "时间或未显示", "body": "消息原文"}],\n'
+                '    "observation": "一句总览（逐条事实以 messages 为准）",\n'
+            )
         sent_width, sent_height = (getattr(self, "_last_image_meta", None) or {}).get(
             "sent_size", [1080, 2400]
         )
@@ -584,6 +621,10 @@ class ScreenAgent:
         self._last_merged_parse_failed = False
         self._last_merged_observation = ""
         self._last_merged_ocr_text = ""
+        self._last_observation_format = "unknown"
+        self._last_observation_format_reason = ""
+        self._last_observation_messages = None
+        self._last_observation_note = ""
         started = time.time()
         current_bytes, image_meta, reused_frame = self._capture_frame(timings)
         self._last_image_meta = image_meta
@@ -696,13 +737,41 @@ class ScreenAgent:
                 action = {"action_type": "wait", "description": "解析异常，等待重试"}
 
         if merged:
-            if (not isinstance(action, dict) or "observation" not in action
+            if (not isinstance(action, dict)
+                    or ("observation" not in action and "messages" not in action)
                     or not (action.get("action_type") or action.get("actions"))):
-                print(f"  ⚠️  合并响应缺少 observation/action，回退两段式")
+                print(f"  ⚠️  合并响应缺少 observation/messages/action，回退两段式")
                 self._last_merged_parse_failed = True
                 self._last_decision_timings = timings
                 return None
-            self._last_merged_observation = str(action.pop("observation") or "").strip()
+            observation_text = str(action.pop("observation", "") or "").strip()
+            has_messages = "messages" in action
+            messages_raw = action.pop("messages", None)
+            self._last_observation_note = observation_text
+            if not has_messages:
+                # 模型退回散文：保留原文，但在归档里明确标成兜底，不能当作结构化成功
+                self._last_observation_format = "prose_fallback"
+                self._last_observation_format_reason = "合并响应缺少 messages 数组"
+                self._last_merged_observation = observation_text
+            else:
+                records, error = validate_messages(messages_raw)
+                if error:
+                    self._last_observation_format = "prose_fallback"
+                    self._last_observation_format_reason = error
+                    self._last_merged_observation = observation_text
+                elif records:
+                    self._last_observation_format = "structured"
+                    self._last_observation_messages = records
+                    self._last_merged_observation = format_messages(records)
+                elif observation_text:
+                    # 结构合法但为空、却又给了文字描述：说明模型没把消息放进 messages
+                    self._last_observation_format = "prose_fallback"
+                    self._last_observation_format_reason = "messages 为空但 observation 有内容"
+                    self._last_merged_observation = observation_text
+                else:
+                    self._last_observation_format = "structured"
+                    self._last_observation_messages = []
+                    self._last_merged_observation = "（本屏未看到消息）"
             if (self._last_merged_ocr_text
                     and self._last_merged_ocr_text not in self._last_merged_observation):
                 self._last_merged_observation = (
@@ -1074,7 +1143,16 @@ class ScreenAgent:
                             },
                             {
                                 "type": "text",
-                                "text": f"请观察截图，{verify_question}只回复要求的内容，不要多余文字。"
+                                "text": (
+                                    f"请观察截图，{verify_question}\n"
+                                    "只返回 JSON："
+                                    '{"messages":[{"sender":"发送者或未显示",'
+                                    '"time":"时间或未显示","body":"消息原文"}],'
+                                    '"note":"补充说明"}。'
+                                    "每条消息一项，sender/time/body 三项必须齐全；"
+                                    "屏幕确实没有发送者或时间时写\"未显示\"，不要猜测；"
+                                    "没有消息时 messages 返回 []。"
+                                )
                             }
                         ]
                     }
@@ -1082,10 +1160,29 @@ class ScreenAgent:
                 extra_body=getattr(self, "extra_body", None),
             )
             self._record_usage("observe", response)
-            observation = response.choices[0].message.content.strip()
+            raw_observation = response.choices[0].message.content.strip()
         finally:
             if executor is not None:
                 executor.shutdown(wait=False)
+
+        records, note, error = _parse_observation_payload(raw_observation)
+        self._last_observation_note = note
+        if records is None:
+            # 模型没按结构返回：保留散文，归档标记兜底
+            self._last_observation_format = "prose_fallback"
+            self._last_observation_format_reason = error
+            observation = raw_observation
+        else:
+            self._last_observation_messages = records
+            if records:
+                self._last_observation_format = "structured"
+                observation = format_messages(records)
+            elif note:
+                self._last_observation_format = "structured_note"
+                observation = note
+            else:
+                self._last_observation_format = "structured"
+                observation = "（本屏未看到消息）"
 
         if ocr_future is not None:
             try:
@@ -1435,6 +1532,10 @@ class ScreenAgent:
             timings["rule_saved_calls"] = 1
             timings["rule_check"] = round(self._last_rule_seconds, 2)
             observation = ""
+            self._last_observation_format = "rule_tree"
+            self._last_observation_format_reason = ""
+            self._last_observation_messages = None
+            self._last_observation_note = ""
         elif merged_active:
             action = self._decide(step, memory, merged=True)
             if action is None:
@@ -1770,9 +1871,19 @@ class ScreenAgent:
             return
         try:
             record = {"step": step, "action": action, "observation": observation,
+                      "observation_format": getattr(self, "_last_observation_format", "unknown"),
                       "driver": getattr(self, "driver_kind", "uiautomator2"),
                       "reused_frame": bool(getattr(self, "_last_reused_frame", False)),
                       "observation_scope": getattr(self, "_last_observation_scope", "post_action")}
+            format_reason = getattr(self, "_last_observation_format_reason", "")
+            if format_reason:
+                record["observation_format_reason"] = format_reason
+            observation_messages = getattr(self, "_last_observation_messages", None)
+            if observation_messages is not None:
+                record["observation_messages"] = observation_messages
+            observation_note = getattr(self, "_last_observation_note", "")
+            if observation_note:
+                record["observation_note"] = observation_note
             if getattr(self, "_last_image_meta", None):
                 # 记录本次发送图的规格与缩放比例，便于事后核对坐标
                 record["image"] = self._last_image_meta

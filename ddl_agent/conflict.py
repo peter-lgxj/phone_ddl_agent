@@ -136,6 +136,34 @@ class ConflictResolver:
         unique = {candidate.deadline_iso for candidate in dated}
         if len(unique) == 1:
             if all(candidate.needs_review for candidate in dated):
+                pinned_dated = [
+                    candidate for candidate in dated
+                    if getattr(candidate, "pinned", False)
+                ]
+                if pinned_dated:
+                    # 置顶横幅/列表顶部+时间最早且原文含截止时间：证据链完整，
+                    # 不因缺发送者或发布时间把整批候选一起降级。
+                    winner = _best(pinned_dated)
+                    return (
+                        ResolvedRecord(
+                            task_name=cluster.task_name,
+                            course=cluster.course,
+                            deadline_iso=winner.deadline_iso,
+                            status="confirmed",
+                            source=_describe(winner),
+                            evidence_ids=[candidate.candidate_id for candidate in kept],
+                            sources=_sources(kept),
+                            confidence=CONFIDENCE_CONSISTENT,
+                            resolution_note=(
+                                "置顶/列表顶部证据链完整，按原文截止时间确认；"
+                                "缺失的发送者或发布时间只记录不阻断"
+                            ),
+                            superseded_by=superseded,
+                            inferred=winner.inferred,
+                            inference_basis=winner.inference_basis,
+                        ),
+                        0,
+                    )
                 winner = _best(dated)
                 return (
                     _uncertain_record(cluster, kept, winner,
