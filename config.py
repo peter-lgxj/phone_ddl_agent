@@ -214,6 +214,10 @@ RULE_MODEL_DECISION_SECONDS = float(os.getenv("RULE_MODEL_DECISION_SECONDS", "5.
 # 默认 2：真实群消息翻两屏仍未出现答案时，规则继续滚的收益抵不过每次 dump 的开销。
 RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "2"))
 
+# QQ 群定位改为列表滚动 + OCR 匹配（不输入中文、不使用搜索框）。
+# 列表页一屏通常 6~8 个群，默认最多滚 8 屏；连续两屏内容不变则提前停止。
+QQ_LIST_MAX_SCROLLS = int(os.getenv("QQ_LIST_MAX_SCROLLS", "8"))
+
 # 纯控件树决策：默认关（对照用）。开启后，非合并观察模式下也先尝试规则快路；
 # 规则能证明的步骤不截图、不发视觉请求，观察改用控件树文字。
 # 判据：引号点名的群/会话、已知 resource-id 的输入框、已进会话内的滚动、

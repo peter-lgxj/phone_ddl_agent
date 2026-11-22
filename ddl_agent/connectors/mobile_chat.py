@@ -44,10 +44,18 @@ class MobileChatConnector:
         agent = self._get_agent()
         # 生产读屏路径强制只读：即使模型给出 send/type/press_enter 也不会执行
         agent.read_only = True
-        task = (
-            f"打开{self.app}，进入与「{self.contact}」的聊天窗口，向上翻阅最近消息，"
-            "逐条读出包含截止时间（deadline / due / 截止 / 提交）的消息原文与发送者"
-        )
+        if str(self.app).lower() == "qq":
+            task = (
+                f"打开{self.app}，在消息列表或“联系人 > 群聊”里上下滚动查找「{self.contact}」并进入聊天窗口；"
+                "不要使用搜索框、不要输入中文，不要点名字相似的群。"
+                "向上翻阅最近消息，逐条读出包含截止时间（deadline / due / 截止 / 提交）的"
+                "消息原文与发送者"
+            )
+        else:
+            task = (
+                f"打开{self.app}，进入与「{self.contact}」的聊天窗口，向上翻阅最近消息，"
+                "逐条读出包含截止时间（deadline / due / 截止 / 提交）的消息原文与发送者"
+            )
 
         if self.use_device_lock:
             try:

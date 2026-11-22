@@ -196,6 +196,14 @@ $env:SCREEN_DRIVER="adb_dump"; python run.py
 - **微信控件树为空**：部分微信版本/页面（尤其 WebView、自绘列表）经
   `uiautomator dump` 只能拿到很少或空节点。这是平台限制，不做代码绕过；
   读屏回退到截图 + OCR，控件树只作为辅助。
+- **QQ 群定位不用搜索**：QQ 群一律走「消息列表 / 联系人 > 群聊 + 截图 OCR 匹配群名」，
+  禁止打开搜索框、禁止输入中文。OCR 只接受与群名完全相等或「群名 + 少量未读数」的
+  标题，避免把 `2026 计算机班级二群` 当成 `2026 计算机班级群`；连续两屏不变或滚动
+  超过 `QQ_LIST_MAX_SCROLLS`（默认 8）就停止。
+- **QQ 搜索页 dump**：真机复测 `uiautomator dump` 在搜索页可正常返回（约 360~374 个
+  节点），此前空树是 dump 与截图/OCR 并发或页面切换中的瞬时失败，并非
+  `could not get idle state`。关闭动画（`animator_duration_scale` 等）后节点数无提升；
+  实验后已恢复设备原值。QQ 定位仍不依赖该页控件树。
 
 ## 运行
 

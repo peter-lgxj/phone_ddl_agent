@@ -85,6 +85,16 @@ class MobileAppSource:
         kind = {"group": "群聊", "private": "联系人", "inbox": "收件箱"}.get(
             self.source.kind, "会话"
         )
+        if self.source.app == "qq":
+            list_hint = "消息列表或“联系人 > 群聊”" if kind == "群聊" else "消息列表"
+            return (
+                f"打开{app}，在{list_hint}里通过上下滚动查找「{self.source.target}」并进入该{kind}；"
+                "不要使用搜索框、不要输入中文。列表里没有就继续滚动；"
+                "仍然找不到就明确报告“未找到”，不要打开其他会话（尤其不要点名字相似的群）。\n"
+                f"进入后向上翻阅最近 {self.source.lookback_days} 天的消息，逐条读出所有包含截止时间"
+                "（deadline / due / DDL / 截止 / 提交）的消息原文、发送者和时间。\n"
+                "只记录属于该会话的消息，不要猜测，不要修改任何内容。"
+            )
         return (
             f"打开{app}，通过搜索框输入「{self.source.target}」找到并进入该{kind}；"
             "如果列表里没有，请继续滚动查找；仍然找不到就明确报告“未找到”，不要打开其他会话。\n"

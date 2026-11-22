@@ -65,6 +65,9 @@ class RuleContext:
     search_force: bool = False
     # 是否允许走搜索；adb_dump 下实测搜索页 dump 更慢，默认关闭（仍可强制开启）
     search_allowed: bool = True
+    # QQ 群定位：只滚动列表 + OCR 匹配，禁止打开搜索/输入中文
+    list_only: bool = False
+    list_max_scrolls: int = 8
 
 
 def extract_quoted_targets(task: str) -> list[str]:
@@ -467,6 +470,35 @@ def _tap_action(ctx: RuleContext, rule: str, description: str,
     return _action("tap", rule, description, x=x, y=y, target=target, **extra)
 
 
+def _list_scroll_action(ctx: RuleContext, state: dict) -> dict | None:
+    """列表定位兜底：目标不在可见行时向上滚动，直到上限或连续两屏不变。"""
+    if state.get("list_disabled"):
+        return None
+    text = screen_text(ctx.xml)
+    scrolls = state.get("list_scrolls", 0)
+    if scrolls >= ctx.list_max_scrolls:
+        state["list_disabled"] = True
+        state["list_failed"] = "max_scrolls"
+        return None
+    if text:
+        if text == state.get("list_last_text"):
+            state["list_stagnant"] = state.get("list_stagnant", 0) + 1
+            if state["list_stagnant"] >= 2:
+                state["list_disabled"] = True
+                state["list_failed"] = "stagnant"
+                return None
+        else:
+            state["list_stagnant"] = 0
+            state["list_last_text"] = text
+    state["list_scrolls"] = scrolls + 1
+    width, height = ctx.screen_size or root_size(ctx.xml) or (1080, 2374)
+    return _action(
+        "swipe", "list_scroll", "规则快路：目标不在可见行，向上滚动群/会话列表",
+        x=width // 2, y=int(height * 0.72),
+        x2=width // 2, y2=int(height * 0.30),
+    )
+
+
 def decide(ctx: RuleContext) -> dict | None:
     """按优先级判断本步能否走规则；返回动作或 None（交回 VLM）。"""
     state = ctx.state
@@ -485,7 +517,7 @@ def decide(ctx: RuleContext) -> dict | None:
     # 2a) 搜索流程：点搜索入口 → 输入精确名称 → 点唯一结果。
     #     只在目标不在当前屏可见行时启用；候选多于一个或搜索失败就交回模型。
     stage = state.get("search_stage")
-    if targets and stage:
+    if targets and stage and not ctx.list_only:
         target = targets[0]
         if stage == "entry":
             box = find_search_input(ctx.xml)
@@ -559,6 +591,10 @@ def decide(ctx: RuleContext) -> dict | None:
             state["last_scroll_text"] = ""
             state["stagnant"] = 0
             return action
+        if ctx.list_only:
+            # QQ 明确要求不输入中文、不使用搜索框：列表里没看到目标就滚动，
+            # 由上层 OCR 兜底负责在截图里匹配群名。
+            return _list_scroll_action(ctx, state)
         if (ctx.search_allowed and (not found or ctx.search_force)
                 and not state.get("search_attempted")):
             entry = find_search_entry(ctx.xml)
