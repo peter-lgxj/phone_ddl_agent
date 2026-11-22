@@ -182,6 +182,21 @@ python -c "import uiautomator2 as u2; print(u2.connect().info)"
 $env:SCREEN_DRIVER="adb_dump"; python run.py
 ```
 
+### 中文输入与控件树限制
+
+- **中文输入（`adb_dump`）**：`adb shell input text` 只可靠支持 ASCII。非 ASCII 文本改走
+  ADBKeyboard 的 `ADB_INPUT_B64` 广播（正文按 UTF-8 编码后 base64，避免 shell 编码问题），
+  发送后从控件树校验输入框文字是否真的变化。前置条件：
+  1. 安装 ADBKeyboard（`com.android.adbkeyboard`）；
+  2. 启用并设为当前输入法：
+     `adb shell ime enable com.android.adbkeyboard/.AdbIME`、
+     `adb shell ime set com.android.adbkeyboard/.AdbIME`。
+  未安装/未启用或校验未通过时，智能体不会重复同一个输入动作：记录 `blocked_reason`
+  并提示改用列表滚动定位，连续两次无效输入直接中止任务。
+- **微信控件树为空**：部分微信版本/页面（尤其 WebView、自绘列表）经
+  `uiautomator dump` 只能拿到很少或空节点。这是平台限制，不做代码绕过；
+  读屏回退到截图 + OCR，控件树只作为辅助。
+
 ## 运行
 
 ```bash

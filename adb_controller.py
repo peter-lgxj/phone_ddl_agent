@@ -12,6 +12,7 @@ uiautomator2 在 Android 17（API 37）上第一次 ``deviceInfo`` RPC 会抛
 
 from __future__ import annotations
 
+import base64
 import io
 import os
 import re
@@ -26,6 +27,15 @@ import config
 from adb_utils import ADB
 
 READ_ONLY_BLOCKED_METHODS = {"type_text", "press_enter", "send", "tap_send_button"}
+
+
+class InputMethodUnavailable(RuntimeError):
+    """中文输入所需的 ADBKeyboard 未安装或未启用。"""
+
+
+class InputNotApplied(RuntimeError):
+    """输入命令已发送，但输入框内容没有变化。"""
+
 
 _BOUNDS_RE = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
 
@@ -363,6 +373,94 @@ class AdbDumpController:
         self._ensure_writable("send")
         self.press_enter()
 
+    @staticmethod
+    def _has_non_ascii(text: str) -> bool:
+        return any(ord(char) > 127 for char in str(text))
+
+    def _ensure_adb_keyboard(self) -> None:
+        """确认 ADBKeyboard 已安装并设为当前输入法，否则给出可执行的失败原因。"""
+        try:
+            listed = self._run("shell", "ime", "list", "-s", timeout=15)
+            default = self._run(
+                "shell", "settings", "get", "secure", "default_input_method",
+                timeout=15,
+            )
+        except Exception as exc:
+            raise InputMethodUnavailable(
+                f"中文输入需要 ADBKeyboard，但查询输入法失败：{exc}；"
+                "请确认 adb shell 可用，或改用列表滚动定位"
+            ) from exc
+        installed = "com.android.adbkeyboard" in (
+            (listed.stdout or b"").decode("utf-8", "replace").lower()
+        )
+        enabled = "adbkeyboard" in (
+            (default.stdout or b"").decode("utf-8", "replace").lower()
+        )
+        if enabled:
+            return
+        if installed:
+            raise InputMethodUnavailable(
+                "已安装 ADBKeyboard 但未设为当前输入法：请执行 "
+                "`adb shell ime enable com.android.adbkeyboard/.AdbIME` 和 "
+                "`adb shell ime set com.android.adbkeyboard/.AdbIME`；"
+                "或改用列表滚动定位"
+            )
+        raise InputMethodUnavailable(
+            "中文输入需要安装 ADBKeyboard（com.android.adbkeyboard）并设为当前输入法；"
+            "未安装时请改用列表滚动定位，不要重复输入中文"
+        )
+
+    def _input_texts(self) -> list[str]:
+        """读取当前控件树里所有输入框的实际文字。"""
+        xml_text = self.dump_hierarchy(use_cache=False)
+        values: list[str] = []
+        for node in iter_nodes(xml_text):
+            node_class = (node.get("class") or "").split(".")[-1]
+            if "EditText" in node_class:
+                values.append((node.get("text") or "").strip())
+        if not any(values):
+            # WebView/自绘搜索框不一定把文字写在 EditText.text 上，
+            # 没有可用输入框文字时退化为全屏文字检查。
+            values = [screen_text(xml_text)]
+        return values
+
+    def _input_contains(self, text: str) -> bool:
+        needle = str(text).strip()
+        if not needle:
+            return True
+        try:
+            values = self._input_texts()
+        except Exception as exc:
+            print(f"  ⚠️  输入校验读取控件树失败：{exc}")
+            return False
+        return any(needle in value for value in values if value)
+
+    def _type_non_ascii(self, text: str) -> None:
+        """非 ASCII 输入：ADBKeyboard 的 base64 广播 + 控件树校验。
+
+        ``adb shell input text`` 只可靠支持 ASCII；中文必须由 ADBKeyboard
+        接收广播后写入当前聚焦输入框。base64 避免命令行/shell 编码问题。
+        """
+        self._ensure_adb_keyboard()
+        payload = base64.b64encode(str(text).encode("utf-8")).decode("ascii")
+        result = self._run(
+            "shell", "am", "broadcast", "-a", "ADB_INPUT_B64",
+            "--es", "msg", payload, timeout=20,
+        )
+        if result.returncode != 0:
+            stderr = (result.stderr or b"").decode("utf-8", "replace").strip()
+            raise InputNotApplied(
+                f"ADBKeyboard 广播失败（returncode={result.returncode}）："
+                f"{stderr or '无输出'}；请改用列表滚动定位"
+            )
+        time.sleep(0.5)
+        if not self._input_contains(text):
+            raise InputNotApplied(
+                f"ADBKeyboard 已接收「{text}」但输入框内容未变化；"
+                "不要重复相同输入，改用列表滚动定位"
+            )
+        print(f"输入文字：{text}（ADBKeyboard 广播）")
+
     def type_text(self, text: str, allow_search: bool = False):
         # 允许搜索框输入：不经过 _ensure_writable，但调用方必须证明是搜索框
         if not allow_search:
@@ -370,7 +468,10 @@ class AdbDumpController:
         if not text:
             return
         self.invalidate_dump()
-        # input text 只可靠支持 ASCII；中文输入需要 ADBKeyboard，只读模式默认关闭
+        if self._has_non_ascii(text):
+            self._type_non_ascii(text)
+            time.sleep(0.5)
+            return
         escaped = str(text).replace(" ", "%s")
         self._run("shell", "input", "text", escaped)
         print(f"输入文字：{text}（adb_dump）")

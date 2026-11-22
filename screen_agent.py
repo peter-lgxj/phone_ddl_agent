@@ -1243,8 +1243,42 @@ class ScreenAgent:
             if not text:
                 print("  ⚠️  type 动作缺少 text 字段，跳过本步")
                 return False
-            self.phone.type_text(
-                text, allow_search=search_type_allowed or bool(action.get("search_input")))
+            text_key = str(text)
+            failures = getattr(self, "_input_failures", None)
+            if failures is None:
+                self._input_failures = failures = {}
+            if failures.get(text_key):
+                # 同一文本上次输入没有生效：不再重复同一个 ADB 动作，直接中止。
+                failures[text_key] += 1
+                reason = (
+                    f"「{text_key}」上次输入未生效，拒绝重复相同输入；"
+                    "请改用列表滚动定位，或先安装并启用 ADBKeyboard"
+                )
+                action["blocked"] = True
+                action["blocked_reason"] = reason
+                print(f"  ⛔  {reason}")
+                raise RuntimeError(
+                    f"同一文本连续 {failures[text_key]} 次输入无效，已中止任务：{reason}"
+                )
+            try:
+                self.phone.type_text(
+                    text,
+                    allow_search=search_type_allowed or bool(action.get("search_input")),
+                )
+                failures.pop(text_key, None)
+            except PermissionError:
+                # 只读保护不能被当成普通输入失败吞掉
+                raise
+            except Exception as exc:
+                failures[text_key] = 1
+                reason = (
+                    f"输入「{text_key}」失败：{exc}；"
+                    "不要重复相同输入，改用列表滚动定位"
+                )
+                action["blocked"] = True
+                action["blocked_reason"] = reason
+                print(f"  ⛔  {reason}")
+                return False
         elif t == "send":
             self.phone.send()
             print("回车发送")
@@ -1576,7 +1610,12 @@ class ScreenAgent:
         if merged_active:
             timings["observe"] = 0.0
             if finished:
-                observation = "任务完成"
+                # finish 与 messages 同一步时，结构化观察是本次唯一的读屏结果，
+                # 不能被「任务完成」覆盖；保留原文并附加完成标记。
+                if observation and observation not in ("任务完成", "（合并响应未提供观察）"):
+                    observation = f"{observation}\n[完成] 任务完成"
+                else:
+                    observation = "任务完成"
             elif timings.get("rule_hit"):
                 # 规则步骤没有模型返回的 observation，用截图 + 控件树文字本地补齐
                 started = time.time()
@@ -1591,7 +1630,8 @@ class ScreenAgent:
             memory.add_step(
                 thought=action.get("thought", ""),
                 action=action,
-                observation=observation
+                observation=observation,
+                observation_messages=getattr(self, "_last_observation_messages", None),
             )
             done = False
             started = time.time()
@@ -1631,7 +1671,8 @@ class ScreenAgent:
         memory.add_step(
             thought=action.get("thought", ""),
             action=action,
-            observation=observation
+            observation=observation,
+            observation_messages=getattr(self, "_last_observation_messages", None),
         )
 
         # 完成判断：默认直接用决策响应里的 task_done，省掉每步一次带图请求

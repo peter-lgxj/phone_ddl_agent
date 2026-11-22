@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 from pathlib import Path
@@ -16,6 +17,8 @@ import phone_driver
 import screen_agent
 from adb_controller import (
     AdbDumpController,
+    InputMethodUnavailable,
+    InputNotApplied,
     bounds_center,
     interactive_elements,
     map_point,
@@ -23,6 +26,7 @@ from adb_controller import (
     screen_text,
 )
 from ocr_locator import OCRLocator, enforce_tap_bounds
+from memory import TaskMemory, format_steps_compact
 from phone_controller import Uiautomator2CompatibilityError, _compatibility_message
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -286,6 +290,124 @@ def test_writable_controller_allows_type_and_enter():
     controller.press_enter()
     assert controller.commands[0] == ("shell", "input", "text", "hello%sworld")
     assert controller.commands[1] == ("shell", "input", "keyevent", "66")
+
+
+class ChineseInputController(RecordingController):
+    """模拟 ADBKeyboard 已启用/未启用，以及广播是否真的写入输入框。"""
+
+    def __init__(self, *, installed: bool = True, applied: bool = True):
+        super().__init__(read_only=False)
+        self.installed = installed
+        self.applied = applied
+        self.input_value = ""
+
+    def _run(self, *args, timeout: float = 30.0):
+        self.commands.append(args)
+        if args[:3] == ("shell", "ime", "list"):
+            stdout = (b"com.android.adbkeyboard/.AdbIME\n" if self.installed
+                      else b"com.android.inputmethod.latin/.LatinIME\n")
+            return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr=b"")
+        if args[:3] == ("shell", "settings", "get"):
+            stdout = (b"com.android.adbkeyboard/.AdbIME\n" if self.installed
+                      else b"com.android.inputmethod.latin/.LatinIME\n")
+            return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr=b"")
+        if args[:3] == ("shell", "am", "broadcast"):
+            if self.applied:
+                self.input_value = base64.b64decode(args[-1]).decode("utf-8")
+            return subprocess.CompletedProcess(
+                args, 0, stdout=b"Broadcast completed: result=0", stderr=b""
+            )
+        return super()._run(*args, timeout=timeout)
+
+    def dump_hierarchy(self, use_cache: bool = False, ttl: float = 0.5) -> str:
+        return (
+            '<hierarchy><node text="' + self.input_value +
+            '" class="android.widget.EditText" clickable="true" focusable="true" '
+            'bounds="[0,0][100,100]" /></hierarchy>'
+        )
+
+
+def test_non_ascii_input_uses_adbkeyboard_base64_broadcast():
+    controller = ChineseInputController()
+
+    controller.type_text("LLM小组", allow_search=True)
+
+    broadcast = next(
+        command for command in controller.commands
+        if command[:3] == ("shell", "am", "broadcast")
+    )
+    assert broadcast[3:5] == ("-a", "ADB_INPUT_B64")
+    assert base64.b64decode(broadcast[-1]).decode("utf-8") == "LLM小组"
+    assert not any(
+        command[:3] == ("shell", "input", "text") for command in controller.commands
+    )
+
+
+def test_non_ascii_input_without_adbkeyboard_fails_with_actionable_reason():
+    controller = ChineseInputController(installed=False)
+
+    with pytest.raises(InputMethodUnavailable) as excinfo:
+        controller.type_text("LLM小组", allow_search=True)
+
+    message = str(excinfo.value)
+    assert "ADBKeyboard" in message
+    assert "列表滚动" in message
+
+
+def test_non_ascii_input_not_applied_raises_instead_of_silently_retrying():
+    controller = ChineseInputController(applied=False)
+
+    with pytest.raises(InputNotApplied) as excinfo:
+        controller.type_text("LLM小组", allow_search=True)
+
+    assert "未变化" in str(excinfo.value)
+    assert "不要重复" in str(excinfo.value)
+
+
+class _FailingTypePhone:
+    def __init__(self):
+        self.calls = 0
+
+    def type_text(self, text, allow_search=False):
+        self.calls += 1
+        raise InputMethodUnavailable("未安装 ADBKeyboard")
+
+
+def test_repeated_ineffective_type_is_blocked_before_second_adb_call():
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent.read_only = False
+    agent.phone = _FailingTypePhone()
+    agent._input_failures = {}
+    action = {"action_type": "type", "text": "LLM小组"}
+
+    assert agent._execute(action) is False
+    assert action["blocked"] is True
+    assert "列表滚动" in action["blocked_reason"]
+
+    with pytest.raises(RuntimeError, match="输入无效"):
+        agent._execute(action)
+
+    assert agent.phone.calls == 1
+
+
+def test_blocked_input_reason_is_visible_in_history():
+    """失败原因要带回后续 prompt，模型才知道别再重复同样的输入。"""
+    memory = TaskMemory("在 QQ 搜索群")
+    memory.add_step(
+        thought="",
+        action={
+            "action_type": "type",
+            "text": "LLM小组",
+            "blocked": True,
+            "blocked_reason": "未安装 ADBKeyboard，改用列表滚动定位",
+        },
+        observation="",
+    )
+
+    history = format_steps_compact(memory.steps)
+
+    assert "已拦截" in history
+    assert "列表滚动" in history
 
 
 # ---------------------------------------------------------------- 驱动选择
