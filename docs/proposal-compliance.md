@@ -11,7 +11,7 @@
 | Proposal 要求 | 状态 | 实现位置 | 说明 / 差异 |
 | --- | --- | --- | --- |
 | 用户用自然语言查询某课程/项目的 DDL | ✅ | `ddl_agent/planner.py: QueryPlanner`、`ddl_agent/pipeline.py: DdlAgent.run` | 解析课程代码、关键词与时间窗；评测中每个样本都有 query。 |
-| 运行前用自然语言配置要监控的数据源 | ✅ | `ddl_agent/monitor/config.py`、`ddl_agent/monitor/cli.py` | 解析成 `sources.yaml`，支持增删改查、启停与来源原句留存；无法解析时显式拒绝。 |
+| 运行前用自然语言配置要检索的数据源 | ✅ | `ddl_agent/monitor/config.py`、`ddl_agent/monitor/cli.py` | 解析成 `sources.yaml`，支持增删改查、启停与来源原句留存；无法解析时显式拒绝。 |
 | Agent 自主完成任务规划、工具选择、检索、抽取、去重、冲突验证 | ◐ | `pipeline.py`、`llm/planner.py`、`extract/*`、`dedupe.py`、`conflict.py` | 抽取/去重/冲突验证已实现；**工具选择只做到“在已配置来源中选择子集”**，没有通用工具注册表，也没有“规划任意工具序列”的循环。检索基本是一次拉取，只有冲突时追加两轮。 |
 | 把结构化 DDL 写入指定输出文档 | ✅ | `writer/xlsx_writer.py`、`writer/base.py`、`output.py` | 写 xlsx；另导出 `data.json`、`deadlines.ics`、`calendar.html`。 |
 | 减少跨 App 手工查找，提高正确性与完整性 | ◐ | `evaluation/run_eval.py` | 合成数据上相对单次直出有提升（见第 7 节）；真实数据尚未验证。 |

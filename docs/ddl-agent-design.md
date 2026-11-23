@@ -1,6 +1,6 @@
 # DDL Agent 架构设计
 
-> 状态：阶段五（手机优先 + 定期监控）。对应需求文档 `main(1).md`：按自然语言查询，从多个来源采集 DDL，
+> 状态：阶段五（手机优先 + 定期检索）。对应需求文档 `main(1).md`：按自然语言查询，从多个来源采集 DDL，
 > 规划/选工具、字段抽取与时间归一化、跨来源去重、按可信度与发布时间解决冲突，写入共享结构化文档，
 > 并配套合成数据集、单次直出 baseline 与评测。
 >
@@ -19,7 +19,7 @@
 - 一句话：**电脑上的 agent 通过 ADB 操作手机 GUI**，把手机里的群聊和邮件 DDL 汇总成日历。
 
 Windows 用户双击仓库根目录的 `run_ddl_monitor.bat` 即可：脚本先检查 adb、设备在线与授权、设备锁，
-再让用户选择「单轮扫描 / 持续监控」，跑完刷新并打开 `output/calendar.html`。
+再让用户选择「仅扫描一次 / 定期」，跑完刷新并打开 `output/calendar.html`。
 没插手机、未授权 USB 调试、找不到 adb、手机被其他窗口占用时，会给出对应的人话提示与下一步动作。
 
 ## 1. 目标与边界
@@ -433,7 +433,7 @@ Agent-LLM 共 179 次调用、75108 token、约 $0.0349。
 - 离线测试替身：`LocalEmlConnector` / `LocalChatConnector` 保留，仅在无手机时使用；
   Graph 不在主路径，仅保留未启用的代码骨架作为“将来可选实现”。
 
-### 14.2 自然语言监控配置
+### 14.2 自然语言检索配置
 
 - 新增 `monitor/config.py`，配置持久化为 `sources.yaml`，每条来源保存：
   `id / app / kind / target / source_type / enabled / lookback_days / nl_text / parse_note`。

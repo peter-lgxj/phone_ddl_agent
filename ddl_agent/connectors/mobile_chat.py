@@ -44,6 +44,8 @@ class MobileChatConnector:
         agent = self._get_agent()
         # 生产读屏路径强制只读：即使模型给出 send/type/press_enter 也不会执行
         agent.read_only = True
+        app_key = str(self.app).lower()
+        agent.tree_unsupported = app_key in {"wechat", "微信", "com.tencent.mm"}
         if str(self.app).lower() == "qq":
             task = (
                 f"打开{self.app}，在消息列表或“联系人 > 群聊”里上下滚动查找「{self.contact}」并进入聊天窗口；"

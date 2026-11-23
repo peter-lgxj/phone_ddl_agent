@@ -19,6 +19,7 @@ from adb_controller import (
     AdbDumpController,
     InputMethodUnavailable,
     InputNotApplied,
+    TreeUnavailable,
     bounds_center,
     interactive_elements,
     map_point,
@@ -236,6 +237,16 @@ def test_dump_failure_never_returns_stale_remote_file():
         controller.dump_hierarchy()
 
 
+def test_wechat_package_skips_dump_without_touching_device():
+    """微信已知无控件树：直接抛 TreeUnavailable，不应再执行 adb dump。"""
+    controller = RecordingController()
+    controller.tree_unsupported = True
+    controller._run = lambda *args, **kwargs: pytest.fail("微信不应执行 adb dump")
+
+    with pytest.raises(TreeUnavailable):
+        controller.dump_hierarchy()
+
+
 def test_dump_uses_unique_remote_path_and_cleans_up():
     controller = RecordingController()
     paths = []
@@ -255,6 +266,72 @@ def test_dump_uses_unique_remote_path_and_cleans_up():
     controller.dump_hierarchy()
     assert paths and paths[0].startswith("/sdcard/window_dump_")
     assert paths[0] != "/sdcard/window_dump.xml"
+
+
+def test_dump_kills_stale_u2_owner_then_retries():
+    """Android 17 上残留的 uiautomator2 服务会占着 UiAutomation，dump 被 SIGKILL。"""
+    controller = RecordingController()
+    calls = []
+    dumps = {"count": 0}
+
+    def fake_run(*args, timeout=30.0):
+        calls.append(args)
+        if "uiautomator" in args:
+            dumps["count"] += 1
+            if dumps["count"] == 1:
+                return subprocess.CompletedProcess(args, 137, stdout=b"", stderr=b"")
+            return subprocess.CompletedProcess(
+                args, 0, stdout=b"UI hierchary dumped", stderr=b""
+            )
+        if args[:3] == ("shell", "ps", "-A"):
+            return subprocess.CompletedProcess(
+                args, 0,
+                stdout=b"23851 app_process / com.wetest.uia2.Main -p 9008\n",
+                stderr=b"",
+            )
+        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+
+    controller._run = fake_run
+    controller._exec_out = lambda *args, timeout=30.0: (
+        '<hierarchy><node text="QQ" /></hierarchy>'.encode("utf-8")
+    )
+
+    xml = controller.dump_hierarchy()
+
+    assert "QQ" in xml
+    assert dumps["count"] == 2
+    assert any(call[:3] == ("shell", "kill", "23851") for call in calls)
+
+
+def test_dump_failure_reports_uiautomation_owner_hint():
+    """两次都被 SIGKILL 且无输出时，错误信息要给出真实原因和可执行命令。"""
+    controller = RecordingController()
+
+    def fake_run(*args, timeout=30.0):
+        if "uiautomator" in args:
+            return subprocess.CompletedProcess(args, 137, stdout=b"", stderr=b"")
+        if args[:2] == ("shell", "ps"):
+            return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+        if "logcat" in args:
+            return subprocess.CompletedProcess(
+                args, 0,
+                stdout=(
+                    b"E AndroidRuntime: java.lang.IllegalStateException: "
+                    b"UiAutomationService already registered!\n"
+                ),
+                stderr=b"",
+            )
+        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+
+    controller._run = fake_run
+
+    with pytest.raises(RuntimeError) as exc:
+        controller.dump_hierarchy()
+
+    message = str(exc.value)
+    assert "already registered" in message
+    assert "rc=137" in message
+    assert "pkill -f com.wetest.uia2.Main" in message
 
 
 def test_screenshot_uses_screencap_and_saves_png(tmp_path):

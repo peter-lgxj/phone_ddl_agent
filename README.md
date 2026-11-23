@@ -27,15 +27,15 @@
 并在请求头 `X-DDL-Token` 中带上同一个值。真正的设备互斥由扫描线程持有的设备锁保证，
 不会出现「预检通过后被其他窗口抢占」的情况。
 
-1. 首次使用，先告诉 agent 要监控什么（自然语言，会写入 `sources.yaml`）：
+1. 首次使用，先告诉 agent 要检索什么（自然语言，会写入 `sources.yaml`）：
 
    ```bash
-   python -m ddl_agent.monitor.cli add "监控微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次"
+   python -m ddl_agent.monitor.cli add "定期读取微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次"
    python -m ddl_agent.monitor.cli list
    ```
 
 2. 双击仓库根目录的 `run_ddl_monitor.bat`。脚本会依次检查 adb、手机是否在线且已授权、设备锁，
-   然后询问「1. 单轮扫描 / 2. 持续监控」，跑完自动刷新并打开 `output/calendar.html`。
+   然后询问「1. 仅扫描一次 / 2. 定期」，跑完自动刷新并打开 `output/calendar.html`。
 
 3. 产物：`output/deadlines.xlsx`（含审计表）、`data.json`、`deadlines.ics`（可导入系统日历）、`calendar.html`。`deadlines.ics` 的 `DTSTART` 使用 `TZID=Asia/Shanghai` 本地时间（`DTSTAMP` 仍为 UTC）；`calendar.html` 是静态日历视图，只按截止时间落格并显示时间，不含倒计时或红/橙/灰状态。
 
@@ -549,7 +549,7 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（472 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
+- 测试与工程化：`tests/`（510 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 

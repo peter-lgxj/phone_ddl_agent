@@ -13,18 +13,26 @@
     button{border:0;border-radius:8px;background:#2563eb;color:white;padding:10px 16px;font:inherit;cursor:pointer}button:disabled{opacity:.5;cursor:wait}
     #sources{padding-left:20px;line-height:1.8}#message{white-space:pre-wrap;color:#475569}#message.error{color:#b91c1c}
     .toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.muted{color:#64748b;font-size:14px}
+    .modes{display:flex;align-items:center;gap:16px;margin:10px 0}.modes label{display:flex;align-items:center;gap:6px}
+    #schedule{flex:0 0 150px;min-width:0}
     iframe{width:100%;height:720px;border:1px solid #e2e8f0;border-radius:10px;background:white}
   </style>
 </head>
 <body>
 <header><h1>手机 DDL 日历</h1><p>通过手机智能体读取指定会话，整理截止时间并在日历中查看</p></header>
 <main>
-  <section class="card"><h2>1. 添加手机来源</h2>
-    <form id="source-form"><input id="source-text" required placeholder="例如：监控微信「课程群」，最近14天，每6小时一次" aria-label="来源描述"><button>添加来源</button></form>
+  <section class="card"><h2>1. 填写检索目标</h2>
+    <p class="muted">“仅扫描一次”不会保存目标；“定期”才会写入本机 sources.yaml，供后续调度使用。</p>
+    <div class="modes">
+      <label><input type="radio" name="mode" value="once" checked> 仅扫描一次</label>
+      <label><input type="radio" name="mode" value="recurring"> 定期</label>
+      <input id="schedule" value="每6小时" aria-label="定期周期" hidden>
+    </div>
+    <form id="source-form"><input id="source-text" required placeholder="例如：QQ「COMP7503 作业通知群」，最近14天" aria-label="检索目标"><button id="add-source" type="submit" hidden>添加为定期目标</button></form>
     <ul id="sources"></ul>
   </section>
   <section class="card"><div class="toolbar"><h2>2. 扫描并整理 DDL</h2><button id="scan">开始扫描</button></div>
-    <p class="muted">扫描时请保持手机解锁、USB 调试已授权。每个来源会用手机智能体打开相应 App。</p><div id="message" role="status"></div>
+    <p class="muted">扫描时请保持手机解锁、USB 调试已授权。仅扫描一次只读取本轮填写的目标；定期模式读取已保存的目标。</p><div id="message" role="status"></div>
   </section>
   <section class="card"><div class="toolbar"><h2>3. 日历</h2><a href="/ddl/calendar" target="_blank" rel="noopener">在新窗口打开</a></div>
     <div id="empty" class="muted">完成扫描后，日历会显示在这里。</div><iframe id="calendar" title="DDL 日历" hidden></iframe>
@@ -41,6 +49,18 @@ async function api(url, options) {
   return data;
 }
 function showError(error) { $('message').textContent = error.message; $('message').className = 'error'; }
+function scanMode() { return document.querySelector('input[name="mode"]:checked').value; }
+function toggleMode() {
+  const recurring = scanMode() === 'recurring';
+  $('schedule').hidden = !recurring;
+  $('add-source').hidden = !recurring;
+  $('source-text').placeholder = recurring
+    ? '例如：定期读取 QQ「COMP7503 作业通知群」，最近14天，每6小时一次'
+    : '例如：QQ「COMP7503 作业通知群」，最近14天';
+  $('scan').textContent = recurring ? '扫描已保存目标' : '扫描本次目标';
+}
+document.querySelectorAll('input[name="mode"]').forEach(input => input.addEventListener('change', toggleMode));
+toggleMode();
 async function refresh() {
   try {
     const data = await api('/api/ddl');
@@ -77,14 +97,24 @@ async function refresh() {
 }
 $('source-form').addEventListener('submit', async event => {
   event.preventDefault();
+  if (scanMode() === 'once') { $('scan').click(); return; }
   try {
-    await api('/api/ddl/sources', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('source-text').value})});
-    $('source-text').value = ''; $('message').className = ''; $('message').textContent = '来源已添加。'; await refresh();
+    await api('/api/ddl/sources', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('source-text').value, schedule:$('schedule').value})});
+    $('source-text').value = ''; $('message').className = ''; $('message').textContent = '已添加为定期检索目标。'; await refresh();
   } catch(error) { showError(error); }
 });
 $('scan').addEventListener('click', async () => {
-  try { await api('/api/ddl/scan', {method:'POST'}); await refresh(); }
-  catch(error) { showError(error); }
+  const payload = {mode: scanMode()};
+  const text = $('source-text').value.trim();
+  if (text) payload.text = text;
+  if (scanMode() === 'recurring' && text) payload.schedule = $('schedule').value.trim();
+  try {
+    const data = await api('/api/ddl/scan', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if (data.persisted) $('source-text').value = '';
+    $('message').className = '';
+    $('message').textContent = data.persisted ? '已保存为定期目标，正在扫描…' : '已开始本轮扫描（仅一次，不保存目标）…';
+    await refresh();
+  } catch(error) { showError(error); }
 });
 refresh(); setInterval(refresh, 3000);
 </script>

@@ -45,6 +45,8 @@ class MobileAppSource:
         agent = self._get_agent()
         # 生产读屏路径强制只读：即使模型给出 send/type/press_enter 也不会执行
         agent.read_only = True
+        # 微信真机不暴露控件树：直接跳过 dump，省掉失败重试与清理开销
+        agent.tree_unsupported = self.source.app == "wechat"
         task = self._build_task()
 
         if self.use_device_lock:

@@ -11,7 +11,10 @@ from flask import Blueprint, jsonify, render_template, request, send_file
 
 from device_lock import device_lock
 
-from .monitor.config import ConfigError, add_from_text, load_config, remove_source, save_config
+from .monitor.config import (
+    ConfigError, MonitorConfig, add_from_text, load_config, parse_monitor_text,
+    remove_source, save_config,
+)
 from .monitor.launcher import check_device, resolve_adb
 from .monitor.runner import run_cycle
 from .monitor.sources import MobileAppSource
@@ -59,7 +62,39 @@ def _config_payload() -> dict:
             for s in config.sources
         ],
         "calendar_ready": (_project_path(config.output_dir) / "calendar.html").is_file(),
+        "schedule": config.schedule,
+        "interval_minutes": config.interval_minutes,
     }
+
+
+def _build_scan_config(payload: dict) -> tuple[MonitorConfig, bool]:
+    """按页面请求构造本轮扫描配置。
+
+    - ``mode=once`` 且有文本：只构造临时单来源配置，不写 ``sources.yaml``；
+    - ``mode=recurring`` 且有文本：新增为定期检索目标并保存；
+    - 无文本：按现有启用目标扫描（仅定期模式允许）。
+    返回 ``(config, 是否需要保存)``。
+    """
+    config = load_config(CONFIG_PATH)
+    text = str(payload.get("text") or "").strip()
+    mode = str(payload.get("mode") or "once").strip().lower()
+    schedule_text = str(payload.get("schedule") or "").strip()
+    if not text:
+        if mode == "once":
+            raise ConfigError("请先填写检索目标；仅扫描一次不会保存为定期任务")
+        return config, False
+    if mode == "recurring":
+        add_from_text(config, text, schedule_text=schedule_text or None)
+        return config, True
+    once = MonitorConfig(
+        schedule=config.schedule,
+        interval_minutes=config.interval_minutes,
+        output_dir=config.output_dir,
+        state_dir=config.state_dir,
+        write_phone_calendar=config.write_phone_calendar,
+        sources=parse_monitor_text(text),
+    )
+    return once, False
 
 
 @blueprint.get("/ddl")
@@ -80,12 +115,13 @@ def add_source():
     if denied:
         return denied
     text = str((request.get_json(silent=True) or {}).get("text") or "").strip()
+    schedule = str((request.get_json(silent=True) or {}).get("schedule") or "").strip()
     try:
         with _guard:
             if _scan["running"]:
-                return jsonify(error="扫描中不能修改来源"), 409
+                return jsonify(error="扫描中不能修改检索目标"), 409
             config = load_config(CONFIG_PATH)
-            added = add_from_text(config, text)
+            added = add_from_text(config, text, schedule_text=schedule or None)
             save_config(config, CONFIG_PATH)
     except ConfigError as exc:
         return jsonify(error=str(exc)), 400
@@ -99,10 +135,10 @@ def delete_source(source_id: str):
         return denied
     with _guard:
         if _scan["running"]:
-            return jsonify(error="扫描中不能修改来源"), 409
+            return jsonify(error="扫描中不能修改检索目标"), 409
         config = load_config(CONFIG_PATH)
         if not remove_source(config, source_id):
-            return jsonify(error="来源不存在"), 404
+            return jsonify(error="检索目标不存在"), 404
         save_config(config, CONFIG_PATH)
     return jsonify(**_config_payload())
 
@@ -112,9 +148,13 @@ def start_scan():
     denied = _write_denied()
     if denied:
         return denied
-    config = load_config(CONFIG_PATH)
+    payload = request.get_json(silent=True) or {}
+    try:
+        config, persist = _build_scan_config(payload)
+    except ConfigError as exc:
+        return jsonify(error=str(exc)), 400
     if not any(source.enabled for source in config.sources):
-        return jsonify(error="请先添加至少一个监控来源"), 400
+        return jsonify(error="请先填写至少一个检索目标"), 400
     adb = resolve_adb()
     if not adb:
         return jsonify(error="未找到 adb；请设置 ADB_BINARY 并连接手机"), 400
@@ -126,19 +166,21 @@ def start_scan():
     with _guard:
         if _scan["running"]:
             return jsonify(error="扫描已经在运行"), 409
+        if persist:
+            save_config(config, CONFIG_PATH)
         _scan.update(running=True, result=None, error=None)
-    threading.Thread(target=_scan_worker, daemon=True).start()
-    return jsonify(running=True), 202
+    threading.Thread(target=_scan_worker, args=(config,), daemon=True).start()
+    return jsonify(running=True, persisted=persist), 202
 
 
-def _scan_worker() -> None:
+def _scan_worker(config: MonitorConfig | None = None) -> None:
     try:
         with device_lock(timeout=30) as acquired:
             if not acquired:
                 with _guard:
-                    _scan.update(error="设备锁被占用：请关闭其他 run.py / app.py / 监控窗口后重试")
+                    _scan.update(error="设备锁被占用：请关闭其他 run.py / app.py / 窗口后重试")
                 return
-            config = load_config(CONFIG_PATH)
+            config = config or load_config(CONFIG_PATH)
             result = run_cycle(
                 config, config_path=CONFIG_PATH,
                 out_dir=_project_path(config.output_dir),

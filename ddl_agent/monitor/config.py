@@ -1,4 +1,4 @@
-"""自然语言监控配置：解析 → 结构化 → 持久化到 ``sources.yaml``。
+"""自然语言检索配置：解析 → 结构化 → 持久化到 ``sources.yaml``。
 
 解析不出来时显式拒绝并说明原因，不猜测；每条来源保留原始自然语言用于溯源。
 """
@@ -122,14 +122,14 @@ def _validate_interval(minutes: int) -> None:
 
 
 def parse_monitor_text(text: str, config: MonitorConfig | None = None) -> list[MonitorSource]:
-    """把一句自然语言解析成一个或多个监控来源。"""
+    """把一句自然语言解析成一个或多个检索目标。"""
     if not text or not text.strip():
         raise ConfigError("描述为空")
 
     lowered = text.lower()
     apps = [app for app, hints in APP_HINTS if any(hint in lowered for hint in hints)]
     if not apps:
-        raise ConfigError("没有识别到要监控的 App，请明确写「微信」「QQ」或「Outlook」")
+        raise ConfigError("没有识别到要检索的 App，请明确写「微信」「QQ」或「Outlook」")
     if "所有群" in text or "全部群" in text or "all groups" in lowered:
         raise ConfigError("不支持「所有群」这类模糊描述，请给出具体的群名称")
 
@@ -137,7 +137,7 @@ def parse_monitor_text(text: str, config: MonitorConfig | None = None) -> list[M
     quoted = [item.strip() for item in _QUOTE_RE.findall(text)]
 
     if len(apps) > 1 and not quoted:
-        raise ConfigError("同时提到多个 App 时，请分别用「」标出每个 App 要监控的目标名称")
+        raise ConfigError("同时提到多个 App 时，请分别用「」标出每个 App 要检索的目标名称")
 
     targets: dict[str, str] = {}
     if quoted:
@@ -150,7 +150,7 @@ def parse_monitor_text(text: str, config: MonitorConfig | None = None) -> list[M
     elif len(apps) == 1:
         target = _extract_target(text, apps[0])
         if not target and apps[0] != "outlook":
-            raise ConfigError("没有给出要监控的群/联系人名称")
+            raise ConfigError("没有给出要检索的群/联系人名称")
         targets[apps[0]] = target or "收件箱"
 
     existing_ids = {source.id for source in (config.sources if config else [])}
@@ -181,16 +181,21 @@ def parse_monitor_text(text: str, config: MonitorConfig | None = None) -> list[M
     return sources
 
 
-def add_from_text(config: MonitorConfig, text: str) -> list[MonitorSource]:
+def add_from_text(config: MonitorConfig, text: str,
+                  schedule_text: str | None = None) -> list[MonitorSource]:
     sources = parse_monitor_text(text, config)
     existing = {(source.app, source.target) for source in config.sources}
     added: list[MonitorSource] = []
     for source in sources:
         if (source.app, source.target) in existing:
-            raise ConfigError(f"已存在同样的监控目标：{APP_LABELS[source.app]} / {source.target}")
+            raise ConfigError(f"已存在同样的检索目标：{APP_LABELS[source.app]} / {source.target}")
         config.sources.append(source)
         added.append(source)
-    if "每" in text or "每天" in text or "每周" in text or "daily" in text.lower():
+    if schedule_text:
+        normalized, minutes = parse_schedule(schedule_text)
+        config.schedule = normalized
+        config.interval_minutes = minutes
+    elif "每" in text or "每天" in text or "每周" in text or "daily" in text.lower():
         normalized, minutes = parse_schedule(text)
         config.schedule = normalized
         config.interval_minutes = minutes

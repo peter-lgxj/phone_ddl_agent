@@ -56,6 +56,70 @@ def test_write_endpoints_require_token_when_configured(tmp_path, monkeypatch):
     assert response.status_code == 201
 
 
+def test_page_copy_and_mode_choices(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    html = client.get("/ddl").get_data(as_text=True)
+
+    assert "检索目标" in html
+    assert "仅扫描一次" in html
+    assert "定期" in html
+    assert "监控来源" not in html
+
+
+def _stub_phone_and_thread(monkeypatch, started):
+    monkeypatch.setattr(web, "resolve_adb", lambda: "adb")
+    monkeypatch.setattr(web, "check_device", lambda adb: None)
+
+    class ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self.args = args
+
+        def start(self):
+            started.append(self.args[0])
+
+    monkeypatch.setattr(web.threading, "Thread", ImmediateThread)
+
+
+def test_scan_once_does_not_persist_target(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    started = []
+    _stub_phone_and_thread(monkeypatch, started)
+
+    response = client.post("/api/ddl/scan", json={
+        "text": "QQ「临时群」，最近14天", "mode": "once",
+    })
+
+    assert response.status_code == 202
+    assert response.json["persisted"] is False
+    assert not (tmp_path / "sources.yaml").exists()
+    assert [source.target for source in started[0].sources] == ["临时群"]
+
+
+def test_scan_recurring_persists_target(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    started = []
+    _stub_phone_and_thread(monkeypatch, started)
+
+    response = client.post("/api/ddl/scan", json={
+        "text": "监控 QQ「定期群」，每6小时一次", "mode": "recurring", "schedule": "每6小时",
+    })
+
+    assert response.status_code == 202
+    assert response.json["persisted"] is True
+    saved = (tmp_path / "sources.yaml").read_text(encoding="utf-8")
+    assert "定期群" in saved
+    assert [source.target for source in started[0].sources] == ["定期群"]
+
+
+def test_scan_once_without_text_is_rejected(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.post("/api/ddl/scan", json={"mode": "once"})
+
+    assert response.status_code == 400
+    assert "检索目标" in response.json["error"]
+
+
 def test_scan_worker_holds_device_lock_and_disables_nested_lock(tmp_path, monkeypatch):
     calls = []
 
