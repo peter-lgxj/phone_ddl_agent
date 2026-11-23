@@ -84,6 +84,41 @@ def make_http_client() -> httpx.Client:
     )
 
 
+def cleanup_old_runs(base: Path | None = None, keep: int | None = None) -> list[Path]:
+    """启动时清理旧证据目录：默认保留最近 20 次（``RUNS_KEEP`` 可调）。
+
+    保护最近一次运行、名称以 ``keep`` 开头的目录、以及含 ``KEEP`` 标记文件的目录；
+    清理失败只打印警告，不影响主流程。返回已删除的目录列表。
+    """
+    removed: list[Path] = []
+    try:
+        root = Path(base or config.ARTIFACT_DIR)
+        if not root.is_dir():
+            return removed
+        if keep is None:
+            raw = os.getenv("RUNS_KEEP", "20")
+            try:
+                keep = max(1, int(raw))
+            except ValueError:
+                print(f"  ⚠️  RUNS_KEEP={raw!r} 不是整数，按 20 处理")
+                keep = 20
+        runs = [path for path in root.iterdir() if path.is_dir() and not path.is_symlink()]
+        if len(runs) <= keep:
+            return removed
+        runs.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        for path in runs[keep:]:
+            if path.name.startswith("keep") or (path / "KEEP").exists():
+                continue
+            try:
+                shutil.rmtree(path)
+                removed.append(path)
+            except OSError as exc:
+                print(f"  ⚠️  清理旧证据失败（{path}）：{exc}")
+    except Exception as exc:  # noqa: BLE001 - 清理失败不能阻断主流程
+        print(f"  ⚠️  清理旧证据目录失败（本次运行不受影响）：{exc}")
+    return removed
+
+
 def make_run_dir(name: str) -> Path:
     """为一次执行创建唯一证据目录。
 
@@ -1258,6 +1293,11 @@ class ScreenAgent:
                 timings["parallel_capture"] = report
                 if xml is None:
                     timings["capture_dump"] = "failed"
+                    if report.get("skipped"):
+                        print(f"  ℹ️  本步跳过控件树：{report.get('skipped')}")
+                    else:
+                        reason = "；".join(report.get("errors") or []) or "未知原因"
+                        print(f"  ⚠️  本步控件树 dump 失败：{reason}（已退化为截图/OCR）")
             else:
                 self.phone.screenshot("screen_current.png")
             with open("screen_current.png", "rb") as f:
@@ -2113,7 +2153,8 @@ class ScreenAgent:
             self.phone.tree_unsupported = bool(getattr(self, "tree_unsupported", False))
 
         # 每次运行一个独立目录，逐步截图 + 动作/观察 JSON 全量留证，
-        # 便于事后定位失败步骤和论文里的典型案例分析
+        # 便于事后定位失败步骤和论文里的典型案例分析；启动时顺带按保留策略清理旧证据
+        cleanup_old_runs()
         stamp = time.strftime("%Y%m%d-%H%M%S")
         self.run_dir = make_run_dir(stamp)
 

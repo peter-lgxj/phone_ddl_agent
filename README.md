@@ -148,7 +148,9 @@ pip install -r requirements-lock.txt
 
 首次运行默认使用 RapidOCR，会下载对应的 ONNX 模型（需要联网，体积较小）；只有显式设置 `OCR_ENGINE=easyocr` 时才会使用 EasyOCR 及其模型。截图定位还依赖 uiautomator2 在手机上安装的自动化组件。
 
-`.env`、任务运行记录和手机界面导出文件不提交到仓库。
+`torch` / `ultralytics` 是 YOLO 输入框兜底的真实依赖（`input_detector.py`）：只有控件树不可用或找不到 EditText、需要定位输入框时才加载模型；常规截图、OCR、控件树读取不会加载。因此它们不能删除，CI 会安装这两个包（体积较大，保留 pip 缓存）。
+
+`.env`、任务运行记录和手机界面导出文件不提交到仓库。日志与 `runs/` 证据目录会保存群名、昵称和消息正文用于排障；`runs/` 默认只保留最近 20 次（环境变量 `RUNS_KEEP` 可调，名称以 `keep` 开头或含 `KEEP` 文件的目录不删）。
 
 ## Android 17（API 37）与 ADB 回退驱动
 
@@ -549,7 +551,7 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（530 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
+- 测试与工程化：`tests/`（540 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 

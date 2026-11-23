@@ -1,8 +1,16 @@
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).with_name(".env"))
+
+# 控制台编码兼容：Windows 非 UTF-8 代码页下，日志里的 emoji/中文不应让脚本崩溃
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError, OSError):
+        pass
 
 # ============================================================
 #  模型配置文件

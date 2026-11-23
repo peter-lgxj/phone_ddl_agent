@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import os
 import re
 import subprocess
@@ -25,6 +26,8 @@ from PIL import Image
 
 import config
 from adb_utils import ADB
+
+logger = logging.getLogger(__name__)
 
 READ_ONLY_BLOCKED_METHODS = {"type_text", "press_enter", "send", "tap_send_button"}
 
@@ -297,8 +300,12 @@ class AdbDumpController:
         """找出残留的 uiautomator2 服务 pid；找不到就返回空列表。"""
         try:
             result = self._run("shell", "ps", "-A", "-o", "PID,ARGS", timeout=10)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - 诊断失败不影响主流程，但要留下原因
+            logger.debug("探测残留 uiautomator2 失败（ps 无法执行）：%s", exc)
             return []
+        if result.returncode != 0:
+            stderr = (result.stderr or b"").decode("utf-8", "replace").strip()
+            logger.debug("探测残留 uiautomator2 失败（ps rc=%s）：%s", result.returncode, stderr)
         pids: list[str] = []
         for line in (result.stdout or b"").decode("utf-8", "replace").splitlines():
             if _STALE_U2_MARKER not in line:
@@ -342,8 +349,8 @@ class AdbDumpController:
                     "另一个 UiAutomation 客户端占用连接，dump 进程被系统终止",
                     False,
                 )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - 诊断失败不影响主流程，但要留下原因
+            logger.debug("读取 logcat 诊断 dump 失败原因时出错：%s", exc)
         return (
             "进程被系统终止且没有输出；通常是 UiAutomation 被其它服务占用，"
             "可执行 `adb shell pkill -f com.wetest.uia2.Main` 或重启手机",
