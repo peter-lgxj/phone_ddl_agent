@@ -587,16 +587,40 @@ class AdbDumpController:
         time.sleep(0.5)
 
     def tap_input_box(self) -> bool:
-        """从控件树找 EditText，点击其中心。"""
-        elements = self.tree_elements()
+        """从控件树找 EditText，点击其中心；无控件树时退化为 YOLO 输入框检测。"""
+        try:
+            elements = self.tree_elements()
+        except TreeUnavailable as exc:
+            elements = []
+            print(f"  ℹ️  当前 App 无控件树，tap_input_box 改用视觉检测：{exc}")
         for element in elements:
             if element.get("type") == "input":
                 x, y = element["center"]
                 self.tap(x, y)
                 print("点击输入框（adb_dump）")
                 return True
-        print("未在控件树中找到输入框（adb_dump）")
-        return False
+        if elements:
+            print("未在控件树中找到输入框（adb_dump），尝试 YOLO 检测")
+        return self._tap_input_box_by_vision()
+
+    def _tap_input_box_by_vision(self) -> bool:
+        """YOLO 输入框兜底：权重缺失/检测失败只返回 False，不中断任务。"""
+        try:
+            if not hasattr(self, "_input_detector"):
+                from input_detector import InputDetector
+                self._input_detector = InputDetector()
+            self.screenshot("screen_for_detection.png")
+            detected = self._input_detector.find_best("screen_for_detection.png")
+        except Exception as exc:  # noqa: BLE001 - 兜底不可用不能拖垮任务
+            print(f"  ⚠️  YOLO 输入框检测不可用（{exc}）")
+            return False
+        if not detected:
+            print("  ⚠️  未找到输入框：控件树不可用，YOLO 也未检测到")
+            return False
+        cx, cy = detected["center"]
+        print(f"  🎯 YOLO 检测到输入框，置信度:{detected['confidence']} 坐标:({cx},{cy})")
+        self.tap(cx, cy)
+        return True
 
     def open_app(self, package_name: str):
         self.invalidate_dump()
@@ -614,7 +638,11 @@ class AdbDumpController:
 
     def tap_send_button(self):
         self._ensure_writable("tap_send_button")
-        for element in self.tree_elements():
+        try:
+            elements = self.tree_elements()
+        except TreeUnavailable:
+            elements = []
+        for element in elements:
             if element.get("text") in ("Send", "发送"):
                 x, y = element["center"]
                 self.tap(x, y)

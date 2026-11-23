@@ -99,8 +99,58 @@ def make_run_dir(name: str) -> Path:
     return path
 
 
+class ReadOnlyTaskRefused(RuntimeError):
+    """只读模式下任务要求输入/发送，启动前直接拒绝。"""
+
+
+class TargetNotLocated(RuntimeError):
+    """连续两次没有匹配证据，拒绝按坐标猜测点击。"""
+
+
+_READ_ONLY_NEGATED = re.compile(
+    r"(?:不要|不得|禁止|勿|无需|别|不)\s*(?:输入|发送|发消息|打字|回复|使用搜索框)[^，。；\n]*"
+)
+_READ_ONLY_SEND = re.compile(
+    r"发送|发消息|发一条|发一句|发个|发给|回复|打字|留言|转发|撤回|点发送|按发送|按回车"
+    r"|发(?=[你您我他她它咱大家A-Za-z0-9「“\"《])"
+    r"|(?:(?<!搜索框)(?<!搜索))输入(?!框)"
+    r"|\b(?:send|type|reply)\b",
+    re.IGNORECASE,
+)
+
+
+def read_only_task_refusal(task: str, read_only: bool) -> str | None:
+    """只读模式下，任务只要要求输入/发送就在启动前拒绝，避免走到中途中止。"""
+    if not read_only:
+        return None
+    text = _READ_ONLY_NEGATED.sub(" ", str(task or ""))
+    match = _READ_ONLY_SEND.search(text)
+    if match is None:
+        return None
+    return (
+        f"只读模式不支持输入/发送（任务命中「{match.group(0)}」）。"
+        "本程序只读取手机屏幕，不会在聊天框输入或发送任何内容。"
+        "可做的替代：扫描群聊/邮箱里的 DDL，例如「QQ「COMP7503 作业通知群」，最近14天」，"
+        "或在网页里选择「仅扫描一次」。"
+    )
+
+
+def _previous_blind_taps(steps: list[dict]) -> int:
+    """统计最近连续多少次「无目标、无匹配证据」的点击被改成 wait。"""
+    count = 0
+    for item in reversed(steps):
+        action = item.get("action") or {}
+        if (action.get("action_type") == "wait"
+                and action.get("localization_failed")
+                and not str(action.get("target") or "").strip()):
+            count += 1
+        else:
+            break
+    return count
+
+
 def consecutive_unresolved_targets(steps: list[dict], target: str) -> int:
-    """统计最近连续多少次未定位到同一个目标，用于决定是否回退到坐标点击。"""
+    """统计最近连续多少次未定位到同一个目标，用于判断是否已连续失败。"""
     wanted = canonical_action_target({"target": target})
     if not wanted:
         return 0
@@ -970,7 +1020,8 @@ class ScreenAgent:
         tree_count = ocr_count = 0
         ocr_meta = {}
 
-        if snap_mode in ("tree_first", "tree_only"):
+        if snap_mode in ("tree_first", "tree_only") and not getattr(
+                self, "tree_unsupported", False):
             if "tree" not in cache:
                 started = time.time()
                 try:
@@ -1090,26 +1141,35 @@ class ScreenAgent:
         if target and not found:
             mapped = dict(mapped)
             timings["target_unresolved"] = target
-            prior = consecutive_unresolved_targets(memory.steps, target)
-            if prior >= 1 and mapped.get("x") is not None and mapped.get("y") is not None:
-                # 连续两轮都定位不到（常见于返回键、发送键等无文字图标）：
-                # 不再终止任务，回退到模型给出的坐标继续，保留可恢复路径。
-                mapped["localization_fallback"] = True
-                mapped["thought"] = (
-                    f"连续 {prior + 1} 次未匹配到目标「{target}」的文字元素，"
-                    "回退到模型坐标继续尝试。"
+            label = target
+            prior = consecutive_unresolved_targets(memory.steps, label)
+        elif mapped.get("action_type") == "tap" and not found:
+            mapped = dict(mapped)
+            label = "点击区域"
+            timings["target_unresolved"] = label
+            prior = _previous_blind_taps(memory.steps)
+        else:
+            label = ""
+            prior = 0
+
+        if label and mapped.get("action_type") == "tap":
+            # 没有 xml/ocr/yolo 匹配证据就不点：先 wait 重新观察；
+            # 连续两次仍无证据则明确失败，不用模型坐标蒙一次。
+            mapped["action_type"] = "wait"
+            mapped["localization_failed"] = True
+            mapped["thought"] = f"未找到与「{label}」对应的文字/控件/YOLO 证据，避免误点。"
+            mapped["description"] = f"目标「{label}」未定位，未执行点击，保持当前界面重新观察"
+            print(f"  ⚠️  {mapped['description']}")
+            if prior >= 1:
+                message = (
+                    f"目标未定位，未执行点击：「{label}」连续 {prior + 1} 次没有匹配证据"
                 )
-                mapped["description"] = f"目标「{target}」未定位，按原坐标点击"
-                timings["localization_fallback"] = True
-                print(f"  ⚠️  {mapped['thought']}")
-            else:
-                mapped["action_type"] = "wait"
-                mapped["localization_failed"] = True
-                mapped["thought"] = (
-                    f"未找到与目标「{target}」文字及类型匹配的元素，避免误点。"
-                )
-                mapped["description"] = f"目标「{target}」未定位，保持当前界面并重新观察"
-                print(f"  ⚠️  {mapped['thought']}")
+                print(f"  ⛔  {message}")
+                raise TargetNotLocated(message)
+        elif found:
+            mapped = dict(mapped)
+            mapped["localization_source"] = snap_source
+            print(f"  ✅ 匹配后点击（来源 {snap_source}）：{target or description}")
         return mapped
 
     # ══════════════════════════════════════════════════════════
@@ -1374,7 +1434,8 @@ class ScreenAgent:
         if t == "open_app":
             self.launcher.launch(action.get("app_name", ""))
         elif t == "tap_input_box":
-            self.phone.tap_input_box()
+            if not self.phone.tap_input_box():
+                print("  ⚠️  未找到输入框（控件树/YOLO 都不可用），保持当前界面")
         elif t == "type":
             text = action.get("text")
             if not text:
@@ -1436,6 +1497,14 @@ class ScreenAgent:
                 return False
             x = self._parse_coord(action["x"])
             y = self._parse_coord(action["y"])
+            source = str(action.get("localization_source") or "")
+            if source:
+                print(f"  ✅ 匹配后点击：{action.get('target') or action.get('description', '')}"
+                      f"（来源 {source}）")
+            elif action.get("rule"):
+                print(f"  ✅ 规则定位后点击（{action['rule'].get('name', 'rule')}）")
+            else:
+                print(f"  ⚠️  坐标点击：({x},{y})（无匹配来源）")
             self.phone.tap(x, y)
         elif t == "swipe":
             start_x = action.get("x", action.get("x1"))
@@ -1793,6 +1862,7 @@ class ScreenAgent:
                 "target": target,
                 "description": f"OCR 列表命中「{target}」",
                 "ocr_list_hit": True,
+                "localization_source": "ocr",
             }
 
         max_scrolls = int(getattr(config, "QQ_LIST_MAX_SCROLLS", 8))
@@ -1821,6 +1891,7 @@ class ScreenAgent:
                     "target": label,
                     "description": f"OCR 导航：进入{label}",
                     "ocr_list_nav": label,
+                    "localization_source": "ocr",
                 }
 
         # ── 单向扫描；到顶/到底必须同时满足“画面没变 + 边缘行没变” ──
@@ -2025,6 +2096,13 @@ class ScreenAgent:
         memory = TaskMemory(task)
         self.last_memory = memory   # 供实验脚本统计实际步数
         ui_state.init_state(task)
+
+        refusal = read_only_task_refusal(task, self.read_only)
+        if refusal:
+            print(f"\n  ⛔  {refusal}")
+            self.last_status = "refused"
+            ui_state.set_status("error", refusal)
+            raise ReadOnlyTaskRefused(refusal)
 
         # 微信在真机上不暴露控件树：跳过 dump，直接走截图/OCR，省一次失败往返。
         if not getattr(self, "tree_unsupported", False) and self.driver_kind == "adb_dump":
@@ -2292,6 +2370,9 @@ class ScreenAgent:
                 # 导致页面永远停在「执行中」并无限自动刷新
                 ui_state.update_step(step, action.get("thought", ""), action)
                 return action
+            except TargetNotLocated:
+                # 定位失败是确定性结论：重试只会再花一次模型调用，直接显式失败
+                raise
             except Exception as e:
                 last_error = e
                 print(f"│  ⚠️  第 {step} 步第 {attempt} 次决策失败：{e}")

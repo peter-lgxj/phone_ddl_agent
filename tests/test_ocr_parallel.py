@@ -148,8 +148,8 @@ class MergedOCR:
 
 
 def test_merged_decision_keeps_ocr_text(tmp_path, monkeypatch):
-    content = json.dumps({"observation": "还在列表", "action_type": "tap",
-                          "x": 100, "y": 200, "description": "点开"},
+    content = json.dumps({"observation": "还在列表", "action_type": "tap_input_box",
+                          "description": "点开输入框"},
                          ensure_ascii=False)
     events = {}
     client = SlowClient(content, latency=0.01, events=events)
@@ -162,7 +162,7 @@ def test_merged_decision_keeps_ocr_text(tmp_path, monkeypatch):
 
     action = agent._think_and_act(memory, merged=True)
 
-    assert action["action_type"] == "tap"
+    assert action["action_type"] == "tap_input_box"
     assert ocr.calls == 1
     prompt = json.dumps(client.prompts[-1], ensure_ascii=False)
     assert "[上一动作后的 OCR]" in prompt and "上一屏消息" in prompt

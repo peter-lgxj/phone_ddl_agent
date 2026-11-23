@@ -2,6 +2,7 @@
 import json
 from types import SimpleNamespace
 
+import pytest
 from PIL import Image
 
 import config
@@ -340,7 +341,7 @@ def test_consecutive_unresolved_targets_counts_same_target():
     assert screen_agent.consecutive_unresolved_targets([variant, variant2], "昊") == 2
 
 
-def test_second_unresolved_icon_falls_back_to_model_coords(tmp_path, monkeypatch):
+def test_second_unresolved_icon_fails_without_blind_click(tmp_path, monkeypatch):
     agent = make_agent(tmp_path, monkeypatch,
                        {"action_type": "tap", "x": 66, "y": 77,
                         "target": "搜索", "description": "点击搜索图标"},
@@ -351,15 +352,12 @@ def test_second_unresolved_icon_falls_back_to_model_coords(tmp_path, monkeypatch
     memory.add_step(thought="", action={"action_type": "wait", "target": "搜索",
                                         "localization_failed": True},
                     observation="未定位")
-    action = agent._think_and_act(memory)
 
-    assert action["action_type"] == "tap"
-    assert (action["x"], action["y"]) == (66, 77)
-    assert action["localization_fallback"] is True
-    assert agent._last_decision_timings["localization_fallback"] is True
+    with pytest.raises(screen_agent.TargetNotLocated, match="目标未定位，未执行点击"):
+        agent._think_and_act(memory)
 
 
-def test_unresolved_icon_without_coords_waits_instead_of_aborting(tmp_path, monkeypatch):
+def test_unresolved_icon_without_coords_fails_instead_of_blind_click(tmp_path, monkeypatch):
     agent = make_agent(tmp_path, monkeypatch,
                        {"action_type": "tap", "target": "搜索",
                         "description": "点击搜索图标"},
@@ -368,11 +366,9 @@ def test_unresolved_icon_without_coords_waits_instead_of_aborting(tmp_path, monk
     memory.add_step(thought="", action={"action_type": "wait", "target": "搜索",
                                         "localization_failed": True},
                     observation="未定位")
-    action = agent._think_and_act(memory)
 
-    assert action["action_type"] == "wait"
-    assert action["localization_failed"] is True
-    assert "localization_fallback" not in action
+    with pytest.raises(screen_agent.TargetNotLocated, match="连续 2 次没有匹配证据"):
+        agent._think_and_act(memory)
 
 
 def test_single_contact_result_snaps_despite_wrong_model_coords(tmp_path, monkeypatch):
