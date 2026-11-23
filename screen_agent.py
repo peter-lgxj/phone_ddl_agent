@@ -6,9 +6,11 @@ import re
 import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import httpx
 from phone_driver import create_phone_controller
+from adb_controller import TreeUnavailable
 from app_launcher import AppLauncher
 from memory import TaskMemory, format_steps_compact
 from ocr_locator import (OCRLocator, mark_text_in_input_boxes, resolve_action_element,
@@ -207,6 +209,13 @@ def _is_qq_task(task: str) -> bool:
 
 def _compact_ocr(text: str) -> str:
     return re.sub(r"[\s\u3000]+", "", text or "").lower()
+
+
+# 任务里的时间窗（如“最近14天”）；完成条件必须绑定到窗口下界，而不是看到一条 DDL
+_LOOKBACK_RE = re.compile(r"(?:最近|过去|近)\s*(\d+)\s*天")
+_WINDOW_TOP_MARKERS = (
+    "没有更早", "已到最早", "最早一条", "已到顶部", "已到顶", "无法继续向上", "不能继续向上",
+)
 
 
 # 聊天页底部输入栏/工具栏的稳定文字；用于判断“现在不是列表，不能继续下滑”
@@ -585,6 +594,24 @@ class ScreenAgent:
             f'"y":{sent_height * 3 // 4},"x2":{sent_width // 2},'
             f'"y2":{sent_height // 3},"task_done":false}}'
         )
+        window_days = self._lookback_days(memory.task)
+        window_section = ""
+        if window_days:
+            cutoff = (datetime.now() - timedelta(days=window_days)).strftime("%Y-%m-%d")
+            older_example = (
+                f'{{"action_type":"swipe","x":{sent_width // 2},'
+                f'"y":{sent_height * 3 // 10},"x2":{sent_width // 2},'
+                f'"y2":{sent_height * 72 // 100},"task_done":false}}'
+            )
+            window_section = f"""
+    ## 时间窗完成条件（本任务要求最近 {window_days} 天）
+    只有满足以下之一才允许 finish 或 "task_done": true：
+    - 已经看到早于 {cutoff} 的消息；或
+    - 已经到聊天顶部/没有更早消息。
+    如果最近两次向上滑动后屏幕上的消息仍然完全相同（没有出现更早的消息），视为已到顶部，可以 finish。
+    只看到一条 DDL、或还没翻到窗口下界时，必须继续向上翻阅更早消息；
+    向上翻阅的合法示例：{older_example}
+"""
 
         if ocr_result:
             ocr_section = ocr_result
@@ -626,7 +653,7 @@ class ScreenAgent:
 
     ## 何时调用 finish
     {finish_rules}
-
+{window_section}
     ## 只返回 JSON：
     {{
 {observation_schema}    "thought": "当前截图显示...，下一步应该...",
@@ -1437,14 +1464,165 @@ class ScreenAgent:
     #  任务完成检测（保持原样，不改动）
     # ══════════════════════════════════════════════════════════
 
+    # ---------------------- 时间窗完成条件 ---------------------- #
+    @staticmethod
+    def _lookback_days(task: str) -> int:
+        match = _LOOKBACK_RE.search(task or "")
+        return int(match.group(1)) if match else 0
+
+    @staticmethod
+    def _parse_observed_date(value: str, now: datetime,
+                             roll_future: bool = True) -> date | None:
+        """把消息时间解析成日期；解析不了返回 None，不猜测。
+
+        ``roll_future=False`` 用于观察正文：正文里的日期可能是 DDL 截止日（未来），
+        不能把它回滚成去年而误判成“已翻到窗口下界”。
+        """
+        text = (value or "").strip()
+        if not text or text in {"未显示", "未知", "无"}:
+            return None
+        iso = re.search(r"(20\d{2})[-/](\d{1,2})[-/](\d{1,2})", text)
+        if iso:
+            try:
+                return date(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)))
+            except ValueError:
+                return None
+        cn = re.search(r"(?:(20\d{2})年)?(\d{1,2})月(\d{1,2})日", text)
+        if cn:
+            year = int(cn.group(1)) if cn.group(1) else now.year
+            try:
+                parsed = date(year, int(cn.group(2)), int(cn.group(3)))
+            except ValueError:
+                return None
+            if cn.group(1) is None and roll_future and parsed > now.date() + timedelta(days=1):
+                try:
+                    parsed = parsed.replace(year=year - 1)
+                except ValueError:
+                    return None
+            return parsed
+        if "前天" in text:
+            return now.date() - timedelta(days=2)
+        if "昨天" in text or "昨日" in text:
+            return now.date() - timedelta(days=1)
+        weekday = re.search(r"(?:星期|周)([一二三四五六日天])", text)
+        if weekday:
+            names = "一二三四五六日"
+            target = names.index(weekday.group(1).replace("天", "日"))
+            return now.date() - timedelta(days=(now.date().weekday() - target) % 7)
+        md = re.search(r"(?<!\d)(\d{1,2})[-/](\d{1,2})(?!\d)", text)
+        if md:
+            try:
+                parsed = date(now.year, int(md.group(1)), int(md.group(2)))
+            except ValueError:
+                return None
+            if roll_future and parsed > now.date() + timedelta(days=1):
+                try:
+                    parsed = parsed.replace(year=now.year - 1)
+                except ValueError:
+                    return None
+            return parsed
+        return None
+
+    def _window_floor_reached(self, memory: TaskMemory, days: int) -> bool:
+        """历史里是否已出现早于窗口下界的消息，或已明确到聊天顶部。"""
+        now = datetime.now()
+        cutoff = (now - timedelta(days=days)).date()
+        for step in memory.steps:
+            for message in step.get("observation_messages") or []:
+                parsed = self._parse_observed_date(str(message.get("time") or ""), now)
+                if parsed and parsed < cutoff:
+                    return True
+            text = str(step.get("observation") or "")
+            if any(marker in text for marker in _WINDOW_TOP_MARKERS):
+                return True
+            for token in re.findall(r"20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}月\d{1,2}日", text):
+                parsed = self._parse_observed_date(token, now, roll_future=False)
+                if parsed and parsed <= now.date() and parsed < cutoff:
+                    return True
+        recent = memory.steps[-2:]
+        if len(recent) == 2 and all(str(step.get("action_type")) == "swipe" for step in recent):
+            # 观察正文含状态栏时钟/电量等易变文字，不能直接整段相等；
+            # 用结构化消息（time + body）判定“两次上滑后消息完全没变”。
+            first_sig = self._messages_signature(recent[0].get("observation_messages"))
+            second_sig = self._messages_signature(recent[1].get("observation_messages"))
+            if first_sig and first_sig == second_sig:
+                return True
+            first = str(recent[0].get("observation") or "")
+            second = str(recent[1].get("observation") or "")
+            if first and first == second:
+                return True
+        return False
+
+    @staticmethod
+    def _messages_signature(messages) -> tuple:
+        """消息结构化签名：用于判断两次上滑之间界面是否真的没变。"""
+        items = []
+        for message in messages or []:
+            if not isinstance(message, dict):
+                continue
+            items.append(
+                (
+                    str(message.get("time") or "").strip(),
+                    str(message.get("body") or "").strip(),
+                )
+            )
+        return tuple(items)
+
+    def _window_pending(self, memory: TaskMemory) -> bool:
+        days = self._lookback_days(memory.task)
+        return bool(days) and not self._window_floor_reached(memory, days)
+
+    def _continue_reading_action(self, days: int) -> dict:
+        width, height = 1080, 2374
+        try:
+            from PIL import Image
+            with Image.open("screen_current.png") as image:
+                width, height = image.size
+        except Exception:
+            pass
+        return {
+            "action_type": "swipe",
+            "x": width // 2,
+            "y": int(height * 0.30),
+            "x2": width // 2,
+            "y2": int(height * 0.72),
+            "description": f"时间窗（最近 {days} 天）未读完，继续向上翻阅更早消息",
+            "window_continue": True,
+        }
+
+    def _guard_window_completion(self, action: dict, memory: TaskMemory) -> dict:
+        """时间窗未到窗口下界时，拒绝 finish/task_done，改为继续向上翻阅。"""
+        if not isinstance(action, dict):
+            return action
+        if effective_action_type(action) != "finish" and not action.get("task_done"):
+            return action
+        days = self._lookback_days(memory.task)
+        if not days or self._window_floor_reached(memory, days):
+            return action
+        print(f"  ⏳  时间窗（最近 {days} 天）未读完，拒绝提前收工，继续向上翻阅")
+        replacement = self._continue_reading_action(days)
+        replacement["window_guard"] = True
+        return replacement
+
     def _check_task_done(self, memory: TaskMemory) -> bool:
         # 没有本步有效截图时不判定完成（旧图/删图失败都会导致误判）
         if not self._observe_valid:
+            return False
+        if self._window_pending(memory):
+            print("│  ⏳  时间窗未读完，完成检测判定为未完成")
             return False
         done_bytes, done_meta = image_preprocess.prepare_image_bytes("screen_observe.png")
         image_b64 = base64.b64encode(done_bytes).decode("utf-8")
 
         history_text = memory.format_for_prompt()
+        window_days = self._lookback_days(memory.task)
+        window_note = ""
+        if window_days:
+            cutoff = (datetime.now() - timedelta(days=window_days)).strftime("%Y-%m-%d")
+            window_note = (
+                f"\n本任务要求最近 {window_days} 天：只有历史里已经出现早于 {cutoff} 的消息，"
+                "或已到聊天顶部/没有更早消息时，才能回答 YES；只看到一条 DDL 不算完成。"
+            )
 
         response = self.client.chat.completions.create(
             model=self.model,
@@ -1465,6 +1643,7 @@ class ScreenAgent:
     {history_text}
 
     请根据历史步骤的验证结果和当前截图，判断用户任务是否已经全部完成。
+    {window_note}
     只回复 YES 或 NO，不要其他内容。"""
                         }
                     ]
@@ -1568,17 +1747,20 @@ class ScreenAgent:
             for text, _ in entries
         )
         on_list = in_group_list or in_message_list
+        if on_list:
+            state["unknown_waits"] = 0
         if not on_list:
-            # 未知页面（桌面/其它 App）不滚动：先返回，最多两次
-            if state.get("unknown_backs", 0) >= 2:
+            # 未知页面（桌面/其它 App）不盲按返回：先等一帧重新确认，
+            # 仍然无法判断就停止自动操作，把决定交回上层。
+            if state.get("unknown_waits", 0) >= 1:
                 state["exhausted"] = True
-                print("  ⚠️  QQ 列表 OCR 兜底：连续返回仍不在列表页，放弃")
+                print("  ⚠️  QQ 列表 OCR 兜底：界面仍未知，停止自动操作（不再盲按返回）")
                 return None
-            state["unknown_backs"] = state.get("unknown_backs", 0) + 1
+            state["unknown_waits"] = state.get("unknown_waits", 0) + 1
             return {
-                "action_type": "back",
-                "description": "OCR 兜底：当前不在 QQ 列表页，先返回",
-                "ocr_unknown_back": state["unknown_backs"],
+                "action_type": "wait",
+                "description": "OCR 兜底：界面状态未知，先等待并重新取帧确认，不按返回",
+                "ocr_unknown_wait": state["unknown_waits"],
             }
 
         for target in targets:
@@ -1731,6 +1913,9 @@ class ScreenAgent:
             self._rule_state = state = {}
         if state.get("disabled"):
             return None
+        if getattr(self, "tree_unsupported", False):
+            # 微信已知无控件树：规则快路直接跳过，交给截图/OCR 路径
+            return None
 
         task = memory.task or ""
         # 没有引号目标、也不含搜索意图时规则不会命中：跳过控件树 dump，不增加开销
@@ -1801,8 +1986,12 @@ class ScreenAgent:
         head = f"[规则] {action.get('description') or action.get('action_type')}"
         rule_name = (action.get("rule") or {}).get("name")
         if rule_name in _LIGHT_RULE_OBSERVE:
+            if getattr(self, "tree_unsupported", False):
+                return head
             try:
                 text = rule_policy.screen_text(self.phone.dump_hierarchy())
+            except TreeUnavailable:
+                return head
             except Exception as e:
                 text = ""
                 print(f"  ⚠️  规则步骤读取控件树失败：{e}")
@@ -1819,7 +2008,10 @@ class ScreenAgent:
             return head
 
         try:
-            text = rule_policy.screen_text(self.phone.dump_hierarchy())
+            text = "" if getattr(self, "tree_unsupported", False) else \
+                rule_policy.screen_text(self.phone.dump_hierarchy())
+        except TreeUnavailable:
+            text = ""
         except Exception as e:
             text = ""
             print(f"  ⚠️  规则步骤读取控件树失败：{e}")
@@ -1833,6 +2025,14 @@ class ScreenAgent:
         memory = TaskMemory(task)
         self.last_memory = memory   # 供实验脚本统计实际步数
         ui_state.init_state(task)
+
+        # 微信在真机上不暴露控件树：跳过 dump，直接走截图/OCR，省一次失败往返。
+        if not getattr(self, "tree_unsupported", False) and self.driver_kind == "adb_dump":
+            self.tree_unsupported = bool(
+                re.search(r"微信|wechat|com\.tencent\.mm", task or "", re.I)
+            )
+        if hasattr(self.phone, "tree_unsupported"):
+            self.phone.tree_unsupported = bool(getattr(self, "tree_unsupported", False))
 
         # 每次运行一个独立目录，逐步截图 + 动作/观察 JSON 全量留证，
         # 便于事后定位失败步骤和论文里的典型案例分析
@@ -1939,6 +2139,7 @@ class ScreenAgent:
             # 避免 step JSON 沿用上一轮的阶段数据
             timings.update(getattr(self, "_last_decision_timings", {}) or {})
         timings["decide_total"] = round(time.time() - started, 2)
+        action = self._guard_window_completion(action, memory)
 
         # 动作只执行一次，不随观察/完成检测失败而重放
         # 动作执行后旧截图作废，观察成功才重新有效

@@ -54,6 +54,27 @@ def _require_adb():
         )
 
 
+class _WebAgentHooks:
+    """网页实时推送钩子；参数按 ScreenAgent 基类签名透传，避免包装层签名漂移。"""
+
+    def _think_and_act(self, memory, merged: bool = False, **kwargs):
+        action = super()._think_and_act(memory, merged=merged, **kwargs)
+        socketio.emit('update', {
+            'step': len(memory.steps) + 1,
+            'current_img': encode_image('screen_current.png'),
+            'action': action,
+        })
+        return action
+
+    def _observe(self, last_action, memory, **kwargs):
+        obs = super()._observe(last_action, memory, **kwargs)
+        socketio.emit('observe', {
+            'observe_img': encode_image('screen_observe.png'),
+            'observation': obs,
+        })
+        return obs
+
+
 # ── 单任务模式 ─────────────────────────────────────────
 def run_single(task: str):
     global agent_running
@@ -64,23 +85,8 @@ def run_single(task: str):
         import config
         from screen_agent import ScreenAgent
 
-        class WebAgent(ScreenAgent):
-            def _think_and_act(self, memory):
-                action = super()._think_and_act(memory)
-                socketio.emit('update', {
-                    'step': len(memory.steps) + 1,
-                    'current_img': encode_image('screen_current.png'),
-                    'action': action,
-                })
-                return action
-
-            def _observe(self, last_action, memory):
-                obs = super()._observe(last_action, memory)
-                socketio.emit('observe', {
-                    'observe_img': encode_image('screen_observe.png'),
-                    'observation': obs,
-                })
-                return obs
+        class WebAgent(_WebAgentHooks, ScreenAgent):
+            pass
 
         import subprocess, time
         with device_lock(timeout=30) as locked:
@@ -110,23 +116,8 @@ def run_multi(task: str):
         import config
         from multi_agent import MultiAppAgent, SubTaskScreenAgent
 
-        class WebSubAgent(SubTaskScreenAgent):
-            def _think_and_act(self, memory):
-                action = super()._think_and_act(memory)
-                socketio.emit('update', {
-                    'step': len(memory.steps) + 1,
-                    'current_img': encode_image('screen_current.png'),
-                    'action': action,
-                })
-                return action
-
-            def _observe(self, last_action, memory):
-                obs = super()._observe(last_action, memory)
-                socketio.emit('observe', {
-                    'observe_img': encode_image('screen_observe.png'),
-                    'observation': obs,
-                })
-                return obs
+        class WebSubAgent(_WebAgentHooks, SubTaskScreenAgent):
+            pass
 
         class WebMultiAgent(MultiAppAgent):
             def __init__(self):

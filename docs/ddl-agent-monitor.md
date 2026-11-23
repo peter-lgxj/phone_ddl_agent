@@ -1,19 +1,19 @@
-# DDL 定期监控使用说明
+# DDL 定期检索使用说明
 
 > 运行环境是电脑，操作对象是手机：电脑通过 ADB 驱动手机，微信 / QQ / Outlook App 的界面全部在手机上被读取。
 > 手机端不安装本项目组件，不需要 root。手机读屏与目标定位**未经真实数据验证**。
 
 ## 1. 一次性配置
 
-### 1.1 自然语言添加监控目标
+### 1.1 自然语言添加检索目标
 
 ```bash
-python -m ddl_agent.monitor.cli add "监控微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次，最近7天"
+python -m ddl_agent.monitor.cli add "定期读取微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次，最近7天"
 python -m ddl_agent.monitor.cli list
 python -m ddl_agent.monitor.cli edit wechat-21级课程群 --target "22级课程群" --lookback-days 7
 ```
 
-- 支持 `微信` / `QQ` / `Outlook`；Outlook 默认监控收件箱。
+- 支持 `微信` / `QQ` / `Outlook`；Outlook 默认读取收件箱。
 - 目标名称建议用「」或引号标出；同时提到多个 App 时必须分别标出目标。
 - 周期支持「每 6 小时」「每天一次」「每周」「每 30 分钟」，最短 5 分钟。
 - 解析不出或过于模糊（如「所有群」「帮我盯一下」）会**拒绝并说明原因**，不会猜测。
@@ -44,7 +44,7 @@ QQ 单群冒烟可直接复制 `sources.qq.example.yaml` 为 `sources.qq.yaml`�
 1. 检查 adb 是否可用；
 2. 检查手机是否在线、已授权（USB 调试）；
 3. 检查设备锁是否被其他窗口占用；
-4. 询问「1 单轮扫描 / 2 持续监控」；
+4. 询问「1 仅扫描一次 / 2 定期」；
 5. 跑完刷新并打开 `output/calendar.html`。
 
 也可以带参数运行：
@@ -63,7 +63,7 @@ run_ddl_monitor.bat --mode loop --config sources.yaml --engine rules
 | `unauthorized` | 在手机弹窗点「允许」；没弹窗就撤销授权后重新插拔 |
 | `offline` | 重新插拔，或 `adb kill-server` 后重试 |
 | 多台设备 | 只保留一台手机/模拟器 |
-| 设备锁被占用 | 关闭其他 `run.py` / `app.py` / 监控窗口 |
+| 设备锁被占用 | 关闭其他 `run.py` / `app.py` / 扫描窗口 |
 
 ### 2.2 命令行常驻
 

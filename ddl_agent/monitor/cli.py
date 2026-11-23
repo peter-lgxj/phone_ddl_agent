@@ -37,16 +37,16 @@ DEFAULT_CONFIG = "sources.yaml"
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="ddl-monitor", description="手机 App DDL 定期监控")
+    parser = argparse.ArgumentParser(prog="ddl-monitor", description="手机 App DDL 检索与整理")
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="配置文件路径（默认 sources.yaml）")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    add = sub.add_parser("add", help="用一句自然语言新增监控目标")
+    add = sub.add_parser("add", help="用一句自然语言新增检索目标")
     add.add_argument("text", help="例如：监控微信「21级课程群」，每6小时一次")
 
     sub.add_parser("list", help="列出当前配置与自然语言来源")
 
-    remove = sub.add_parser("remove", help="删除一个监控来源")
+    remove = sub.add_parser("remove", help="删除一个检索目标")
     remove.add_argument("source_id")
 
     edit = sub.add_parser("edit", help="修改已有来源的目标、App 或时间范围")
@@ -56,7 +56,7 @@ def _build_parser() -> argparse.ArgumentParser:
     edit.add_argument("--lookback-days", type=int, default=None)
 
     for name, text in (("enable", "启用"), ("disable", "停用")):
-        cmd = sub.add_parser(name, help=f"{text}一个监控来源")
+        cmd = sub.add_parser(name, help=f"{text}一个检索目标")
         cmd.add_argument("source_id")
 
     schedule = sub.add_parser("schedule", help="单独设置检索周期")
@@ -151,10 +151,10 @@ def _print_config(config, config_path: Path) -> None:
     print(f"调度周期：{config.schedule}（{config.interval_minutes} 分钟）")
     print(f"输出目录：{config.output_dir}；状态目录：{config.state_dir}")
     if not config.sources:
-        print("尚未配置任何监控来源。用 `add` 添加，例如：")
+        print("尚未配置任何检索目标。用 `add` 添加，例如：")
         print('  python -m ddl_agent.monitor.cli add "监控微信「21级课程群」，每6小时一次"')
         return
-    print("监控来源：")
+    print("检索目标：")
     for source in config.sources:
         mark = "x" if source.enabled else " "
         print(

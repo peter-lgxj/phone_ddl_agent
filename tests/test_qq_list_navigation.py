@@ -155,8 +155,9 @@ def test_ocr_list_navigation_never_scrolls_unknown_screen(tmp_path):
     agent = _agent(tmp_path, [{"text": "设置", "center": (400, 300)}])
     memory = TaskMemory(f"打开QQ，滚动列表找到「{TARGET}」")
 
-    assert agent._ocr_list_navigate(memory)["action_type"] == "back"
-    assert agent._ocr_list_navigate(memory)["action_type"] == "back"
+    first = agent._ocr_list_navigate(memory)
+    assert first["action_type"] == "wait"
+    assert first["ocr_unknown_wait"] == 1
     assert agent._ocr_list_navigate(memory) is None
     assert agent._ocr_nav_state["exhausted"] is True
 

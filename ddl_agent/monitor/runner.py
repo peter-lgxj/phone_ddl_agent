@@ -114,7 +114,7 @@ def run_cycle(config: MonitorConfig, config_path: str | Path | None = None,
     enabled = [source for source in config.sources if source.enabled]
     result.sources_ok = sum(1 for entry in result.sources if entry.get("error") is None)
     if not enabled:
-        result.errors.append("没有启用的监控来源")
+        result.errors.append("没有启用的检索目标")
     if result.sources_ok == 0:
         # 全部来源失败：不写 xlsx / data.json / deadlines.ics / calendar.html，
         # 避免把“空结果”伪装成成功；周期 JSON 仍写出，明确标注 failed。

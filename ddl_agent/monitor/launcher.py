@@ -110,7 +110,7 @@ def check_device_lock() -> str | None:
             return None
     return (
         "手机正被本项目的另一个窗口占用（设备锁）。\n"
-        "下一步：关闭其他正在运行的 run.py / app.py / 监控窗口，或等它结束；"
+        "下一步：关闭其他正在运行的 run.py / app.py / 扫描窗口，或等它结束；"
         "确认没有其他窗口后，可删除 runs/.device.lock 再重试。"
     )
 
@@ -154,8 +154,8 @@ def _choose_mode(mode: str | None) -> str:
     if not sys.stdin.isatty():
         return "once"
     print("请选择运行模式：")
-    print("  1. 单轮扫描（马上跑一遍就退出）")
-    print("  2. 持续监控（按配置周期反复跑，Ctrl+C 停止）")
+    print("  1. 仅扫描一次（马上跑一遍就退出）")
+    print("  2. 定期（按配置周期反复跑，Ctrl+C 停止）")
     answer = input("输入 1 或 2，直接回车默认 2：").strip()
     return "once" if answer == "1" else "loop"
 
@@ -215,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
     if not config.sources:
         print(
-            "\n[提示] 还没有配置监控目标（sources.yaml）。\n"
+            "\n[提示] 还没有配置检索目标（sources.yaml）。\n"
             "下一步：在项目目录运行\n"
             '  python -m ddl_agent.monitor.cli add "监控微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次"\n'
             "也可以把 sources.example.yaml 复制为 sources.yaml 后编辑。"

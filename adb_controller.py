@@ -28,6 +28,14 @@ from adb_utils import ADB
 
 READ_ONLY_BLOCKED_METHODS = {"type_text", "press_enter", "send", "tap_send_button"}
 
+# uiautomator2 在 Android 17 启动失败后可能留下这个进程，占着 UiAutomation 不放，
+# 导致系统自带的 `uiautomator dump` 报 “already registered” 并被 SIGKILL。
+_STALE_U2_MARKER = "com.wetest.uia2.Main"
+
+
+class TreeUnavailable(RuntimeError):
+    """当前 App 明确不暴露控件树（如微信），调用方应直接走截图/OCR。"""
+
 
 class InputMethodUnavailable(RuntimeError):
     """中文输入所需的 ADBKeyboard 未安装或未启用。"""
@@ -156,6 +164,8 @@ class AdbDumpController:
         self._dump_fingerprint: str | None = None
         self.dump_count = 0  # 实际执行的 uiautomator dump 次数，供步级统计
         self.dump_reuse_count = 0  # 按帧指纹命中缓存、未重复 dump 的次数
+        self.tree_unsupported = False  # 当前 App 已知不暴露控件树（微信）
+        self._tree_skip_logged = False
         if probe:
             self._probe()
 
@@ -248,7 +258,11 @@ class AdbDumpController:
         report: dict = {"parallel": False, "errors": {}}
         if not bool(getattr(config, "PARALLEL_CAPTURE", True)):
             image = self.screenshot(save_path)
-            xml = self.dump_hierarchy()
+            try:
+                xml = self.dump_hierarchy()
+            except TreeUnavailable as e:
+                xml = None
+                report["skipped"] = str(e)
             report["parallel"] = False
             return image, xml, report
 
@@ -265,6 +279,8 @@ class AdbDumpController:
                 report["errors"]["screenshot"] = str(e)
             try:
                 xml = dump_future.result()
+            except TreeUnavailable as e:  # 微信等已知无树的 App：跳过，不当作失败
+                report["skipped"] = str(e)
             except Exception as e:  # dump 失败：交回上层按需重试
                 report["errors"]["dump"] = str(e)
         report["elapsed"] = round(time.perf_counter() - started, 3)
@@ -273,16 +289,76 @@ class AdbDumpController:
             # 视觉决策必须有截图；并行失败不影响串行重试
             image = self.screenshot(save_path)
             report["screenshot_retry"] = True
-        if xml is None:
+        if xml is None and "skipped" not in report:
             print(f"  ⚠️  并行 dump 失败，本步退回按需重试：{report['errors'].get('dump', '')}")
         return image, xml, report
 
-    def dump_hierarchy(self, use_cache: bool = False, ttl: float = 0.5) -> str:
-        """用系统 ``uiautomator dump`` 读取控件树 XML。
+    def _stale_u2_pids(self) -> list[str]:
+        """找出残留的 uiautomator2 服务 pid；找不到就返回空列表。"""
+        try:
+            result = self._run("shell", "ps", "-A", "-o", "PID,ARGS", timeout=10)
+        except Exception:
+            return []
+        pids: list[str] = []
+        for line in (result.stdout or b"").decode("utf-8", "replace").splitlines():
+            if _STALE_U2_MARKER not in line:
+                continue
+            first = line.strip().split(maxsplit=1)[0] if line.strip() else ""
+            if first.isdigit():
+                pids.append(first)
+        return pids
 
-        复用条件：同一帧指纹（``set_frame_fingerprint``）或短 TTL 内。
-        任一动作（tap/swipe/back/home/type/open_app）都会清空缓存。
+    def _diagnose_dump_failure(self) -> tuple[str, bool]:
+        """dump 被 SIGKILL 且无输出时定位原因；能清理的残留 u2 服务顺手清理。
+
+        返回 ``(诊断信息, 是否已清理)``。清理后调用方会再试一次 dump。
         """
+        pids = self._stale_u2_pids()
+        if pids:
+            killed: list[str] = []
+            for pid in pids:
+                result = self._run("shell", "kill", pid, timeout=5)
+                if result.returncode == 0:
+                    killed.append(pid)
+            if killed:
+                return (
+                    "检测到残留 uiautomator2 服务"
+                    f"（{_STALE_U2_MARKER}，pid={','.join(killed)}）占用 UiAutomation，"
+                    "已结束该进程后重试",
+                    True,
+                )
+            return (
+                "检测到残留 uiautomator2 服务"
+                f"（{_STALE_U2_MARKER}，pid={','.join(pids)}）占用 UiAutomation，"
+                "但自动结束失败；请执行 `adb shell pkill -f com.wetest.uia2.Main`",
+                False,
+            )
+        try:
+            result = self._run("logcat", "-d", "-t", "120", timeout=10)
+            text = (result.stdout or b"").decode("utf-8", "replace")
+            if "already registered" in text and "UiAutomation" in text:
+                return (
+                    "logcat 显示 UiAutomationService already registered："
+                    "另一个 UiAutomation 客户端占用连接，dump 进程被系统终止",
+                    False,
+                )
+        except Exception:
+            pass
+        return (
+            "进程被系统终止且没有输出；通常是 UiAutomation 被其它服务占用，"
+            "可执行 `adb shell pkill -f com.wetest.uia2.Main` 或重启手机",
+            False,
+        )
+
+    def dump_hierarchy(self, use_cache: bool = False, ttl: float = 0.5) -> str:
+        if getattr(self, "tree_unsupported", False):
+            if not self._tree_skip_logged:
+                print("  ℹ️  微信（com.tencent.mm）不暴露控件树，跳过 dump，改用截图/OCR")
+                self._tree_skip_logged = True
+            raise TreeUnavailable(
+                "微信（com.tencent.mm）不暴露控件树，已跳过 dump，改用截图/OCR"
+            )
+        # 用系统 uiautomator dump 读取控件树；同一帧指纹或短 TTL 内复用，动作后清空。
         now = time.monotonic()
         if use_cache and self._last_dump:
             same_frame = (
@@ -297,21 +373,36 @@ class AdbDumpController:
         # 否则会把上一轮界面当成当前界面喂给规则快路。
         remote = f"/sdcard/window_dump_{time.time_ns()}.xml"
         last_error = ""
+        diagnosis = ""
+        last_rc = 0
         for attempt in (1, 2):
             result = self._run("shell", "uiautomator", "dump", remote, timeout=30)
+            last_rc = result.returncode
             if result.returncode == 0:
                 break
             last_error = (
                 (result.stderr or result.stdout or b"").decode("utf-8", "replace").strip()
             )
-            print(f"  ⚠️  uiautomator dump 返回非零（第 {attempt} 次）：{last_error}")
+            if not last_error:
+                # 进程被 SIGKILL 时 stdout/stderr 都是空的，真正原因只在 logcat；
+                # 顺手清理残留的 uiautomator2 服务，让下一次尝试有机会成功。
+                diagnosis, cleaned = self._diagnose_dump_failure()
+                if cleaned:
+                    print(f"  ⚠️  {diagnosis}")
+            print(
+                f"  ⚠️  uiautomator dump 返回非零（第 {attempt} 次）："
+                f"{last_error or diagnosis}"
+            )
             if attempt == 1:
                 time.sleep(0.3)
         else:
+            detail = last_error or diagnosis or "无错误输出"
             raise RuntimeError(
-                "adb_dump 无法读取控件树：`uiautomator dump` 连续两次返回非零"
-                f"（{last_error or '无错误输出'}）。"
-                "请确认系统自带的 uiautomator 可用（`adb shell uiautomator dump`）。"
+                "adb_dump 无法读取控件树：`uiautomator dump` 连续两次失败"
+                f"（rc={last_rc}，{detail}）。"
+                "若提示 UiAutomationService already registered，请执行 "
+                "`adb shell pkill -f com.wetest.uia2.Main` 或重启手机；"
+                "否则请确认系统自带的 uiautomator 可用（`adb shell uiautomator dump`）。"
             )
         try:
             try:
