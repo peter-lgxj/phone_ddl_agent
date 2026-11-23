@@ -291,7 +291,7 @@ ddl_agent/
   dedupe.py
   conflict.py
   writer/{base,xlsx_writer,csv_writer,markdown_writer,audit}.py
-  output.py                   # data.json / .ics / 手机日历可选接口
+  output.py                   # data.json / .ics / calendar.html
   monitor/{config,cursor,sources,runner,cli}.py
   dataset/generator.py        # 三档难度 × 20–30 条，train/val/test
   evaluation/{metrics,baseline,run_eval}.py
@@ -477,12 +477,12 @@ Agent-LLM 共 179 次调用、75108 token、约 $0.0349。
 | `monitor/cursor.py` | 新增：游标、消息库、候选库 |
 | `monitor/runner.py`、`monitor/cli.py` | 新增：单轮/常驻调度与结果汇总 |
 | `monitor/launcher.py`、`run_ddl_monitor.bat` | 新增：双击启动，环境检查、人话报错、单轮/常驻、打开日历页 |
-| `output.py` | 新增：`data.json`、`.ics`、`calendar.html`、手机日历可选接口 |
+| `output.py` | 新增：`data.json`、`.ics`、`calendar.html`（手机日历写入已按只读约束禁用） |
 | `pipeline.py` / `writer/` | 复用；写入器已支持改行/跳过与审计 |
 
 ### 14.6 验证边界
 
-- 手机 GUI 读取：微信单机、单账号、自聊会话已做只读验证（`docs/real-device-test-report.md`）；QQ、真实群聊、Outlook App 收件箱、手机系统日历写入仍未验证。
+- 手机 GUI 读取：微信单机、单账号、自聊会话已做只读验证（`docs/real-device-test-report.md`）；QQ、真实群聊、Outlook App 收件箱仍未验证。手机系统日历写入已按只读约束禁用，不提供写入路径。
 - 增量、跨轮更新、调度、配置解析、`data.json` / `.ics` 导出：离线测试可真跑。
 - Graph 不在主路径，仅保留未启用的代码骨架；本地连接器只作为离线测试替身，都不代表真实来源行为。
 

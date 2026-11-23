@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -85,14 +86,24 @@ def load_config(path: str | Path) -> MonitorConfig:
     file = Path(path)
     if not file.exists():
         return MonitorConfig()
-    data = yaml.safe_load(file.read_text(encoding="utf-8")) or {}
-    return MonitorConfig.from_dict(data)
+    try:
+        data = yaml.safe_load(file.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"配置文件无法解析（YAML 语法错误）：{exc}") from exc
+    if not isinstance(data, dict):
+        raise ConfigError(f"配置文件格式不正确（期望映射）：{file}")
+    try:
+        return MonitorConfig.from_dict(data)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"配置文件字段不合法：{exc}") from exc
 
 
 def save_config(config: MonitorConfig, path: str | Path) -> Path:
     file = Path(path)
     file.parent.mkdir(parents=True, exist_ok=True)
-    file.write_text(config.to_yaml(), encoding="utf-8")
+    tmp = file.with_name(f"{file.name}.tmp")
+    tmp.write_text(config.to_yaml(), encoding="utf-8")
+    os.replace(tmp, file)
     return file
 
 

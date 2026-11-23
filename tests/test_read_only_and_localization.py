@@ -60,6 +60,22 @@ def test_refusal_disabled_when_not_read_only():
     assert screen_agent.read_only_task_refusal("发送日报", False) is None
 
 
+# ---------------------------------------------------------------- u2 驱动层也只读
+def test_u2_driver_blocks_send_actions_in_read_only():
+    from phone_controller import PhoneController
+
+    controller = object.__new__(PhoneController)
+    controller.read_only = True
+    controller.device = SimpleNamespace(
+        press=lambda key: pytest.fail("只读模式不应按键"),
+        __call__=lambda *args, **kwargs: pytest.fail("只读模式不应查找控件"),
+    )
+
+    for action in ("send", "press_enter", "tap_send_button", "test_send"):
+        with pytest.raises(PermissionError, match="只读模式拒绝动作"):
+            getattr(controller, action)()
+
+
 # ---------------------------------------------------------------- 无树时输入框降级
 class _Controller(AdbDumpController):
     def __init__(self):

@@ -303,6 +303,36 @@ def test_dump_kills_stale_u2_owner_then_retries():
     assert any(call[:3] == ("shell", "kill", "23851") for call in calls)
 
 
+def test_dump_failure_checks_stale_u2_even_with_stderr():
+    """即使 dump 有错误输出，也要探测一次残留 u2，避免 already registered 分支漏清理。"""
+    controller = RecordingController()
+    checked = []
+    dumps = {"count": 0}
+
+    def fake_run(*args, timeout=30.0):
+        if "uiautomator" in args:
+            dumps["count"] += 1
+            if dumps["count"] == 1:
+                return subprocess.CompletedProcess(
+                    args, 1, stdout=b"", stderr=b"ERROR: could not get idle state."
+                )
+            return subprocess.CompletedProcess(
+                args, 0, stdout=b"UI hierchary dumped", stderr=b""
+            )
+        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+
+    controller._run = fake_run
+    controller._exec_out = lambda *args, timeout=30.0: (
+        '<hierarchy><node text="QQ" /></hierarchy>'.encode("utf-8")
+    )
+    controller._diagnose_dump_failure = lambda: (checked.append(True) or ("诊断", False))
+
+    xml = controller.dump_hierarchy()
+
+    assert "QQ" in xml
+    assert checked == [True]
+
+
 def test_dump_failure_reports_uiautomation_owner_hint():
     """两次都被 SIGKILL 且无输出时，错误信息要给出真实原因和可执行命令。"""
     controller = RecordingController()

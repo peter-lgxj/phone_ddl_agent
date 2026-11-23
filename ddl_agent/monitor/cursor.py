@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from ..models import DeadlineCandidate, RawMessage
 from ..settings import TZ
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """先写临时文件再替换，进程中断不会留下半截状态文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 @dataclass
@@ -23,7 +32,12 @@ class CursorStore:
         self.path = Path(path)
         self._data: dict[str, Cursor] = {}
         if self.path.exists():
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            try:
+                payload = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                # 游标损坏只影响增量优化：从空游标重建，不阻断整轮检索
+                print(f"  ⚠️  游标文件损坏，按空游标重新建立：{exc}")
+                payload = {}
             for source_id, item in (payload.get("sources") or {}).items():
                 self._data[source_id] = Cursor(
                     last_timestamp=item.get("last_timestamp"),
@@ -69,7 +83,7 @@ class CursorStore:
                 for source_id, cursor in self._data.items()
             },
         }
-        self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write_text(self.path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 class MessageStore:
@@ -82,8 +96,12 @@ class MessageStore:
             for line in self.path.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
-                item = json.loads(line)
-                message = _message_from_dict(item)
+                try:
+                    message = _message_from_dict(json.loads(line))
+                except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                    # 单行损坏（例如写入中断）只丢这一条，不阻断整轮检索
+                    print(f"  ⚠️  跳过损坏的消息行：{exc}")
+                    continue
                 self._messages[message.message_id] = message
 
     def __len__(self) -> int:
@@ -114,7 +132,11 @@ class CandidateStore:
             for line in self.path.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
-                candidate = _candidate_from_dict(json.loads(line))
+                try:
+                    candidate = _candidate_from_dict(json.loads(line))
+                except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                    print(f"  ⚠️  跳过损坏的候选行：{exc}")
+                    continue
                 self._candidates[candidate.candidate_id] = candidate
 
     def add(self, candidates: list[DeadlineCandidate]) -> None:

@@ -16,7 +16,7 @@ from ..settings import TZ
 from ..writer.xlsx_writer import XlsxWriter
 from ..output import PhoneCalendarWriter, export_outputs
 from .config import MonitorConfig, MonitorSource
-from .cursor import CandidateStore, CursorStore, MessageStore
+from .cursor import CandidateStore, CursorStore, MessageStore, _atomic_write_text
 from .sources import MobileAppSource
 
 
@@ -183,8 +183,9 @@ def _failed_entry(source: MonitorSource, message: str) -> dict:
 def _write_cycle(out: Path, cycle_id: str, result: CycleResult) -> None:
     cycles_dir = out / "cycles"
     cycles_dir.mkdir(parents=True, exist_ok=True)
-    (cycles_dir / f"{cycle_id}.json").write_text(
-        json.dumps(result.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+    _atomic_write_text(
+        cycles_dir / f"{cycle_id}.json",
+        json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
     )
 
 

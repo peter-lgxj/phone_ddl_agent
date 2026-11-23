@@ -8,6 +8,9 @@ import config
 MIN_UIAUTOMATOR2_VERSION = (3, 7, 1)
 ANDROID17_ISSUE_URL = "https://github.com/openatx/uiautomator2/issues/1209"
 
+# 与 adb 驱动保持同一份只读拦截集合：这些动作会发言或改动输入内容
+READ_ONLY_BLOCKED_METHODS = {"type_text", "press_enter", "send", "tap_send_button", "test_send"}
+
 
 class Uiautomator2CompatibilityError(RuntimeError):
     """uiautomator2 已连接但服务端 RPC 不可用（典型：Android 17）。"""
@@ -65,10 +68,13 @@ class PhoneController:
 
     kind = "uiautomator2"
 
-    def __init__(self,locator):
+    def __init__(self,locator, read_only=None):
         # 延迟导入：没有 uiautomator2 时本模块仍可被导入（CI 单测需要）
         import uiautomator2 as u2
 
+        self.read_only = (
+            bool(getattr(config, "READ_ONLY_MODE", True)) if read_only is None else bool(read_only)
+        )
         self.locator=locator
         version = str(getattr(u2, "__version__", "") or "")
         # 自动连接 USB 设备
@@ -125,12 +131,20 @@ class PhoneController:
         print(f"滑动：({x1},{y1}) → ({x2},{y2})")
         time.sleep(0.8)
 
+    def _ensure_writable(self, method: str) -> None:
+        if self.read_only and method in READ_ONLY_BLOCKED_METHODS:
+            raise PermissionError(
+                f"只读模式拒绝动作「{method}」：读屏任务不允许发言或改动输入内容"
+            )
+
     def type_text(self, text: str, allow_search: bool = False):
         """
         输入文字，自动激活输入框，支持中文。
         只负责输入，不自动发送——发送由智能体的 send 动作单独完成，
         以免与动作序列里的 send 叠加导致重复发送或重复回车。
         """
+        if not allow_search:
+            self._ensure_writable("type_text")
 
         # 已聚焦在输入框时直接写入：避免重复点击（tap_input_box 内含 0.8s 等待，YOLO 兜底更慢）
         focused = self.device(focused=True, className="android.widget.EditText")
@@ -246,12 +260,14 @@ class PhoneController:
 
     def press_enter(self):
         """按回车键，用于发送消息、提交搜索"""
+        self._ensure_writable("press_enter")
         self.device.press("enter")
         print("按下回车键")
         time.sleep(0.5)
 
     def send(self):
         """发送消息/提交；与 press_enter 等价，便于驱动层统一拦只读动作。"""
+        self._ensure_writable("send")
         self.press_enter()
 
     def long_tap(self, x, y, duration=1.0):
@@ -274,6 +290,7 @@ class PhoneController:
 
     def tap_send_button(self):
         """发送消息，优先找 Send 按钮，找不到用回车"""
+        self._ensure_writable("tap_send_button")
         try:
             # ADBKeyboard 的 Send 按钮
             for text in ["Send", "发送"]:
@@ -291,6 +308,7 @@ class PhoneController:
         print("按回车发送")
         time.sleep(0.5)
     def test_send(self):
+        self._ensure_writable("test_send")
         self.device.press("search")
 
 # ===== 测试入口 =====

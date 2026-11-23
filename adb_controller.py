@@ -383,12 +383,14 @@ class AdbDumpController:
             last_error = (
                 (result.stderr or result.stdout or b"").decode("utf-8", "replace").strip()
             )
+            # 无论有没有错误输出都探测一次残留 u2 服务：
+            # 「already registered」分支不一定伴随空 stderr，清理后下次尝试才有机会成功。
+            diagnosis, cleaned = self._diagnose_dump_failure()
+            if cleaned:
+                print(f"  ⚠️  {diagnosis}")
             if not last_error:
-                # 进程被 SIGKILL 时 stdout/stderr 都是空的，真正原因只在 logcat；
-                # 顺手清理残留的 uiautomator2 服务，让下一次尝试有机会成功。
-                diagnosis, cleaned = self._diagnose_dump_failure()
-                if cleaned:
-                    print(f"  ⚠️  {diagnosis}")
+                # 进程被 SIGKILL 时 stdout/stderr 都是空的，真正原因只在 logcat
+                last_error = diagnosis
             print(
                 f"  ⚠️  uiautomator dump 返回非零（第 {attempt} 次）："
                 f"{last_error or diagnosis}"

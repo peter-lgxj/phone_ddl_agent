@@ -462,7 +462,7 @@ A/B 时保持同一任务文本、同一设备、同一网络与同一 provider�
 - 触发条件：`OCR_MODE=on_demand` 且动作为 `tap`；其余动作（`open_app`/`back`/`home`/`wait`/`swipe`/`type`/`send`/`finish`）完全不跑。
 - `tree_first`（默认）：合并控件树、OCR 文本与（按需）YOLO 候选；有 `target` 时按文字匹配打分，唯一匹配直接吸附，多个匹配按模型坐标选最近的一个；没有 `target` 时才用距离阈值。
 - `ocr_only` / `tree_only`：强制只走一条路径，便于对照。
-- 具名目标匹配不到时先保持界面重新观察；连续两次仍匹配不到（常见于无文字图标），回退到模型坐标继续，不会直接终止任务。
+- 具名目标匹配不到时先保持界面重新观察；连续两次仍匹配不到时明确失败（“目标未定位，未执行点击”），不再按模型坐标猜测点击。
 - 无 target 的吸附只在距最近元素中心 ≤ `OCR_SNAP_MAX_DISTANCE`（默认 80px）或落在 bbox 内时发生；实际路径与耗时写进 `timings.snap_source`（`tree`/`ocr`/`yolo`/`none`）、`snap_tree`、`snap_yolo`、`snap_ocr`。
 
 
@@ -549,7 +549,7 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（510 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
+- 测试与工程化：`tests/`（530 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 

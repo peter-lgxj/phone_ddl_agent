@@ -108,11 +108,11 @@ python -m ddl_agent.monitor.cli run
 | `output/calendar.html` | 自包含日历页，双击打开；每 2 分钟自动重载 |
 | `output/cycles/*.json` | 每轮来源、增量、写入与 LLM 用量汇总 |
 
-手机系统日历写入是预留接口（`write_phone_calendar`），默认关闭，需真机验证后再启用。
+手机系统日历写入已按只读约束禁用（`PhoneCalendarWriter` 始终跳过，即使 `write_phone_calendar=true` 也不会触碰手机）。
 
 ## 5. 验证边界
 
 - 离线测试覆盖：自然语言配置、显式拒绝、游标基线/增量/重置、跨轮插入→跳过→更新、
   目标未找到报错且不推进游标、`data.json` / `.ics` / `calendar.html` 导出、启动器设备状态提示。
-- **未经真实数据验证**：真机读屏、App 内按名称定位、Outlook App 收件箱、手机系统日历写入、
+- **未经真实数据验证**：真机读屏、App 内按名称定位、Outlook App 收件箱、
   真实微信/QQ/Outlook 消息格式。
