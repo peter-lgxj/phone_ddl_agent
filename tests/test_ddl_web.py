@@ -48,6 +48,7 @@ def test_write_endpoints_require_token_when_configured(tmp_path, monkeypatch):
     assert client.post("/api/ddl/sources", json={"text": "监控微信「课程群」"}).status_code == 401
     assert client.post("/api/ddl/scan").status_code == 401
     assert client.delete("/api/ddl/sources/any").status_code == 401
+    assert client.patch("/api/ddl/sources/any", json={"enabled": True}).status_code == 401
     response = client.post(
         "/api/ddl/sources",
         json={"text": "监控微信「课程群」"},
@@ -63,7 +64,61 @@ def test_page_copy_and_mode_choices(tmp_path, monkeypatch):
     assert "检索目标" in html
     assert "仅扫描一次" in html
     assert "定期" in html
+    assert "扫描已保存目标" in html
     assert "监控来源" not in html
+
+
+def test_toggle_source_enabled(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    response = client.post("/api/ddl/sources", json={"text": "监控微信「课程群」，最近14天"})
+    source_id = response.json["added"][0]
+
+    toggled = client.patch(f"/api/ddl/sources/{source_id}", json={"enabled": False})
+
+    assert toggled.status_code == 200
+    assert toggled.json["sources"][0]["enabled"] is False
+    assert client.get("/api/ddl").json["sources"][0]["enabled"] is False
+    # 重新读取配置文件后仍是暂停状态
+    saved = (tmp_path / "sources.yaml").read_text(encoding="utf-8")
+    assert "enabled: false" in saved
+
+    assert client.patch(f"/api/ddl/sources/{source_id}", json={"enabled": "no"}).status_code == 400
+    assert client.patch("/api/ddl/sources/missing", json={"enabled": True}).status_code == 404
+
+
+def test_payload_reports_source_meta_and_calendar_time(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    client.post("/api/ddl/sources", json={"text": "监控 QQ「作业群」，最近7天"})
+
+    payload = client.get("/api/ddl").json
+
+    source = payload["sources"][0]
+    assert source["kind"] == "group"
+    assert source["source_type"] == "student_chat"
+    assert payload["calendar_ready"] is False
+    assert payload["calendar_generated_at"] is None
+
+    out = tmp_path / "output"
+    out.mkdir()
+    (out / "calendar.html").write_text("<h1>DDL 日历</h1>", encoding="utf-8")
+    payload = client.get("/api/ddl").json
+    assert payload["calendar_ready"] is True
+    assert payload["calendar_generated_at"]
+
+
+def test_scan_marks_start_time_and_total_sources(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    started = []
+    _stub_phone_and_thread(monkeypatch, started)
+    client.post("/api/ddl/sources", json={"text": "监控微信「课程群」，最近14天"})
+
+    response = client.post("/api/ddl/scan", json={"mode": "recurring"})
+
+    assert response.status_code == 202
+    state = client.get("/api/ddl").json
+    assert state["running"] is True
+    assert state["started_at"]
+    assert state["total_sources"] == 1
 
 
 def _stub_phone_and_thread(monkeypatch, started):
@@ -143,9 +198,15 @@ def test_scan_worker_holds_device_lock_and_disables_nested_lock(tmp_path, monkey
     web._scan_worker()
 
     assert calls == [30]
-    assert captured["connector_factory"] is web._source_without_lock
+    factory = captured["connector_factory"]
+    source = SimpleNamespace(id="qq-群", app="qq", target="群", source_type="student_chat",
+                             kind="group", lookback_days=14, enabled=True)
+    connector = factory(source)
+    assert connector.use_device_lock is False
+    assert web._scan["current_source"] == {"app": "qq", "target": "群"}
     assert web._scan["running"] is False
     assert web._scan["result"] == {"inserted": 0}
+    assert isinstance(web._scan["finished_at"], str)
 
 
 def test_scan_worker_reports_busy_lock_without_running_cycle(tmp_path, monkeypatch):
