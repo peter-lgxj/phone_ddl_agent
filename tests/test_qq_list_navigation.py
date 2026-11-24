@@ -205,6 +205,84 @@ def test_ocr_list_navigation_never_scrolls_unknown_screen(tmp_path):
     assert agent._ocr_nav_state["exhausted"] is True
 
 
+class _FakeLauncher:
+    def __init__(self, package: str = "com.tencent.mm"):
+        self.package = package
+
+    def current_package(self) -> str:
+        return self.package
+
+
+# 微信列表页底部 Tab（真机 OCR 实测坐标）；会话页没有「通讯录/发现」。
+WECHAT_TABS = [
+    {"text": "微信", "center": (137, 2290)},
+    {"text": "通讯录", "center": (406, 2291)},
+    {"text": "发现", "center": (676, 2290)},
+    {"text": "我", "center": (945, 2291)},
+]
+
+
+def _wechat_agent(tmp_path, entries, package="com.tencent.mm"):
+    agent = _agent(tmp_path, entries)
+    agent.tree_unsupported = True
+    agent.launcher = _FakeLauncher(package)
+    return agent
+
+
+def test_wechat_stale_chat_backs_out_before_reading(tmp_path):
+    """微信冷启动会恢复上次会话页；不先退回列表就会把 llm小组 当成目标。"""
+    agent = _wechat_agent(tmp_path, [
+        {"text": "llm小组(3）", "center": (538, 184)},
+        {"text": "我买了这两个", "center": (743, 1949)},
+    ])
+    memory = TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」")
+
+    action = agent._ocr_list_navigate(memory)
+
+    assert action is not None
+    assert action["action_type"] == "back"
+    assert action["ocr_chat_back"] == 1
+
+
+def test_wechat_desktop_is_not_backed_out(tmp_path):
+    """前台不是微信时不能盲按返回，避免把 App 或桌面状态弄乱。"""
+    agent = _wechat_agent(
+        tmp_path, [{"text": "02:52", "center": (122, 71)}],
+        package="com.miui.home")
+
+    assert agent._ocr_list_navigate(
+        TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」")) is None
+
+
+def test_wechat_list_taps_exact_case_group(tmp_path):
+    agent = _wechat_agent(tmp_path, WECHAT_TABS + [
+        {"text": "llm小组", "center": (279, 1807)},
+        {"text": "LLM小组", "center": (279, 1207)},
+    ])
+
+    action = agent._ocr_list_navigate(
+        TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」"))
+
+    assert action is not None
+    assert action["action_type"] == "tap"
+    assert action["ocr_list_hit"] is True
+    assert (action["x"], action["y"]) == (279, 1207)
+
+
+def test_wechat_list_never_taps_lowercase_variant(tmp_path):
+    agent = _wechat_agent(tmp_path, WECHAT_TABS + [
+        {"text": "llm小组", "center": (279, 1807)},
+    ])
+
+    action = agent._ocr_list_navigate(
+        TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」"))
+
+    assert action is not None
+    assert action["action_type"] == "swipe"
+    assert action["ocr_list_direction"] == "down"
+    assert agent._ocr_nav_state["variant_names"] == ["llm小组"]
+
+
 class _PagedPhone:
     """按页滚动的假手机：滑动手势会改变当前页，页面图像用于哈希比对。"""
 
