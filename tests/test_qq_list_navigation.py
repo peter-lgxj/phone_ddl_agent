@@ -226,6 +226,9 @@ def _wechat_agent(tmp_path, entries, package="com.tencent.mm"):
     agent = _agent(tmp_path, entries)
     agent.tree_unsupported = True
     agent.launcher = _FakeLauncher(package)
+    agent._rule_state = {}
+    # 单元测试不加载 YOLO：默认认不出搜索入口，需要时由用例覆盖
+    agent._yolo_search_entry = lambda image: None
     return agent
 
 
@@ -281,6 +284,160 @@ def test_wechat_list_never_taps_lowercase_variant(tmp_path):
     assert action["action_type"] == "swipe"
     assert action["ocr_list_direction"] == "down"
     assert agent._ocr_nav_state["variant_names"] == ["llm小组"]
+
+
+def test_wechat_list_preview_text_is_not_chat_page(tmp_path):
+    """列表预览里的「表情/发送」不能把聊天列表判成会话页，否则会连按返回退到桌面。"""
+    agent = _wechat_agent(tmp_path, WECHAT_TABS + [
+        {"text": "[动画表情]", "center": (700, 900)},
+        {"text": "发送", "center": (890, 1600)},
+        {"text": "llm小组", "center": (279, 1807)},
+    ])
+
+    action = agent._ocr_list_navigate(
+        TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」"))
+
+    assert action["action_type"] == "swipe"
+    assert "ocr_chat_back" not in action
+
+
+def test_wechat_list_without_tabs_waits_instead_of_backing_out(tmp_path):
+    """OCR 漏读底部 Tab 时不能盲按返回：先等一帧，仍无法确认就停。"""
+    agent = _wechat_agent(tmp_path, [
+        {"text": "02:52", "center": (122, 71)},
+        {"text": "微信", "center": (137, 186)},
+        {"text": "Q", "center": (180, 185)},
+        {"text": "+", "center": (1013, 186)},
+        {"text": "llm小组", "center": (279, 700)},
+    ])
+    memory = TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」")
+
+    first = agent._ocr_list_navigate(memory)
+
+    assert first["action_type"] == "wait"
+    assert agent._ocr_list_navigate(memory) is None
+    assert agent._ocr_nav_state["exhausted"] is True
+
+
+def test_wechat_search_entry_uses_yolo_when_ocr_has_no_search_text(tmp_path):
+    """搜索入口只有图标、OCR 读不到文字时，用 YOLO 找到搜索框再点。"""
+    agent = _wechat_agent(tmp_path, WECHAT_TABS + [
+        {"text": "文件传输助手", "center": (279, 700)},
+    ])
+    agent._yolo_search_entry = lambda image: {"center": (549, 194)}
+
+    action = agent._ocr_list_navigate(
+        TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」"))
+
+    assert action["action_type"] == "tap"
+    assert (action["x"], action["y"]) == (549, 194)
+    assert action["localization_source"] == "yolo"
+    assert action["rule"]["name"] == "search_entry"
+    assert agent._ocr_nav_state["search_stage"] == "entry"
+
+
+def test_wechat_search_entry_prefers_ocr_text(tmp_path):
+    """OCR 能读到「搜索」时优先用文字定位，不加载 YOLO。"""
+    agent = _wechat_agent(tmp_path, WECHAT_TABS + [
+        {"text": "搜索", "center": (300, 194)},
+    ])
+    agent._yolo_search_entry = lambda image: {"center": (549, 194)}
+
+    action = agent._ocr_list_navigate(
+        TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」"))
+
+    assert action["action_type"] == "tap"
+    assert (action["x"], action["y"]) == (300, 194)
+    assert action["localization_source"] == "ocr"
+
+
+def test_wechat_search_entry_timeout_falls_back_to_list_scroll(tmp_path):
+    """点了搜索入口但搜索页两次都没出现：放弃搜索，改为列表滚动。"""
+    agent = _wechat_agent(tmp_path, WECHAT_TABS + [
+        {"text": "文件传输助手", "center": (279, 700)},
+    ])
+    agent._ocr_nav_state = {"search_stage": "entry"}
+    memory = TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」")
+
+    assert agent._ocr_list_navigate(memory)["action_type"] == "wait"
+    assert agent._ocr_list_navigate(memory)["action_type"] == "wait"
+
+    action = agent._ocr_list_navigate(memory)
+
+    assert action["action_type"] == "swipe"
+    assert agent._ocr_nav_state["search_tried"] is True
+
+
+def test_wechat_search_page_types_target(tmp_path):
+    agent = _wechat_agent(tmp_path, [
+        {"text": "取消", "center": (985, 196)},
+        {"text": "搜索指定内容", "center": (400, 320)},
+    ])
+
+    action = agent._ocr_list_navigate(
+        TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」"))
+
+    assert action["action_type"] == "type"
+    assert action["text"] == "LLM小组"
+    assert action["search_input"] is True
+    assert action["rule"]["name"] == "ocr_search_type"
+    assert agent._ocr_nav_state["search_typed"] is True
+
+
+def test_wechat_search_page_without_cancel_still_types(tmp_path):
+    """OCR 漏读「取消」时，正文的「搜索指定内容」同样能证明是搜索页。"""
+    agent = _wechat_agent(tmp_path, [
+        {"text": "搜索指定内容", "center": (400, 320)},
+        {"text": "朋友圈", "center": (200, 500)},
+    ])
+
+    action = agent._ocr_list_navigate(
+        TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」"))
+
+    assert action["action_type"] == "type"
+    assert action["rule"]["name"] == "ocr_search_type"
+
+
+def test_wechat_search_page_taps_exact_result_row(tmp_path):
+    """搜索框里的关键词本身不能当成结果行点；只点逐字符一致的群名。"""
+    agent = _wechat_agent(tmp_path, [
+        {"text": "取消", "center": (985, 196)},
+        {"text": "LLM小组", "center": (549, 194)},
+        {"text": "llm小组", "center": (300, 600)},
+        {"text": "LLM小组", "center": (300, 800)},
+    ])
+
+    action = agent._ocr_list_navigate(
+        TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」"))
+
+    assert action["action_type"] == "tap"
+    assert (action["x"], action["y"]) == (300, 800)
+    assert action["ocr_list_hit"] is True
+
+
+def test_wechat_search_without_result_returns_to_list_and_scrolls(tmp_path):
+    agent = _wechat_agent(tmp_path, [
+        {"text": "取消", "center": (985, 196)},
+        {"text": "LLM小组", "center": (549, 194)},
+        {"text": "搜索指定内容", "center": (400, 320)},
+    ])
+    memory = TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」")
+
+    assert agent._ocr_list_navigate(memory)["action_type"] == "type"
+    assert agent._ocr_list_navigate(memory)["action_type"] == "wait"
+    assert agent._ocr_list_navigate(memory)["action_type"] == "wait"
+
+    back = agent._ocr_list_navigate(memory)
+
+    assert back["action_type"] == "back"
+    assert agent._ocr_nav_state["search_tried"] is True
+
+    agent.ocr.entries = WECHAT_TABS + [
+        {"text": "文件传输助手", "center": (279, 700)},
+    ]
+    action = agent._ocr_list_navigate(memory)
+
+    assert action["action_type"] == "swipe"
 
 
 class _PagedPhone:
@@ -590,3 +747,24 @@ def test_qq_search_type_is_allowed_in_read_only():
     assert agent._execute(action) is False
     assert not action.get("blocked")
     assert calls == [("计算机班级群", True)]
+
+
+def test_wechat_search_type_is_allowed_in_read_only():
+    """微信没有控件树：搜索页（顶层有「取消」）的搜索框输入也要放行。"""
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent.read_only = True
+    calls = []
+
+    class _Phone:
+        def type_text(self, text, allow_search=False):
+            calls.append((text, allow_search))
+
+    agent.phone = _Phone()
+
+    action = {
+        "action_type": "type", "text": "LLM小组",
+        "search_input": True, "rule": {"name": "ocr_search_type"},
+    }
+    assert agent._execute(action) is False
+    assert not action.get("blocked")
+    assert calls == [("LLM小组", True)]
