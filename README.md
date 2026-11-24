@@ -313,7 +313,7 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 | `OCR_SCALE` | OCR 输入图缩放比例，默认 0.5；检测框按 `1/scale` 映射回原图，tap 坐标仍是设备坐标 |
 | `OCR_SNAP_MAX_DISTANCE` | 吸附半径（像素），默认 80；超出则保留模型原始坐标 |
 | `SEARCH_ICON_DETECTION` | tap 目标为搜索/联系人时是否补 YOLO 候选，默认开；只有权重含 `search_icon` 类别时才产生搜索图标候选 |
-| `GUI_MODEL_PATH` | YOLO 权重路径，默认 `models/input_box.pt`；指向含 `search_icon` 的权重可启用搜索图标视觉候选 |
+| `GUI_MODEL_PATH` | YOLO 权重路径，默认 `models/input_box.pt`（随仓库分发，含 `input_box` 与 `search_icon`）；换成其它权重时，含 `search_icon` 类别才会启用搜索图标视觉候选 |
 | `OBSERVE_SETTLE_SECONDS` | 动作后等待界面稳定的秒数，默认 1.0 |
 | `HISTORY_IMAGE_WINDOW` / `HISTORY_TEXT_STEPS` | 历史上下文窗口：带最近几张原图（默认 1，当前屏幕始终带图）、更早步骤最多列几条文字摘要（默认 8）；均可用同名环境变量覆盖 |
 | `IMAGE_PREPROCESS` | 截图预处理总开关（默认开）；置 0 时原样发送 PNG |
@@ -565,35 +565,31 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（550 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
+- 测试与工程化：`tests/`（644 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
 输入框定位优先使用 uiautomator2 的控件树（`EditText` 等）；`models/input_box.pt` 是 YOLO 视觉兜底权重。
 
-### 输入框检测权重（可选）
+### 输入框检测权重
 
-权重不随本仓库提供（`.gitignore` 忽略了 `models/` 与 `*.pt`，二进制不会进版本库）。需要视觉兜底时从组长的模型仓库获取：
+`models/input_box.pt` 随仓库分发（约 5.4 MB），是 `input_box` + `search_icon` 两类别模型，`input_detector.py` 按类别名分别产出输入框与搜索图标候选。`.gitignore` 只放行这一个权重文件，其它 `*.pt`（训练产物、本地模型）仍不入库。
 
-```bash
-mkdir -p models
-curl -L -o models/input_box.pt \
-  https://raw.githubusercontent.com/peter-lgxj/gui_yolo_model/main/runs/detect/runs/input_box5/weights/best.pt
-```
-
-- 来源：`peter-lgxj/gui_yolo_model` 的 `runs/detect/runs/input_box5/weights/best.pt`（5.4 MB）
-- 目标路径：`models/input_box.pt`，与 `config.INPUT_BOX_MODEL` 一致，不需要改代码
-- 可选校验（git blob sha1，与模型仓库一致）：
+- 来源：本项目 2026-11-25 在自有截图数据集上训练（YOLO11n，30 epoch，CPU），训练产物不入库，只提交 `best.pt`
+- 验证集（54 张 / 80 个实例）：整体 P 0.929 / R 0.803 / mAP50 0.936 / mAP50-95 0.753；`input_box` mAP50 0.959、`search_icon` mAP50 0.912
+- 真机抽样（6 张微信/QQ 截图）：`input_box` 置信度 0.82–0.96，浅色主题也能检出；旧版权重在同类截图上为 0.21–0.37，且浅色主题漏检
+- 校验值：
 
   ```bash
   git hash-object models/input_box.pt
-  # 期望 2f5adef8fe64be1898363e8d38b5098ff4c62c2a
+  # 期望 7274985afc25368c0989ef69e1af71c60e2c6c15
+
+  sha256sum models/input_box.pt
+  # 期望 435403193CC96FEC4BF72505AB55237D723735898B70B634E8B900A7F02FE2CE
   ```
 
-- 该权重是单类别 `input_box` 的 v1 模型；模型仓库的 `dataset_v2`（`input_box` + `search_icon`）尚无对应权重
-- 搜索图标默认走控件树 / OCR 文本匹配；只有当 `GUI_MODEL_PATH` 指向含 `search_icon` 类别的权重时，YOLO 才会补充搜索图标候选。没有这类权重时搜索入口仍可用，只是少一条视觉兜底
-- 模型仓库未附 LICENSE，公开分发或转存前请先与作者确认
-- 置信度差异：`input_detector.py` 默认 `conf=0.3`，模型仓库的 `test_detector.py` 用 `0.5`；真机误检多时可上调
+- 如仍想用旧版单类别权重：`peter-lgxj/gui_yolo_model` 的 `runs/detect/runs/input_box5/weights/best.pt`（blob sha1 `2f5adef8fe64be1898363e8d38b5098ff4c62c2a`），用 `GUI_MODEL_PATH` 指向即可
+- 置信度：`input_detector.py` 默认 `conf=0.3`；屏幕候选筛选里 `search_icon` 用 0.45、`input_box` 用 0.65。真机误检多时可上调
 - 无权重或加载失败时自动降级到 uiautomator2 控件树（`EditText`）检测，不会中断任务
 
 ## 实验
@@ -693,7 +689,7 @@ CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
 | QQ 通道 | 无官方 API；走手机 UI + 截图 OCR，群列表滚动有上限（`QQ_LIST_MAX_SCROLLS` 默认 8） | 不是 mock，但受 QQ 界面版本影响；不能写成“官方接口” |
 | 三个 baseline（Open-AutoGLM / Mobile-Agent-v2 / AppAgent） | wrapper 已按上游文档写好，协议用假上游测过；**未安装、未实跑** | 报告只能写“未验证”，不能写对比结果或排名 |
 | embedding 语义匹配 | 可选依赖，默认不装、不联网 | 没有 embedding 时用词法匹配；不能写成默认能力 |
-| YOLO 输入框权重 | 外部权重（`models/input_box.pt`），不入库 | 缺权重时输入框视觉兜底不可用；控件树/OCR 主路径不受影响 |
+| YOLO 输入框权重 | 随仓库分发（`models/input_box.pt`，`input_box` + `search_icon` 两类） | 验证集与 6 张真机截图核对过；未做置信度阈值的系统调优 |
 
 ## 已知限制（部分真机验证）
 

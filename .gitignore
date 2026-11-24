@@ -48,9 +48,11 @@ config.local.*
 task_list.md
 todo_list.md
 
-# Local model weights
-models/
+# Local model weights（仅随项目分发的输入框权重入库，其余 *.pt 不入库）
+models/*
+!models/input_box.pt
 *.pt
+!models/input_box.pt
 
 # Per-run evidence (screenshots + step actions)
 runs/

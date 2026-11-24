@@ -101,8 +101,8 @@ API_KEY_ENV = {
 # deepseek 已实测支持图像输入，不在此列
 TEXT_ONLY_PROVIDERS = {"qwen3", "minimax"}
 
-# YOLO 权重默认是单类别 input_box 模型；如另有含 search_icon 类别的权重，
-# 可用 GUI_MODEL_PATH 指向它，否则搜索图标只走控件树/OCR 兜底。
+# 随仓库分发的 YOLO 权重（models/input_box.pt）是 input_box + search_icon 两类别模型；
+# 可用 GUI_MODEL_PATH 指向其它权重，缺权重或加载失败时只走控件树/OCR 兜底。
 INPUT_BOX_MODEL = os.getenv("GUI_MODEL_PATH", "models/input_box.pt")
 
 # 微信输入框的 resource-id 随版本变化，置空则跳过该分支只走通用控件/YOLO 定位
