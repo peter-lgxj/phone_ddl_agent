@@ -48,8 +48,10 @@ class MobileChatConnector:
         agent.tree_unsupported = app_key in {"wechat", "微信", "com.tencent.mm"}
         if str(self.app).lower() == "qq":
             task = (
-                f"打开{self.app}，在消息列表或“联系人 > 群聊”里上下滚动查找「{self.contact}」并进入聊天窗口；"
-                "不要使用搜索框、不要输入中文，不要点名字相似的群。"
+                f"打开{self.app}。先看首屏消息列表或“联系人 > 群聊”里有没有「{self.contact}」："
+                f"有就直接点它进入聊天窗口；没有就用顶部搜索框输入「{self.contact}」，"
+                "在结果里只点名称逐字符完全一致的那一个。只有搜索不可用或没有结果时才滚动列表兜底，"
+                "滚动过程中绝不点开任何不是该名称的会话（尤其不要点名字相似、只有大小写不同的群）。"
                 "向上翻阅最近消息，逐条读出包含截止时间（deadline / due / 截止 / 提交）的"
                 "消息原文与发送者"
             )

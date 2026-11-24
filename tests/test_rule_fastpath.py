@@ -264,14 +264,15 @@ def test_force_search_skips_visible_row():
     assert action["rule"]["name"] == "search_entry"
 
 
-def test_search_disabled_on_slow_dumps_hands_back_to_model():
+def test_search_disabled_falls_back_to_list_scroll():
     state = {}
     action = rule_policy.decide(rule_policy.RuleContext(
         task="打开「COMP7503 作业通知群」", step=1, read_only=True,
         xml=SEARCH_ENTRY_XML, state=state, search_allowed=False))
 
-    # adb_dump 下搜索页 dump 实测更慢：默认不走搜索，交回模型
-    assert action is None
+    # 搜索不可用时才降级为滚动列表；滚动过程只滑不点
+    assert action["rule"]["name"] == "list_scroll"
+    assert action["action_type"] == "swipe"
     assert state.get("search_stage") is None
 
 
@@ -285,11 +286,16 @@ def test_search_result_taps_unique_exact_row():
     assert state["entered_group"] == "COMP7503 作业通知群"
 
 
-def test_search_miss_hands_back_to_model():
+def test_search_miss_backs_out_before_list_fallback():
     state = {"search_stage": "result", "search_attempted": True}
-    assert rule_policy.decide(make_ctx(
-        GROUPS_XML, "打开「不存在的群」", state=state)) is None
+    action = rule_policy.decide(make_ctx(
+        GROUPS_XML, "打开「不存在的群」", state=state))
+
+    # 搜索无结果先退回列表，下一步才滚动兜底；这里不能点任何行
+    assert action["rule"]["name"] == "search_back"
+    assert action["action_type"] == "back"
     assert state["search_failed"] == "no_result"
+    assert state["search_backs"] == 1
 
 
 def test_search_result_prefers_exact_name_over_similar_group():
@@ -351,6 +357,84 @@ def test_search_result_reports_ambiguity_for_similar_name_only():
 
     assert "2026 计算机班级二群" in excinfo.value.candidates
     assert state.get("entered_group") is None
+
+
+def test_label_matches_target_is_case_sensitive_and_ignores_preview():
+    assert rule_policy.label_matches_target("超商书友群, ,253条未读,预览", "超商书友群")
+    assert rule_policy.label_matches_target("超商书友群(3)", "超商书友群")
+    assert not rule_policy.label_matches_target("超商书友群2", "超商书友群")
+    assert not rule_policy.label_matches_target("llm小组", "LLM小组")
+    assert not rule_policy.label_matches_target("2026 计算机班级二群", "2026 计算机班级群")
+
+
+def test_qq_row_with_preview_text_is_exact_group():
+    """QQ 会话行在 adb dump 里是「群名、未读数、预览」拼成的一个节点。"""
+    xml = (
+        '<hierarchy><node bounds="[0,0][1080,2374]">'
+        '<node text="超商书友群, ,253条未读,张万湑: 明天交,00:12" clickable="true" '
+        'bounds="[0,300][1080,420]" />'
+        '</node></hierarchy>'
+    )
+
+    action = rule_policy.decide(make_ctx(xml, "打开「超商书友群」"))
+
+    assert action["rule"]["name"] == "open_group"
+    assert (action["x"], action["y"]) == (540, 360)
+    assert action["target"] == "超商书友群"
+
+
+def test_similar_row_is_never_tapped_when_search_available():
+    """首屏只有近似名时不点它，先走搜索。"""
+    xml = (
+        '<hierarchy><node bounds="[0,0][1080,2374]">'
+        '<node text="搜索" clickable="true" bounds="[0,80][1080,160]" />'
+        '<node text="2026 计算机班级二群" clickable="true" bounds="[0,700][1080,800]" />'
+        '</node></hierarchy>'
+    )
+    state = {}
+
+    action = rule_policy.decide(make_ctx(xml, "打开「2026 计算机班级群」", state=state))
+
+    assert action["rule"]["name"] == "search_entry"
+    assert state["search_stage"] == "entry"
+    assert state.get("entered_group") is None
+
+
+def test_case_variant_row_is_never_tapped_when_search_available():
+    """「LLM小组」与「llm小组」并存时，目标写「LLM小组」不能点成小写那个。"""
+    xml = (
+        '<hierarchy><node bounds="[0,0][1080,2374]">'
+        '<node text="搜索" clickable="true" bounds="[0,80][1080,160]" />'
+        '<node text="llm小组, ,3条未读,10:12" clickable="true" bounds="[0,700][1080,800]" />'
+        '</node></hierarchy>'
+    )
+    state = {}
+
+    action = rule_policy.decide(make_ctx(xml, "打开「LLM小组」", state=state))
+
+    assert action["rule"]["name"] == "search_entry"
+    assert state.get("entered_group") is None
+
+
+def test_list_fallback_scrolls_without_tapping_non_target_rows():
+    """搜索不可用时滚动兜底：只滑不点，非目标群永远拿不到点击。"""
+    xml = (
+        '<hierarchy><node bounds="[0,0][1080,2374]">'
+        '<node text="搜索" clickable="true" bounds="[0,80][1080,160]" />'
+        '<node text="2026 计算机班级二群" clickable="true" bounds="[0,700][1080,800]" />'
+        '<node text="llm小组" clickable="true" bounds="[0,900][1080,1000]" />'
+        '</node></hierarchy>'
+    )
+    ctx = rule_policy.RuleContext(
+        task="打开「2026 计算机班级群」", step=1, read_only=True,
+        xml=xml, search_allowed=False, list_max_scrolls=3,
+    )
+
+    actions = [rule_policy.decide(ctx) for _ in range(3)]
+
+    assert all(item is None or item["action_type"] == "swipe" for item in actions)
+    assert actions[0]["rule"]["name"] == "list_scroll"
+    assert ctx.state["list_failed"] in {"max_scrolls", "stagnant"}
 
 
 def test_rule_action_allows_search_type_but_rejects_message_type(tmp_path, monkeypatch):
