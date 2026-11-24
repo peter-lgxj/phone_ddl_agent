@@ -341,6 +341,31 @@ def find_target_row(xml_text: str, needle: str) -> dict | None:
     return None
 
 
+def find_exact_rows(xml_text: str, needle: str) -> list[dict]:
+    """只返回逐字符一致（忽略空白/标点、区分大小写）的可点击行。"""
+    root = parse_xml(xml_text)
+    if root is None:
+        return []
+    parents = {child: parent for parent in root.iter() for child in parent}
+    wanted = _compact(needle)
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for node in root.iter("node"):
+        text = (node.get("text") or node.get("content-desc") or "").strip()
+        if not text or _compact(text) != wanted:
+            continue
+        clickable = _nearest_clickable(node, parents)
+        if clickable is None:
+            continue
+        bounds = clickable.get("bounds") or ""
+        center = _center(bounds)
+        if not center or bounds in seen:
+            continue
+        seen.add(bounds)
+        rows.append({"text": text, "center": center, "bounds": bounds, "clickable": True})
+    return rows
+
+
 def find_input(xml_text: str, known_resource_ids: tuple[str, ...] = ()) -> dict | None:
     """找已知 resource-id 的输入框；没有已知 id 时退回 EditText。"""
     root = parse_xml(xml_text)
@@ -542,7 +567,9 @@ def decide(ctx: RuleContext) -> dict | None:
         rows: list[dict] = []
         seen_bounds: set[str] = set()
         for item in targets:
-            for row in find_similar_rows(ctx.xml, item):
+            # 搜索结果只接受逐字符一致的候选；大小写不同或近似的名字一律不点，
+            # 否则「LLM小组」的搜索会进到「llm小组」。
+            for row in find_exact_rows(ctx.xml, item):
                 if row["bounds"] in seen_bounds:
                     continue
                 seen_bounds.add(row["bounds"])

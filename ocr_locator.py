@@ -365,25 +365,57 @@ def nearest_element(point, elements, max_distance):
     return best
 
 
+def _match_key(text: str) -> str:
+    """文字比对键：去掉空白与标点，保留大小写（群名要求逐字符一致）。"""
+    return re.sub(r"[^\w\u4e00-\u9fff]+", "", text or "")
+
+
 def target_match_score(element, target: str) -> float:
-    """给候选元素的文字、资源 ID 和无障碍描述打分。"""
-    target = re.sub(r"[^\w]+", "", (target or "").lower())
-    if not target:
+    """给候选元素的文字、资源 ID 和无障碍描述打分。
+
+    两级语义（与真机用例一致）：
+    - 文字逐字符一致（忽略空白/标点）→ 1.0；只有这一级允许自动点进群；
+    - 仅大小写不同、仅包含或高相似 → 0.5~0.69，视为近似候选，不能自动采用；
+    - 大小写一致的包含关系（如「群名(3)」未读数）算强匹配（≥0.8），可吸附；
+    - resource-id 仍按小写匹配（界面 ID 不区分大小写）。
+    """
+    wanted = _match_key(target)
+    if not wanted:
         return 0.0
     best = 0.0
-    for key in ("text", "resource_id", "content_desc"):
-        value = re.sub(r"[^\w]+", "", str(element.get(key) or "").lower())
+    for key in ("text", "content_desc"):
+        value = _match_key(str(element.get(key) or ""))
         if not value:
             continue
-        if target == value:
+        if wanted == value:
             return 1.0
-        if min(len(target), len(value)) >= 2 and (target in value or value in target):
-            best = max(best, 0.8 + 0.2 * min(len(target), len(value)) / max(len(target), len(value)))
-        elif min(len(target), len(value)) >= 4:
-            ratio = SequenceMatcher(None, target, value).ratio()
+        if min(len(wanted), len(value)) >= 2 and (wanted in value or value in wanted):
+            best = max(best, 0.8 + 0.19 * min(len(wanted), len(value))
+                       / max(len(wanted), len(value)))
+            continue
+        if min(len(wanted), len(value)) >= 4:
+            ratio = SequenceMatcher(None, wanted, value).ratio()
             if ratio >= 0.82:
-                best = max(best, ratio * 0.8)
+                best = max(best, ratio * 0.6)
+        folded_wanted, folded_value = wanted.casefold(), value.casefold()
+        if folded_wanted == folded_value:
+            best = max(best, 0.6)
+        elif min(len(folded_wanted), len(folded_value)) >= 2 and folded_wanted in folded_value:
+            best = max(best, 0.5)
+    resource_id = re.sub(r"[^\w]+", "", str(element.get("resource_id") or "")).lower()
+    wanted_id = re.sub(r"[^\w]+", "", target or "").lower()
+    if resource_id and wanted_id:
+        if resource_id == wanted_id:
+            return 1.0
+        if min(len(wanted_id), len(resource_id)) >= 2 and (
+                wanted_id in resource_id or resource_id in wanted_id):
+            best = max(best, 0.8 + 0.19 * min(len(wanted_id), len(resource_id))
+                       / max(len(wanted_id), len(resource_id)))
     return best
+
+
+# 只有 >= 该分数（逐字符一致或大小写一致的完整包含）才允许吸附/点进
+STRONG_MATCH_THRESHOLD = 0.8
 
 
 def element_matches_target(element, target: str) -> bool:
@@ -443,10 +475,14 @@ def resolve_action_element(action, elements, max_distance=80):
                 if element.get("center") and action_element_role_matches(action, element)]
     if target:
         scored = [(target_match_score(element, target), element) for element in eligible]
-        best_score = max((score for score, _ in scored), default=0.0)
-        matches = [element for score, element in scored if score == best_score and score > 0]
-        if not matches:
+        # 只接受强匹配（逐字符一致或大小写一致的包含）；仅大小写不同的候选
+        # 不能拿来吸附，否则会把「LLM小组」的点击落到「llm小组」上。
+        strong = [(score, element) for score, element in scored
+                  if score >= STRONG_MATCH_THRESHOLD]
+        if not strong:
             return None
+        best_score = max(score for score, _ in strong)
+        matches = [element for score, element in strong if score == best_score]
         element = min(matches, key=lambda item:
                       (item["center"][0] - x) ** 2 + (item["center"][1] - y) ** 2)
         distance = ((element["center"][0] - x) ** 2
@@ -495,8 +531,14 @@ def enforce_tap_bounds(action, elements, screen_size):
 
     if target:
         scored = [(target_match_score(element, target), element) for element in eligible]
-        best = max((score for score, _ in scored), default=0.0)
-        matches = [element for score, element in scored if score == best and score > 0]
+        # 只有强匹配才允许采用；仅大小写不同的候选算未定位，不能拿比例坐标硬点
+        strong = [(score, element) for score, element in scored
+                  if score >= STRONG_MATCH_THRESHOLD]
+        if strong:
+            best = max(score for score, _ in strong)
+            matches = [element for score, element in strong if score == best]
+        else:
+            matches, best = [], 0.0
         boxed = [element for element in matches if element.get("bbox")]
         boxes = {tuple(element["bbox"]) for element in boxed}
         if len(boxes) == 1:

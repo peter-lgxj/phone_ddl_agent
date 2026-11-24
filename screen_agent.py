@@ -303,7 +303,13 @@ def _is_qq_task(task: str) -> bool:
 
 
 def _compact_ocr(text: str) -> str:
-    return re.sub(r"[\s\u3000]+", "", text or "").lower()
+    """OCR 文字比对键：只去空白，保留大小写（群名必须逐字符一致）。"""
+    return re.sub(r"[\s\u3000]+", "", text or "")
+
+
+def _unread_suffix_ok(rest: str) -> bool:
+    """群名后只允许「未读数」这类纯数字后缀，避免把「llm小组A」当同一个群。"""
+    return len(rest) <= 4 and all(ch.isdigit() or ch in "()（）[]【】+·. " for ch in rest)
 
 
 # 任务里的时间窗（如“最近14天”）；完成条件必须绑定到窗口下界，而不是看到一条 DDL
@@ -1912,10 +1918,13 @@ class ScreenAgent:
             key = _compact_ocr(target)
             if not key:
                 continue
+            # 两级规则：先找逐字符完全一致的群名；大小写不同的名字不算命中，
+            # 绝不因为大小写不敏感或先出现就点进去。列表里的「未读数」后缀允许（llm小组(3)）。
             exact = [element for text, element in entries if text == key and _is_list_text(text)]
             prefixed = [
                 element for text, element in entries
-                if text.startswith(key) and len(text) <= len(key) + 4 and _is_list_text(text)
+                if text.startswith(key) and _unread_suffix_ok(text[len(key):])
+                and _is_list_text(text)
             ]
             candidates = exact or prefixed
             if not candidates:

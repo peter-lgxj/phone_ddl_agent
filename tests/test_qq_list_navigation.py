@@ -119,6 +119,34 @@ def test_ocr_list_navigation_ignores_similar_group_name(tmp_path):
     assert (action["x"], action["y"]) == (400, 1200)
 
 
+def test_ocr_list_navigation_ignores_case_variant_group(tmp_path):
+    agent = _agent(tmp_path, [
+        {"text": "我创建的群聊 10/12", "center": (100, 200)},
+        {"text": "llm小组", "center": (400, 900)},
+    ])
+    memory = TaskMemory("打开QQ，滚动列表找到「LLM小组」")
+
+    action = agent._ocr_list_navigate(memory)
+
+    # 只有大小写不同的群名不算命中，继续滚动找完全一致的
+    assert action is not None
+    assert action["action_type"] == "swipe"
+
+
+def test_ocr_list_navigation_prefers_exact_case_group(tmp_path):
+    agent = _agent(tmp_path, [
+        {"text": "我创建的群聊 10/12", "center": (100, 200)},
+        {"text": "llm小组", "center": (400, 900)},
+        {"text": "LLM小组", "center": (400, 1200)},
+    ])
+    memory = TaskMemory("打开QQ，滚动列表找到「LLM小组」")
+
+    action = agent._ocr_list_navigate(memory)
+
+    assert action["action_type"] == "tap"
+    assert (action["x"], action["y"]) == (400, 1200)
+
+
 def test_ocr_list_navigation_scrolls_when_target_absent(tmp_path):
     agent = _agent(tmp_path, [
         {"text": "我创建的群聊 10/12", "center": (100, 200)},
