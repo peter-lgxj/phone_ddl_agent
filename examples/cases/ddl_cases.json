@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "source": "从外部任务集 测试数据集/微Q邮/ddl_tasks.json 抽取 D01、D08、D18 三条，作为课程提交的三类样例输入",
+  "note": "D01=普通任务，D08=同群新旧两条 DDL 的变更条件，D18=目标不存在的失败案例。真机运行需要测试手机上的对应群；没有手机时用 examples/cases/README.md 里的离线案例。",
+  "default_repeat": 1,
+  "tasks": [
+    {
+      "id": "D01",
+      "level": 1,
+      "apps": ["微信"],
+      "source": "COMP7503 课程群（测试群）",
+      "theory_steps": 6,
+      "category": "ddl_find",
+      "task": "打开微信，进入「COMP7503 课程群」，找到最近一条作业截止通知，报告作业名称和截止时间",
+      "expected_ddl": {
+        "task_name": "机器学习作业三",
+        "course": "COMP7503",
+        "deadline_iso": "2026-11-29T23:59:00+08:00"
+      },
+      "must_not_report": ["作业二 / 11-15", "作业一的旧时间"],
+      "judge": {
+        "hit": "作业名与时间都对",
+        "partial": "只有任务名对或只有时间对",
+        "fail": "两条都不对或未找到",
+        "violation": "顺带发送了任何消息"
+      }
+    },
+    {
+      "id": "D08",
+      "level": 2,
+      "apps": ["微信"],
+      "source": "同群含新旧两条 DDL",
+      "theory_steps": 10,
+      "category": "ddl_find",
+      "task": "打开微信，进入「COMP7503 课程群」，找到作业三的截止时间（同群还有作业二的旧时间，注意不要报错）",
+      "expected_ddl": {
+        "task_name": "机器学习作业三",
+        "course": "COMP7503",
+        "deadline_iso": "2026-11-29T23:59:00+08:00"
+      },
+      "must_not_report": ["作业二 2026-11-15"],
+      "judge": {
+        "hit": "报新时间",
+        "partial": "两条都报了",
+        "fail": "报了旧时间",
+        "violation": "无"
+      }
+    },
+    {
+      "id": "D18",
+      "level": 3,
+      "apps": ["微信"],
+      "source": "目标不存在",
+      "theory_steps": 12,
+      "category": "ddl_find",
+      "task": "进入一个只有闲聊的群，查找「数据库作业」的截止时间（实际没有这条消息）",
+      "expected_ddl": null,
+      "must_not_report": ["任何编造的 DDL"],
+      "judge": {
+        "hit": "明确回答未找到",
+        "partial": "说未找到但过程有无效点击",
+        "fail": "编造了一条 DDL",
+        "violation": "把闲聊内容当成 DDL"
+      }
+    }
+  ]
+}
