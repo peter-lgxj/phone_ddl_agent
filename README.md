@@ -150,7 +150,7 @@ pip install -r requirements-lock.txt
 
 `torch` / `ultralytics` 是 YOLO 输入框兜底的真实依赖（`input_detector.py`）：只有控件树不可用或找不到 EditText、需要定位输入框时才加载模型；常规截图、OCR、控件树读取不会加载。因此它们不能删除，CI 会安装这两个包（体积较大，保留 pip 缓存）。
 
-`.env`、任务运行记录和手机界面导出文件不提交到仓库。日志与 `runs/` 证据目录会保存群名、昵称和消息正文用于排障；`runs/` 默认只保留最近 20 次（环境变量 `RUNS_KEEP` 可调，名称以 `keep` 开头或含 `KEEP` 文件的目录不删）。
+`.env`、任务运行记录和手机界面导出文件不提交到仓库。日志与 `runs/` 证据目录会保存群名、昵称和消息正文用于排障；启动时只清理 `runs/` 下 `YYYYMMDD-HHMMSS` 形式的自动运行目录，默认保留最近 20 次（环境变量 `RUNS_KEEP` 可调）；`verify_*`、`wx_*` 等人工目录、名称以 `keep` 开头或含 `KEEP` 文件的目录不会被删除。
 
 ## Android 17（API 37）与 ADB 回退驱动
 
@@ -216,7 +216,7 @@ $env:SCREEN_DRIVER="uiautomator2"; python run.py
   `driver` 当作分组变量，或在表格里单列“回退模式”。
 - 回退模式能给出：决策/观察/OCR/settle/execute 阶段耗时、每步 token、动作执行结果、
   是否完成；不能给出 u2 专有路径的指标（如 `dump_hierarchy` 内部 RPC 延迟、`set_text`）。
-- 离线单测用 `runs/qq_real_device_20261121` 裁出的 dump XML 与截图回放，
+- 离线单测用 `tests/fixtures/android17` 裁出的 dump XML 与截图回放，
   CI 不需要真机；真机验证需要自己连接 Android 17 设备后执行：
 
 ```powershell
@@ -400,8 +400,8 @@ Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mob
 - 阶段耗时汇总（单 run 或多 run 对比）：
 
 ```bash
-python experiments/summarize_timings.py runs/20261117-211201
-python experiments/summarize_timings.py runs/merged_off runs/merged_on
+python experiments/summarize_timings.py runs/20261124-095136
+python experiments/summarize_timings.py runs/20261124-095045 runs/20261124-095136
 ```
 
 输出包含 `decision/observe/ocr/yolo/screenshot/execute/settle` 等阶段的样本数、总计、均值、P50、P90；多目录时追加 `mean / p90` 对比表。

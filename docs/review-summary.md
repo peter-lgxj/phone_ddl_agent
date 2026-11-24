@@ -110,7 +110,7 @@ git checkout -b <自己的分支>
 3. 运行前确认 `adb devices` 有设备、`.env` 配好对应的 `*_API_KEY`；无 key 会在启动校验阶段直接报错
 4. 同一台手机不要同时跑 Web 界面和实验 runner：设备锁会阻止并发，抢不到锁的任务会直接失败
 5. 实验前先读 `experiments/README`（若有）与 `test.md`：CS 需要**逐次判定**（`{"T01": [true,false,true]}`），任务级布尔会导致 CS 拒绝计算
-6. `runs/` 会持续增长（每步截图 + JSON），跑批前记得清理或归档
+6. `runs/` 每步截图 + JSON 会持续增长；已限制自动运行目录默认保留 20 次（`RUNS_KEEP` 可调），人工证据目录不参与自动清理
 
 ---
 
