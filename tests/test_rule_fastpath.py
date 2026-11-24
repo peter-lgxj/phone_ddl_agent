@@ -38,6 +38,29 @@ def test_extract_quoted_targets_supports_chinese_and_ascii_quotes():
     assert rule_policy.extract_quoted_targets("没有引号的任务") == []
 
 
+def test_chat_title_reads_group_name_from_top_bar():
+    """进群后标题校验：会话页标题栏读到的就是群名，人数后缀不算。"""
+    assert rule_policy.chat_title(CHAT_XML) == "2026 计算机班级群"
+
+
+def test_chat_title_ignores_message_list_page():
+    """列表页没有会话标题；不能把「消息/联系人/搜索」当群名。"""
+    assert rule_policy.chat_title(GROUPS_XML) == ""
+
+
+def test_chat_title_keeps_case_variant():
+    xml = (
+        '<hierarchy><node bounds="[0,0][1080,2374]">'
+        '<node text="llm小组" clickable="true" bounds="[103,156][488,218]" />'
+        '<node text="" content-desc="返回消息" clickable="true" bounds="[27,154][92,219]" />'
+        '</node></hierarchy>'
+    )
+    title = rule_policy.chat_title(xml)
+    assert title == "llm小组"
+    # 目标是「LLM小组」时，大小写不同的标题不能算命中
+    assert rule_policy.label_matches_target(title, "LLM小组") is False
+
+
 def test_open_group_taps_clickable_row_center():
     state = {}
     action = rule_policy.decide(make_ctx(
@@ -92,8 +115,8 @@ def test_scroll_only_after_entering_target_group():
 
     assert action["action_type"] == "swipe"
     assert action["rule"]["name"] == "scroll"
-    assert (action["x"], action["y"]) == (540, 1780)
-    assert (action["x2"], action["y2"]) == (540, 712)
+    assert (action["x"], action["y"]) == (540, 1946)
+    assert (action["x2"], action["y2"]) == (540, 474)
     assert state["scrolls"] == 1
 
 
@@ -133,9 +156,19 @@ def test_task_keywords_excludes_navigation_group_name():
     assert "作业通知群" not in words
 
 
-def test_scroll_respects_default_max_scrolls_of_two():
-    state = {"entered_group": "2026 计算机班级群", "scrolls": 2}
+def test_scroll_respects_default_max_scrolls():
+    """翻页是只读可判定动作：默认上限放宽到 30，不再两屏就交回模型。"""
+    state = {"entered_group": "2026 计算机班级群", "scrolls": 30}
     assert rule_policy.decide(make_ctx(CHAT_XML, "读取群消息", state=state)) is None
+
+
+def test_scroll_keeps_going_after_two_screens():
+    state = {"entered_group": "2026 计算机班级群", "scrolls": 2,
+             "last_scroll_text": "上一屏不同的文字"}
+    action = rule_policy.decide(make_ctx(CHAT_XML, "读取群消息", state=state))
+    assert action is not None
+    assert action["rule"]["name"] == "scroll"
+    assert state["scrolls"] == 3
 
 
 def test_scroll_respects_max_scrolls():
@@ -569,7 +602,7 @@ def test_two_rule_steps_make_no_model_calls(tmp_path, monkeypatch):
     agent._execute_step(2, memory)
 
     assert ("tap", 540, 1375) in agent.phone.calls
-    assert ("swipe", 540, 1780, 540, 712) in agent.phone.calls
+    assert ("swipe", 540, 1946, 540, 474) in agent.phone.calls
     step1 = json.loads((agent.run_dir / "step_001.json").read_text(encoding="utf-8"))
     step2 = json.loads((agent.run_dir / "step_002.json").read_text(encoding="utf-8"))
     assert step1["timings"]["rule_name"] == "open_group"
