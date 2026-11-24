@@ -434,6 +434,24 @@ def test_update_in_target_group_tracks_entry_and_exit():
     assert agent._in_target_group is False
 
 
+def test_case_variant_model_tap_is_blocked_before_entry():
+    """进群前模型按不区分大小写选了另一个群：必须拦下，不能替用户猜。"""
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent._in_target_group = False
+    memory = TaskMemory("打开微信，进入「LLM小组」读消息")
+
+    assert agent._case_variant_conflict({"target": "llm小组"}, memory) == "llm小组"
+    assert agent._case_variant_conflict({"target": "LLM小组"}, memory) == ""
+
+
+def test_case_variant_tap_allowed_after_entering_group():
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent._in_target_group = True
+    memory = TaskMemory("打开微信，进入「LLM小组」读消息")
+
+    assert agent._case_variant_conflict({"target": "llm小组"}, memory) == ""
+
+
 def test_verify_group_entry_rejects_wrong_chat_title():
     """点击记录说进了群，但标题不是目标群：该步观察不得计入来源。"""
     agent = object.__new__(screen_agent.ScreenAgent)

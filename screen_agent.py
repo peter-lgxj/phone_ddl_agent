@@ -1159,6 +1159,17 @@ class ScreenAgent:
             }
 
         found = resolve_action_element(mapped, candidates, max_distance)
+        conflict = self._case_variant_conflict(
+            mapped, memory, found[0] if found else None)
+        if conflict:
+            print(f"  ⛔ 进群前拒绝点击大小写不同的会话：{conflict}")
+            return {
+                **mapped,
+                "action_type": "wait",
+                "blocked_case_variant": conflict,
+                "thought": f"「{conflict}」与目标任务群只有大小写差异，进入前不点击。",
+                "description": f"拒绝打开大小写不同的「{conflict}」，保持当前界面重新观察",
+            }
         if found:
             snap_source = found[0].get("source", "unknown")
             mapped, moves = snap_action_coords(mapped, candidates, max_distance)
@@ -2264,6 +2275,30 @@ class ScreenAgent:
         rule_name = str((action.get("rule") or {}).get("name") or "")
         return rule_name in {"open_group", "search_result"} or bool(
             action.get("ocr_list_hit"))
+
+    def _case_variant_conflict(self, action: dict, memory: TaskMemory,
+                               element: dict | None = None) -> str:
+        """进群前拦下「只有大小写不同」的会话行。
+
+        微信里同时存在 `LLM小组` 与 `llm小组`；模型/OCR 只要按不区分大小写的
+        方式选了另一个，就必须拦下等人工改目标，而不是替用户猜一个。
+        """
+        if getattr(self, "_in_target_group", False):
+            return ""
+        targets = rule_policy.extract_quoted_targets(getattr(memory, "task", "") or "")
+        if not targets:
+            return ""
+        labels = [str(action.get("target") or "").strip()]
+        if element:
+            labels.append(str(element.get("text") or "").strip())
+            labels.append(str(element.get("label") or "").strip())
+        for label in labels:
+            if not label:
+                continue
+            for target in targets:
+                if label != target and label.casefold() == target.casefold():
+                    return label
+        return ""
 
     def _confirm_group_title(self, memory: TaskMemory) -> bool:
         """进群后用控件树标题硬校验：标题不是目标群就不认为读到了该来源。
