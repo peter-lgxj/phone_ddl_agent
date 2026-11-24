@@ -2253,6 +2253,11 @@ class ScreenAgent:
             if isinstance(rule_state, dict):
                 rule_state["entered_group"] = None
             return
+        rule_name = str((action.get("rule") or {}).get("name") or "")
+        if rule_name == "confirm_group":
+            # 冷启动后直接恢复在目标群：标题已校验过，补记进入状态
+            self._in_target_group = True
+            return
         if action_type != "tap":
             return
         rule_name = str((action.get("rule") or {}).get("name") or "")

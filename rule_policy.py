@@ -42,6 +42,10 @@ _CHAT_CHROME = {
 }
 _CHAT_COUNT_RE = re.compile(r"[（(]\s*\d+\s*[)）]\s*$")
 
+# App 冷启动/恢复时可能停在搜索页或上一次的会话页；这两类页面必须先退回
+# 消息列表，否则搜索入口和列表滚动都会在错误页面上空转。
+_SEARCH_PAGE_MARKERS = ("搜索综合结果", "AI搜索", "搜索指定内容")
+
 # 任务答案关键词：当前屏幕已经出现这些内容时，继续规则滚动没有收益。
 # 「作业通知群」这类群名不会被 _HOMEWORK_RE 命中（作业后面不是序号），
 # 避免标题栏里的群名把滚动永远卡在第 0 步。
@@ -680,6 +684,32 @@ def _list_scroll_action(ctx: RuleContext, state: dict) -> dict | None:
     )
 
 
+def _stale_page_action(ctx: RuleContext, targets: list[str]) -> dict | None:
+    """处理「打开 App 后不是消息列表」的残留页面。
+
+    - 搜索页：退回消息列表，重新走搜索；
+    - 其他会话页：退回消息列表；
+    - 恰好是目标群：补记 entered_group 并等待一帧，下一步继续上滑读消息。
+    """
+    text = screen_text(ctx.xml)
+    if any(marker in text for marker in _SEARCH_PAGE_MARKERS):
+        ctx.state["search_stage"] = None
+        return _action("back", "leave_search",
+                       "规则快路：当前停在搜索页，先返回消息列表")
+    title = chat_title(ctx.xml)
+    if not title:
+        return None
+    if any(label_matches_target(title, target) for target in targets):
+        ctx.state["entered_group"] = title
+        ctx.state["scrolls"] = 0
+        ctx.state["last_scroll_text"] = ""
+        ctx.state["stagnant"] = 0
+        return _action("wait", "confirm_group",
+                       f"规则快路：当前已在目标群「{title}」，继续读取")
+    return _action("back", "leave_stale_chat",
+                   f"规则快路：当前停在「{title}」，先返回消息列表")
+
+
 def decide(ctx: RuleContext) -> dict | None:
     """按优先级判断本步能否走规则；返回动作或 None（交回 VLM）。"""
     state = ctx.state
@@ -694,6 +724,14 @@ def decide(ctx: RuleContext) -> dict | None:
         return _action("back", "back_after_miss", "规则快路：上一步目标未定位，返回上一级")
 
     targets = extract_quoted_targets(ctx.task)
+
+    # 1b) 冷启动/重启后可能停在搜索页，或恢复成上一次的会话页：先退回消息列表。
+    #     已经停在目标群时补记 entered_group，避免把标题当列表行再点一次。
+    #     已处于搜索流程中时不判残留，否则会把搜索落地页当成残留页反复返回。
+    if not state.get("entered_group") and not state.get("search_stage"):
+        stale = _stale_page_action(ctx, targets)
+        if stale is not None:
+            return stale
 
     # 2a) 搜索流程：点搜索入口 → 输入精确名称 → 点唯一结果。
     #     首屏没有逐字符一致的群名、或显式强制搜索时才启用。

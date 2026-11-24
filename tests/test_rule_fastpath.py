@@ -38,6 +38,47 @@ def test_extract_quoted_targets_supports_chinese_and_ascii_quotes():
     assert rule_policy.extract_quoted_targets("没有引号的任务") == []
 
 
+SEARCH_PAGE_XML = (
+    '<hierarchy><node bounds="[0,0][1080,2374]">'
+    '<node text="搜索综合结果（人/群/频道等更多内容）" bounds="[0,200][1080,260]" />'
+    '<node text="联系人 > 群聊" bounds="[0,300][1080,360]" />'
+    '<node text="AI搜索" bounds="[0,400][1080,460]" />'
+    '</node></hierarchy>'
+)
+
+
+def test_stale_search_page_backs_out_before_list_scroll():
+    action = rule_policy.decide(
+        make_ctx(SEARCH_PAGE_XML, "打开QQ，搜索「逗鱼时刻素材3群」并进入"))
+    assert action is not None
+    assert action["action_type"] == "back"
+    assert action["rule"]["name"] == "leave_search"
+
+
+def test_stale_other_chat_page_backs_out_to_list():
+    action = rule_policy.decide(make_ctx(CHAT_XML, "打开QQ，进入「超商书友群」读消息"))
+    assert action is not None
+    assert action["action_type"] == "back"
+    assert action["rule"]["name"] == "leave_stale_chat"
+
+
+def test_restored_target_chat_is_confirmed_instead_of_reopened():
+    state: dict = {}
+    action = rule_policy.decide(
+        make_ctx(CHAT_XML, "打开QQ，进入「2026 计算机班级群」读消息", state=state))
+    assert action is not None
+    assert action["rule"]["name"] == "confirm_group"
+    assert state["entered_group"] == "2026 计算机班级群"
+
+
+def test_search_stage_is_not_treated_as_stale_page():
+    """刚点开搜索落地页时不能判成残留页来回退，否则会搜索/返回死循环。"""
+    state = {"search_stage": "entry"}
+    action = rule_policy.decide(
+        make_ctx(SEARCH_PAGE_XML, "打开QQ，搜索「逗鱼时刻素材3群」并进入", state=state))
+    assert action is None or action["rule"]["name"] != "leave_search"
+
+
 def test_extract_quoted_targets_prefers_group_brackets_over_ui_path():
     """任务文案同时引用界面路径和目标群时，只把「」里的群名当目标。"""
     task = (
@@ -109,7 +150,9 @@ def test_chat_page_with_input_box_never_taps_group_title():
     # 会话页标题「2026 计算机班级群」可点击且与任务群名一致；已有输入框时不得当群列表行点
     action = rule_policy.decide(make_ctx(
         CHAT_XML, "在「2026 计算机班级群」里找实验报告二的截止时间"))
-    assert action is None
+    assert action is not None
+    assert action["action_type"] == "wait"
+    assert action["rule"]["name"] == "confirm_group"
 
 
 def test_title_bar_row_is_rejected_even_without_input_box():
@@ -121,7 +164,10 @@ def test_title_bar_row_is_rejected_even_without_input_box():
         'clickable="true" bounds="[100,900][900,1000]" />'
         '</node></hierarchy>'
     )
-    assert rule_policy.decide(make_ctx(xml, "打开「2026 计算机班级群」")) is None
+    action = rule_policy.decide(make_ctx(xml, "打开「2026 计算机班级群」"))
+    assert action is not None
+    assert action["action_type"] == "wait"
+    assert action["rule"]["name"] == "confirm_group"
 
 
 def test_scroll_only_after_entering_target_group():
