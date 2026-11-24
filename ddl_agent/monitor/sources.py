@@ -9,7 +9,7 @@ from ..connectors.base import SourceError
 from ..connectors.mobile_reading import build_mobile_messages
 from ..models import RawMessage, RetrievalPlan
 from ..settings import TZ
-from .config import APP_LABELS, MonitorConfig, MonitorSource
+from .config import APP_LABELS, MonitorConfig, MonitorSource, source_display_name
 
 _NOT_FOUND_STATUS = {"not_found", "target_not_found", "missing_target"}
 
@@ -122,12 +122,13 @@ class MobileAppSource:
         return self.agent
 
     def _messages_from_steps(self, agent) -> list[RawMessage]:
-        app = APP_LABELS.get(self.source.app, self.source.app)
         return build_mobile_messages(
             agent,
-            source_name=self.source.target,
+            # 只用 target 会让「微信 / 课程群」和「QQ / 课程群」在冲突裁决里
+            # 被当成同一来源；展示名带上 App 才能区分。
+            source_name=source_display_name(self.source),
             source_type=self.source.source_type,
-            subject=f"{app} / {self.source.target}",
+            subject=f"{APP_LABELS.get(self.source.app, self.source.app)} / {self.source.target}",
             thread_id=self.source.id,
             now=self.now or datetime.now(TZ),
         )

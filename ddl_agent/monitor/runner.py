@@ -11,11 +11,11 @@ from ..connectors.base import SourceError
 from ..dedupe import Deduplicator
 from ..factory import build_components
 from ..llm.client import UsageTracker
-from ..models import ResolvedRecord
+from ..models import DeadlineCandidate, ResolvedRecord
 from ..settings import TZ
 from ..writer.xlsx_writer import XlsxWriter
 from ..output import PhoneCalendarWriter, export_outputs
-from .config import MonitorConfig, MonitorSource
+from .config import MonitorConfig, MonitorSource, source_display_name
 from .cursor import (
     CandidateStore,
     CursorStore,
@@ -97,6 +97,8 @@ def run_cycle(config: MonitorConfig, config_path: str | Path | None = None,
     # 旧版状态文件没持久化 is_correction，按消息正文补回，避免「更正」被旧值覆盖
     backfilled = backfill_correction_flags(candidate_store.all(), message_store)
     if backfilled:
+        # 回填结果必须落盘，否则每轮都从同一份旧状态重新回填
+        candidate_store.rewrite()
         print(f"  ℹ️  回填 {backfilled} 条历史候选的「更正」标记")
 
     result = CycleResult(
@@ -135,13 +137,21 @@ def run_cycle(config: MonitorConfig, config_path: str | Path | None = None,
         _write_cycle(out, cycle_id, result)
         return result
 
-    clusters = Deduplicator().cluster(candidate_store.all())
+    # 只处理当前配置里仍存在、且目标未被改名的来源；否则删除/改目标后旧 DDL
+    # 还会继续从 candidates.jsonl 里被写进表格和日历。
+    candidates = _active_candidates(config, candidate_store, message_store)
+    clusters = Deduplicator().cluster(candidates)
     outcome = components["resolver"].resolve(clusters, plan=None, retrieval=None)
     result.records = outcome.records
 
     try:
         writer = XlsxWriter(out / "deadlines.xlsx")
-        write_result = writer.upsert(result.records, timestamp=started)
+        # xlsx 是「读旧表再合并」，不给出有效证据集合时已删来源的旧行会残留
+        write_result = writer.upsert(
+            result.records,
+            timestamp=started,
+            keep_evidence_ids={candidate.candidate_id for candidate in candidates},
+        )
         result.write_ok = write_result.ok
         result.inserted = write_result.inserted
         result.updated = write_result.updated
@@ -172,6 +182,43 @@ def run_cycle(config: MonitorConfig, config_path: str | Path | None = None,
     result.status = "partial" if result.errors else "ok"
     _write_cycle(out, cycle_id, result)
     return result
+
+
+def _active_candidates(config: MonitorConfig, candidates: CandidateStore,
+                       messages: MessageStore) -> list[DeadlineCandidate]:
+    """只保留仍属于当前启用来源的候选。
+
+    改目标（保留 id）或删除来源后，``candidates.jsonl`` 里的旧候选仍在；
+    不过滤会继续把旧 DDL 写进 xlsx / data.json / 日历。判定用消息的来源 id
+    加当前展示名双保险：id 没变但目标改名时，旧目标的候选也会被丢弃。
+    旧版本只用 target 作 source_name，这里同时接受该兼容写法，升级后不会
+    把已有状态一次性清空。
+    """
+    expected = {
+        source.id: (source_display_name(source), source.target)
+        for source in config.sources if source.enabled
+    }
+    display_names = {name for name, _target in expected.values()}
+    legacy_names = {target for _name, target in expected.values()}
+
+    kept: list[DeadlineCandidate] = []
+    for candidate in candidates.all():
+        message = messages.get(candidate.message_id)
+        if message is None:
+            # 消息库已被清理（例如 reset-cursor）时，仅凭来源名判断
+            if candidate.source_name in display_names | legacy_names:
+                kept.append(candidate)
+            continue
+        if message.thread_id is not None:
+            names = expected.get(message.thread_id)
+            if names is None:
+                continue
+            if message.source_name and message.source_name not in names:
+                continue
+        elif message.source_name and message.source_name not in display_names | legacy_names:
+            continue
+        kept.append(candidate)
+    return kept
 
 
 def _failed_entry(source: MonitorSource, message: str) -> dict:

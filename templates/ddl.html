@@ -5,117 +5,868 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>手机 DDL 日历</title>
   <style>
-    :root{font-family:system-ui,"Microsoft YaHei",sans-serif;color:#17233b;background:#f4f7fb}
-    *{box-sizing:border-box}body{margin:0}header{background:#17233b;color:white;padding:22px max(20px,calc((100% - 1100px)/2))}
-    header h1{margin:0 0 5px;font-size:24px}header p{margin:0;color:#cbd5e1;font-size:14px}
-    main{max-width:1100px;margin:24px auto;padding:0 16px}.card{background:white;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin-bottom:16px}
-    h2{font-size:17px;margin:0 0 14px}form{display:flex;gap:8px;flex-wrap:wrap}input{flex:1;min-width:260px;border:1px solid #cbd5e1;border-radius:8px;padding:10px;font:inherit}
-    button{border:0;border-radius:8px;background:#2563eb;color:white;padding:10px 16px;font:inherit;cursor:pointer}button:disabled{opacity:.5;cursor:wait}
-    #sources{padding-left:20px;line-height:1.8}#message{white-space:pre-wrap;color:#475569}#message.error{color:#b91c1c}
-    .toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.muted{color:#64748b;font-size:14px}
-    .modes{display:flex;align-items:center;gap:16px;margin:10px 0}.modes label{display:flex;align-items:center;gap:6px}
-    #schedule{flex:0 0 150px;min-width:0}
-    iframe{width:100%;height:720px;border:1px solid #e2e8f0;border-radius:10px;background:white}
+    :root{
+      --bg:#f2f5fa; --card:#fff; --text:#16233a; --muted:#64748b; --line:#e3e9f2;
+      --accent:#2563eb; --accent-soft:#eff5ff; --ok:#059669; --ok-soft:#ecfdf5;
+      --warn:#b45309; --warn-soft:#fff7ed; --bad:#b91c1c; --bad-soft:#fef2f2;
+      --wechat:#07c160; --qq:#12b7f5; --outlook:#0f6cbd;
+      --radius:16px; --shadow:0 1px 2px rgba(16,35,58,.04),0 8px 24px -12px rgba(16,35,58,.18);
+      font-family:"PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+    }
+    *{box-sizing:border-box}
+    [hidden]{display:none !important}
+    html,body{margin:0}
+    body{
+      background:
+        radial-gradient(1200px 420px at 12% -10%, #e6efff 0%, transparent 60%),
+        radial-gradient(900px 360px at 92% 0%, #eafaf1 0%, transparent 55%),
+        var(--bg);
+      color:var(--text); font-size:15px; line-height:1.6;
+      -webkit-font-smoothing:antialiased;
+    }
+    .wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+    header.site{border-bottom:1px solid rgba(226,232,240,.8);background:rgba(255,255,255,.72);backdrop-filter:blur(10px);position:sticky;top:0;z-index:20}
+    .site .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-top:14px;padding-bottom:14px}
+    .brand{display:flex;align-items:center;gap:12px;min-width:0}
+    .mark{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;color:#fff;font-weight:700;font-size:13px;letter-spacing:.5px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);box-shadow:0 6px 16px -6px rgba(37,99,235,.7);flex:none}
+    .brand h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.2px}
+    .brand p{margin:0;font-size:12.5px;color:var(--muted)}
+    .pill{display:inline-flex;align-items:center;gap:8px;padding:7px 14px;border-radius:999px;font-size:13px;font-weight:550;border:1px solid var(--line);background:var(--card);color:var(--muted);white-space:nowrap}
+    .pill .dot{width:8px;height:8px;border-radius:50%;background:#94a3b8;flex:none}
+    .pill[data-state="running"]{color:var(--accent);border-color:#bfdbfe;background:var(--accent-soft)}
+    .pill[data-state="running"] .dot{background:var(--accent);animation:pulse 1.4s infinite}
+    .pill[data-state="error"]{color:var(--bad);border-color:#fecaca;background:var(--bad-soft)}
+    .pill[data-state="error"] .dot{background:var(--bad)}
+    .pill[data-state="done"]{color:var(--ok);border-color:#bbf7d0;background:var(--ok-soft)}
+    .pill[data-state="done"] .dot{background:var(--ok)}
+    @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(37,99,235,.45)}50%{box-shadow:0 0 0 6px rgba(37,99,235,0)}}
+
+    main.wrap{display:flex;flex-direction:column;gap:18px;padding-top:24px;padding-bottom:56px}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:22px 24px}
+    .card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:6px}
+    h2{font-size:16px;margin:0;font-weight:650;display:flex;align-items:center;gap:10px}
+    .step{width:22px;height:22px;border-radius:7px;background:var(--accent-soft);color:var(--accent);font-size:12px;font-weight:700;display:grid;place-items:center;flex:none}
+    .hint{color:var(--muted);font-size:13px;margin:6px 0 16px}
+    .count{font-size:12.5px;color:var(--muted);background:#f1f5f9;border-radius:999px;padding:3px 10px}
+
+    .seg{display:inline-flex;background:#eef2f8;border-radius:12px;padding:4px;gap:2px;margin-bottom:16px}
+    .seg label{position:relative;cursor:pointer}
+    .seg input{position:absolute;opacity:0;width:1px;height:1px}
+    .seg span{display:block;padding:8px 18px;border-radius:9px;font-size:14px;color:var(--muted);transition:background .18s,color .18s,box-shadow .18s;user-select:none}
+    .seg input:checked+span{background:#fff;color:var(--text);font-weight:600;box-shadow:0 1px 3px rgba(16,35,58,.14)}
+    .seg input:focus-visible+span{outline:2px solid var(--accent);outline-offset:2px}
+
+    form.entry{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .field{flex:1 1 320px;position:relative;min-width:0}
+    .field input{width:100%;border:1px solid #cfd9e8;border-radius:11px;padding:12px 14px;font:inherit;background:#fbfdff;transition:border-color .16s,box-shadow .16s,background .16s}
+    .field input::placeholder{color:#94a3b8}
+    .field input:focus{outline:none;border-color:var(--accent);background:#fff;box-shadow:0 0 0 4px rgba(37,99,235,.12)}
+    #schedule{flex:0 0 128px;min-width:0;border:1px solid #cfd9e8;border-radius:11px;padding:12px 14px;font:inherit;background:#fbfdff}
+    #schedule:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 4px rgba(37,99,235,.12)}
+
+    button{font:inherit;border:0;cursor:pointer;border-radius:11px;transition:transform .06s,background .16s,color .16s,border-color .16s,box-shadow .16s}
+    button:active:not(:disabled){transform:translateY(1px)}
+    button:disabled{cursor:not-allowed;opacity:.55}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;padding:11px 20px;font-weight:600;background:var(--accent);color:#fff;box-shadow:0 6px 16px -8px rgba(37,99,235,.8)}
+    .btn:hover:not(:disabled){background:#1d4ed8}
+    .btn.ghost{background:#f6f8fc;color:var(--text);border:1px solid var(--line);box-shadow:none;font-weight:550}
+    .btn.ghost:hover:not(:disabled){background:#eef2f9;border-color:#cbd5e1}
+    .btn .spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;display:none;animation:spin .7s linear infinite}
+    .btn.ghost .spin{border-color:rgba(22,35,58,.22);border-top-color:var(--text)}
+    .btn[aria-busy="true"] .spin{display:block}
+    .btn[aria-busy="true"] .label{opacity:.85}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    ul.sources{list-style:none;margin:18px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
+    li.source{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:13px;padding:12px 14px;background:#fcfdff;transition:border-color .16s,background .16s}
+    li.source:hover{border-color:#cfe0f7;background:#fbfdff}
+    li.source[data-off="1"]{background:#f8fafc;border-style:dashed}
+    li.source[data-off="1"] .meta,li.source[data-off="1"] .name{color:#94a3b8}
+    .badge{flex:none;font-size:12px;font-weight:650;padding:4px 10px;border-radius:8px;color:#fff;letter-spacing:.2px}
+    .badge[data-app="wechat"]{background:var(--wechat)}
+    .badge[data-app="qq"]{background:var(--qq)}
+    .badge[data-app="outlook"]{background:var(--outlook)}
+    .grow{flex:1;min-width:0}
+    .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .meta{font-size:12.5px;color:var(--muted)}
+    .row-actions{display:flex;align-items:center;gap:6px;flex:none}
+    .icon-btn{background:transparent;border:1px solid transparent;color:var(--muted);padding:7px 11px;font-size:13px;border-radius:9px}
+    .icon-btn:hover:not(:disabled){background:#f1f5f9;color:var(--text);border-color:var(--line)}
+    .icon-btn.danger:hover:not(:disabled){background:var(--bad-soft);color:var(--bad);border-color:#fecaca}
+    .icon-btn.confirm{background:var(--bad);color:#fff}
+    .icon-btn.confirm:hover:not(:disabled){background:#991b1b;color:#fff}
+
+    .switch{position:relative;display:inline-flex;flex:none;width:42px;height:24px;cursor:pointer}
+    .switch input{position:absolute;opacity:0;width:0;height:0}
+    .switch span{position:absolute;inset:0;background:#cbd5e1;border-radius:999px;transition:background .18s}
+    .switch span::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(16,35,58,.3);transition:transform .18s}
+    .switch input:checked+span{background:var(--ok)}
+    .switch input:checked+span::after{transform:translateX(18px)}
+    .switch input:focus-visible+span{outline:2px solid var(--accent);outline-offset:2px}
+    .switch input:disabled+span{opacity:.5;cursor:not-allowed}
+
+    .empty{border:1px dashed #d6e1f0;border-radius:13px;padding:20px;text-align:center;color:var(--muted);font-size:13.5px;margin-top:18px;background:#fbfdff}
+    .empty b{display:block;color:var(--text);font-size:14px;margin-bottom:4px;font-weight:600}
+    .skel{height:62px;border-radius:13px;background:linear-gradient(90deg,#eef2f8 25%,#f7f9fc 37%,#eef2f8 63%);background-size:400% 100%;animation:shimmer 1.3s ease infinite;border:1px solid var(--line)}
+    @keyframes shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
+
+    .toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+    .toolbar .hint{margin:0}
+    .status{border:1px solid var(--line);border-radius:13px;padding:14px 16px;background:#fbfdff;font-size:14px}
+    .status[data-kind="running"]{border-color:#bfdbfe;background:var(--accent-soft)}
+    .status[data-kind="ok"]{border-color:#bbf7d0;background:var(--ok-soft)}
+    .status[data-kind="partial"]{border-color:#fed7aa;background:var(--warn-soft)}
+    .status[data-kind="failed"]{border-color:#fecaca;background:var(--bad-soft)}
+    .status .title{font-weight:650;display:flex;align-items:center;gap:8px}
+    .status .sub{color:var(--muted);font-size:13px;margin-top:4px}
+    .status[data-kind="failed"] .title{color:var(--bad)}
+    .status[data-kind="partial"] .title{color:var(--warn)}
+    .status[data-kind="ok"] .title{color:var(--ok)}
+    .status[data-kind="running"] .title{color:var(--accent)}
+    .bar{height:6px;border-radius:99px;background:#e2e8f0;overflow:hidden;margin-top:12px}
+    .bar>i{display:block;height:100%;width:38%;border-radius:99px;background:linear-gradient(90deg,#60a5fa,#2563eb);animation:slide 1.25s ease-in-out infinite}
+    @keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}
+
+    .results{margin-top:16px;display:flex;flex-direction:column;gap:8px}
+    .result-row{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:11px;padding:10px 12px;font-size:13.5px;background:#fff;flex-wrap:wrap}
+    .result-row .counts{color:var(--muted);font-size:12.5px}
+    .chip{font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px;flex:none}
+    .chip.ok{background:var(--ok-soft);color:var(--ok)}
+    .chip.partial{background:var(--warn-soft);color:var(--warn)}
+    .chip.failed{background:var(--bad-soft);color:var(--bad)}
+    .result-row .err{flex-basis:100%;color:var(--bad);font-size:12.5px}
+    .errors{margin:14px 0 0;padding:12px 14px;border-radius:11px;background:var(--bad-soft);color:var(--bad);font-size:13px;white-space:pre-wrap}
+    .errors b{display:block;margin-bottom:4px}
+
+    .cal-shell{position:relative;border:1px solid var(--line);border-radius:13px;overflow:hidden;background:#fbfdff}
+    iframe#calendar{display:block;width:100%;border:0;height:clamp(520px,74vh,900px);background:#fff}
+    .cal-skel{position:absolute;inset:0;display:grid;place-items:center;background:#fbfdff;color:var(--muted);font-size:13.5px;gap:10px}
+    .cal-skel .ring{width:26px;height:26px;border-radius:50%;border:3px solid #dbeafe;border-top-color:var(--accent);animation:spin .8s linear infinite}
+    .cal-empty{border:1px dashed #d6e1f0;border-radius:13px;padding:38px 20px;text-align:center;color:var(--muted);background:#fbfdff}
+    .cal-empty b{display:block;color:var(--text);font-size:15px;margin-bottom:6px}
+
+    #toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,18px);background:#16233a;color:#fff;padding:11px 18px;border-radius:12px;font-size:13.5px;box-shadow:0 10px 30px -10px rgba(16,35,58,.6);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:50;max-width:min(560px,calc(100vw - 32px));text-align:center}
+    #toast[data-show="1"]{opacity:1;transform:translate(-50%,0)}
+    #toast[data-tone="error"]{background:#991b1b}
+    #toast[data-tone="warn"]{background:#92400e}
+
+    @media (max-width:720px){
+      body{font-size:14.5px}
+      .wrap{padding:0 14px}
+      .site .wrap{padding-top:10px;padding-bottom:10px}
+      .brand p{display:none}
+      .card{padding:18px 16px;border-radius:14px}
+      .field{flex-basis:100%}
+      #schedule{flex:1 1 100%}
+      form.entry .btn{width:100%}
+      li.source{flex-wrap:wrap;gap:10px}
+      .grow{flex-basis:calc(100% - 90px)}
+      .row-actions{margin-left:auto}
+      iframe#calendar{height:min(72vh,680px)}
+    }
+    @media (prefers-reduced-motion:reduce){
+      *{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important}
+    }
   </style>
 </head>
 <body>
-<header><h1>手机 DDL 日历</h1><p>通过手机智能体读取指定会话，整理截止时间并在日历中查看</p></header>
-<main>
-  <section class="card"><h2>1. 填写检索目标</h2>
-    <p class="muted">“仅扫描一次”不会保存目标；“定期”才会写入本机 sources.yaml，供后续调度使用。</p>
-    <div class="modes">
-      <label><input type="radio" name="mode" value="once" checked> 仅扫描一次</label>
-      <label><input type="radio" name="mode" value="recurring"> 定期</label>
-      <input id="schedule" value="每6小时" aria-label="定期周期" hidden>
+<header class="site">
+  <div class="wrap">
+    <div class="brand">
+      <div class="mark" aria-hidden="true">DDL</div>
+      <div>
+        <h1>手机 DDL 日历</h1>
+        <p>读取微信 / QQ / Outlook 会话，整理截止时间并汇成日历</p>
+      </div>
     </div>
-    <form id="source-form"><input id="source-text" required placeholder="例如：QQ「COMP7503 作业通知群」，最近14天" aria-label="检索目标"><button id="add-source" type="submit" hidden>添加为定期目标</button></form>
-    <ul id="sources"></ul>
+    <div class="pill" id="conn" data-state="idle" role="status" aria-live="polite">
+      <span class="dot" aria-hidden="true"></span><span id="conn-text">空闲</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="card" aria-labelledby="t-targets">
+    <div class="card-head">
+      <h2 id="t-targets"><span class="step" aria-hidden="true">1</span>检索目标</h2>
+      <span class="count" id="saved-count">0 个已保存</span>
+    </div>
+    <p class="hint">「仅扫描一次」不会保存目标；「定期保存」会写入本机 sources.yaml，供后续扫描与调度使用。</p>
+
+    <div class="seg" role="radiogroup" aria-label="扫描模式">
+      <label><input type="radio" name="mode" value="once" checked><span>仅扫描一次</span></label>
+      <label><input type="radio" name="mode" value="recurring"><span>定期保存</span></label>
+    </div>
+
+    <form class="entry" id="source-form" novalidate>
+      <div class="field">
+        <input id="source-text" autocomplete="off" aria-label="检索目标"
+               placeholder="例如：QQ「COMP7503 作业通知群」，最近14天">
+      </div>
+      <input id="schedule" value="每6小时" aria-label="定期周期" hidden>
+      <button class="btn" id="add-source" type="submit"><span class="spin" aria-hidden="true"></span><span class="label">立即扫描</span></button>
+    </form>
+    <div id="sources-region" aria-live="polite">
+      <ul class="sources" id="sources"></ul>
+      <div id="sources-fallback"></div>
+    </div>
   </section>
-  <section class="card"><div class="toolbar"><h2>2. 扫描并整理 DDL</h2><button id="scan">开始扫描</button></div>
-    <p class="muted">扫描时请保持手机解锁、USB 调试已授权。仅扫描一次只读取本轮填写的目标；定期模式读取已保存的目标。</p><div id="message" role="status"></div>
+
+  <section class="card" aria-labelledby="t-scan">
+    <div class="toolbar">
+      <div>
+        <h2 id="t-scan"><span class="step" aria-hidden="true">2</span>扫描已保存目标</h2>
+        <p class="hint">扫描时请保持手机解锁、USB 调试已授权。单次扫描只读取本次填写的目标。</p>
+      </div>
+      <button class="btn" id="scan" type="button"><span class="spin" aria-hidden="true"></span><span class="label">开始扫描</span></button>
+    </div>
+    <div class="status" id="scan-status" data-kind="idle" aria-live="polite"></div>
+    <div class="results" id="scan-results"></div>
   </section>
-  <section class="card"><div class="toolbar"><h2>3. 日历</h2><a href="/ddl/calendar" target="_blank" rel="noopener">在新窗口打开</a></div>
-    <div id="empty" class="muted">完成扫描后，日历会显示在这里。</div><iframe id="calendar" title="DDL 日历" hidden></iframe>
+
+  <section class="card" aria-labelledby="t-cal">
+    <div class="toolbar">
+      <div>
+        <h2 id="t-cal"><span class="step" aria-hidden="true">3</span>日历</h2>
+        <p class="hint" id="cal-meta">完成扫描后，日历会显示在这里。</p>
+      </div>
+      <div class="row-actions">
+        <button class="btn ghost" id="cal-refresh" type="button">刷新</button>
+        <a class="btn ghost" id="cal-open" href="/ddl/calendar" target="_blank" rel="noopener" hidden>在新窗口打开</a>
+      </div>
+    </div>
+    <div class="cal-empty" id="cal-empty">
+      <b>还没有日历</b>
+      填写检索目标并完成一次扫描，这里会展示按月排布的截止时间。
+    </div>
+    <div class="cal-shell" id="cal-shell" hidden>
+      <iframe id="calendar" title="DDL 日历" loading="lazy"></iframe>
+      <div class="cal-skel" id="cal-skel"><span class="ring" aria-hidden="true"></span>正在载入日历…</div>
+    </div>
   </section>
 </main>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
 <script>
-const $ = id => document.getElementById(id);
-let calendarLoaded = false;
-let lastCycle = null;
-async function api(url, options) {
-  const response = await fetch(url, options);
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || '请求失败');
-  return data;
-}
-function showError(error) { $('message').textContent = error.message; $('message').className = 'error'; }
-function scanMode() { return document.querySelector('input[name="mode"]:checked').value; }
-function toggleMode() {
-  const recurring = scanMode() === 'recurring';
-  $('schedule').hidden = !recurring;
-  $('add-source').hidden = !recurring;
-  $('source-text').placeholder = recurring
-    ? '例如：定期读取 QQ「COMP7503 作业通知群」，最近14天，每6小时一次'
-    : '例如：QQ「COMP7503 作业通知群」，最近14天';
-  $('scan').textContent = recurring ? '扫描已保存目标' : '扫描本次目标';
-}
-document.querySelectorAll('input[name="mode"]').forEach(input => input.addEventListener('change', toggleMode));
-toggleMode();
-async function refresh() {
-  try {
-    const data = await api('/api/ddl');
-    $('sources').replaceChildren();
-    data.sources.forEach(source => {
-      const li = document.createElement('li');
-      li.textContent = `${source.app} / ${source.target} · 最近 ${source.lookback_days} 天 `;
-      const remove = document.createElement('button');
-      remove.textContent = '删除'; remove.type = 'button'; remove.disabled = data.running;
-      remove.addEventListener('click', async () => {
-        try { await api('/api/ddl/sources/' + encodeURIComponent(source.id), {method:'DELETE'}); await refresh(); }
-        catch(error) { showError(error); }
-      });
-      li.append(remove);
-      $('sources').append(li);
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const APP = {wechat: '微信', qq: 'QQ', outlook: 'Outlook'};
+  const KIND = {group: '群聊', private: '联系人', inbox: '收件箱'};
+
+  const state = {
+    data: null,
+    sourcesSig: '',
+    confirmId: null,
+    confirmTimer: null,
+    busy: false,
+    scanStarting: false,
+    scanTimer: null,
+    pollTimer: null,
+    polling: false,
+    calendarKey: null,
+    toastTimer: null,
+    resultSig: '',
+  };
+
+  function api(url, options) {
+    return fetch(url, options).then(async (response) => {
+      let data = {};
+      try { data = await response.json(); } catch (error) { /* 非 JSON 走默认文案 */ }
+      if (!response.ok) throw new Error(data.error || ('请求失败（' + response.status + '）'));
+      return data;
     });
-    $('scan').disabled = data.running;
-    if (data.running) $('message').textContent = '正在使用手机扫描，请稍候…';
-    else if (data.error) showError(new Error(data.error));
-    else if (data.result) {
-      const r = data.result;
-      $('message').className = '';
-      $('message').textContent = `扫描完成：新增 ${r.inserted}，更新 ${r.updated}，跳过 ${r.skipped}。` +
-        (r.errors.length ? `\n需检查：${r.errors.join('；')}` : '');
+  }
+
+  function toast(message, tone) {
+    const el = $('toast');
+    el.textContent = message;
+    el.dataset.tone = tone || 'ok';
+    el.dataset.show = '1';
+    clearTimeout(state.toastTimer);
+    state.toastTimer = setTimeout(() => { el.dataset.show = '0'; }, 3200);
+  }
+
+  function setButtonBusy(button, busy, labelWhenBusy) {
+    if (!button) return;
+    button.setAttribute('aria-busy', busy ? 'true' : 'false');
+    button.disabled = busy;
+    const label = button.querySelector('.label');
+    if (!label) return;
+    if (busy) {
+      if (!label.dataset.idle) label.dataset.idle = label.textContent;
+      label.textContent = labelWhenBusy || '处理中…';
+    } else if (label.dataset.idle) {
+      label.textContent = label.dataset.idle;
+      delete label.dataset.idle;
     }
-    if (data.calendar_ready) {
-      $('empty').hidden = true; $('calendar').hidden = false;
-      const cycle = data.result && data.result.cycle_id;
-      if (!calendarLoaded || (cycle && cycle !== lastCycle)) {
-        $('calendar').src = '/ddl/calendar?t=' + Date.now(); calendarLoaded = true; lastCycle = cycle;
+  }
+
+  function scanMode() {
+    const checked = document.querySelector('input[name="mode"]:checked');
+    return checked ? checked.value : 'once';
+  }
+
+  function applyMode() {
+    const recurring = scanMode() === 'recurring';
+    $('schedule').hidden = !recurring;
+    const label = $('add-source').querySelector('.label');
+    if (!state.busy) label.textContent = recurring ? '保存并扫描' : '立即扫描';
+    $('source-text').placeholder = recurring
+      ? '例如：定期读取 QQ「COMP7503 作业通知群」，最近14天'
+      : '例如：QQ「COMP7503 作业通知群」，最近14天';
+    syncControls();
+  }
+
+  function enabledSources() {
+    return (state.data && state.data.sources || []).filter((s) => s.enabled);
+  }
+
+  function syncControls() {
+    const running = !!(state.data && state.data.running);
+    const locked = running || state.busy || state.scanStarting;
+    const scan = $('scan');
+    const scanLabel = scan.querySelector('.label');
+    scan.disabled = locked || enabledSources().length === 0;
+    scan.setAttribute('aria-busy', (running || state.scanStarting) ? 'true' : 'false');
+    scanLabel.textContent = running ? '扫描中…' : (state.scanStarting ? '启动中…' : '开始扫描');
+    $('add-source').disabled = state.busy || state.scanStarting;
+    document.querySelectorAll('.icon-btn, .switch input').forEach((el) => {
+      el.disabled = locked;
+    });
+  }
+
+  /* ---------------- 检索目标列表 ---------------- */
+  function renderSources() {
+    const sources = state.data ? state.data.sources : [];
+    const running = !!(state.data && state.data.running);
+    const sig = JSON.stringify(sources.map((s) => [s.id, s.app, s.target, s.lookback_days, s.enabled]))
+      + '|' + running + '|' + state.confirmId + '|' + state.busy;
+    $('saved-count').textContent = sources.length + ' 个已保存';
+
+    if (sig === state.sourcesSig) return;
+    state.sourcesSig = sig;
+
+    const list = $('sources');
+    list.textContent = '';
+    const fallback = $('sources-fallback');
+    fallback.textContent = '';
+
+    if (!state.data) {
+      for (let i = 0; i < 2; i += 1) {
+        const li = document.createElement('li');
+        li.className = 'skel';
+        li.setAttribute('aria-hidden', 'true');
+        list.appendChild(li);
+      }
+      return;
+    }
+
+    if (!sources.length) {
+      const box = document.createElement('div');
+      box.className = 'empty';
+      const title = document.createElement('b');
+      title.textContent = '还没有定期检索目标';
+      box.appendChild(title);
+      box.appendChild(document.createTextNode('填写上面的目标并选择「定期保存」，扫描后就会保存在本机。'));
+      fallback.appendChild(box);
+      return;
+    }
+
+    sources.forEach((source) => {
+      const li = document.createElement('li');
+      li.className = 'source';
+      li.dataset.off = source.enabled ? '0' : '1';
+
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.dataset.app = source.app;
+      badge.textContent = APP[source.app] || source.app;
+
+      const grow = document.createElement('div');
+      grow.className = 'grow';
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = source.target;
+      name.title = source.target;
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = [KIND[source.kind] || '会话', '最近 ' + source.lookback_days + ' 天',
+        source.enabled ? '' : '已暂停'].filter(Boolean).join(' · ');
+      grow.appendChild(name);
+      grow.appendChild(meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'row-actions';
+
+      const toggle = document.createElement('label');
+      toggle.className = 'switch';
+      toggle.title = source.enabled ? '暂停该目标' : '启用该目标';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = source.enabled;
+      checkbox.disabled = running || state.busy;
+      checkbox.setAttribute('aria-label', (source.enabled ? '暂停' : '启用') + ' ' + source.target);
+      checkbox.addEventListener('change', () => toggleSource(source, checkbox));
+      toggle.appendChild(checkbox);
+      toggle.appendChild(document.createElement('span'));
+
+      const remove = document.createElement('button');
+      remove.className = 'icon-btn danger' + (state.confirmId === source.id ? ' confirm' : '');
+      remove.type = 'button';
+      remove.disabled = running || state.busy;
+      remove.textContent = state.confirmId === source.id ? '确认删除' : '删除';
+      remove.addEventListener('click', () => askDelete(source));
+
+      actions.appendChild(toggle);
+      actions.appendChild(remove);
+      li.appendChild(badge);
+      li.appendChild(grow);
+      li.appendChild(actions);
+      list.appendChild(li);
+    });
+  }
+
+  async function toggleSource(source, checkbox) {
+    if (state.busy) return;
+    state.busy = true;
+    syncControls();
+    try {
+      const data = await api('/api/ddl/sources/' + encodeURIComponent(source.id), {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({enabled: checkbox.checked}),
+      });
+      state.sourcesSig = '';
+      apply(data);
+      toast(checkbox.checked ? '已启用「' + source.target + '」' : '已暂停「' + source.target + '」');
+    } catch (error) {
+      checkbox.checked = !checkbox.checked;
+      toast(error.message, 'error');
+    } finally {
+      state.busy = false;
+      state.sourcesSig = '';
+      renderSources();
+      syncControls();
+    }
+  }
+
+  function askDelete(source) {
+    if (state.confirmId === source.id) {
+      clearTimeout(state.confirmTimer);
+      state.confirmId = null;
+      deleteSource(source);
+      return;
+    }
+    state.confirmId = source.id;
+    clearTimeout(state.confirmTimer);
+    state.confirmTimer = setTimeout(() => {
+      state.confirmId = null;
+      state.sourcesSig = '';
+      renderSources();
+    }, 4000);
+    state.sourcesSig = '';
+    renderSources();
+  }
+
+  async function deleteSource(source) {
+    if (state.busy) return;
+    state.busy = true;
+    syncControls();
+    try {
+      const data = await api('/api/ddl/sources/' + encodeURIComponent(source.id), {method: 'DELETE'});
+      state.sourcesSig = '';
+      apply(data);
+      toast('已删除「' + source.target + '」');
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      state.busy = false;
+      state.sourcesSig = '';
+      renderSources();
+      syncControls();
+    }
+  }
+
+  /* ---------------- 扫描状态 ---------------- */
+  function fmtDuration(seconds) {
+    if (!isFinite(seconds) || seconds < 0) return '';
+    if (seconds < 60) return Math.round(seconds) + ' 秒';
+    const m = Math.floor(seconds / 60);
+    const s = Math.round(seconds % 60);
+    return m + ' 分 ' + s + ' 秒';
+  }
+
+  function elapsedSeconds() {
+    if (!state.data || !state.data.started_at) return 0;
+    const start = Date.parse(state.data.started_at);
+    if (isNaN(start)) return 0;
+    return (Date.now() - start) / 1000;
+  }
+
+  function renderStatus() {
+    const el = $('scan-status');
+    const data = state.data;
+    const conn = $('conn');
+    const connText = $('conn-text');
+
+    if (data && data.running) {
+      conn.dataset.state = 'running';
+      connText.textContent = '扫描中';
+      if (el.dataset.kind === 'running' && $('scan-live')) {
+        // 已在运行态：只刷新计时与当前来源，避免每次轮询重建 DOM 造成闪烁
+        updateLive();
+        return;
       }
     }
-  } catch(error) { showError(error); }
-}
-$('source-form').addEventListener('submit', async event => {
-  event.preventDefault();
-  if (scanMode() === 'once') { $('scan').click(); return; }
-  try {
-    await api('/api/ddl/sources', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:$('source-text').value, schedule:$('schedule').value})});
-    $('source-text').value = ''; $('message').className = ''; $('message').textContent = '已添加为定期检索目标。'; await refresh();
-  } catch(error) { showError(error); }
-});
-$('scan').addEventListener('click', async () => {
-  const payload = {mode: scanMode()};
-  const text = $('source-text').value.trim();
-  if (text) payload.text = text;
-  if (scanMode() === 'recurring' && text) payload.schedule = $('schedule').value.trim();
-  try {
-    const data = await api('/api/ddl/scan', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    if (data.persisted) $('source-text').value = '';
-    $('message').className = '';
-    $('message').textContent = data.persisted ? '已保存为定期目标，正在扫描…' : '已开始本轮扫描（仅一次，不保存目标）…';
-    await refresh();
-  } catch(error) { showError(error); }
-});
-refresh(); setInterval(refresh, 3000);
+
+    el.textContent = '';
+
+    if (!data) {
+      el.dataset.kind = 'idle';
+      el.innerHTML = '<div class="title">准备就绪</div><div class="sub">填写检索目标后开始扫描。</div>';
+      conn.dataset.state = 'idle';
+      connText.textContent = '空闲';
+      stopScanTimer();
+      return;
+    }
+
+    if (data.running) {
+      el.dataset.kind = 'running';
+      const title = document.createElement('div');
+      title.className = 'title';
+      const spin = document.createElement('span');
+      spin.className = 'ring';
+      spin.style.cssText = 'width:14px;height:14px;border-radius:50%;border:2px solid #bfdbfe;border-top-color:#2563eb;display:inline-block;animation:spin .8s linear infinite';
+      title.appendChild(spin);
+      title.appendChild(document.createTextNode('正在扫描手机'));
+      el.appendChild(title);
+
+      const sub = document.createElement('div');
+      sub.className = 'sub';
+      sub.id = 'scan-live';
+      el.appendChild(sub);
+      updateLive();
+      startScanTimer();
+
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      bar.appendChild(document.createElement('i'));
+      el.appendChild(bar);
+      return;
+    }
+
+    stopScanTimer();
+
+    if (data.error) {
+      el.dataset.kind = 'failed';
+      conn.dataset.state = 'error';
+      connText.textContent = '上次失败';
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = '扫描未完成';
+      const sub = document.createElement('div');
+      sub.className = 'sub';
+      sub.textContent = data.error;
+      el.appendChild(title);
+      el.appendChild(sub);
+      return;
+    }
+
+    const result = data.result;
+    if (!result) {
+      el.dataset.kind = 'idle';
+      conn.dataset.state = 'idle';
+      connText.textContent = '空闲';
+      el.innerHTML = '<div class="title">准备就绪</div><div class="sub">填写检索目标后开始扫描。</div>';
+      return;
+    }
+
+    const status = result.status || 'ok';
+    const kind = status === 'failed' ? 'failed' : (status === 'partial' ? 'partial' : 'ok');
+    el.dataset.kind = kind;
+    conn.dataset.state = kind === 'ok' ? 'done' : 'error';
+    connText.textContent = kind === 'ok' ? '上次成功' : (kind === 'partial' ? '部分完成' : '上次失败');
+
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = kind === 'ok' ? '扫描完成' : (kind === 'partial' ? '部分完成，有来源需要检查' : '扫描失败');
+    el.appendChild(title);
+
+    const started = Date.parse(result.started_at || '');
+    const finished = Date.parse(result.finished_at || '');
+    const cost = (isFinite(started) && isFinite(finished)) ? fmtDuration((finished - started) / 1000) : '';
+    const sub = document.createElement('div');
+    sub.className = 'sub';
+    sub.textContent = '新增 ' + (result.inserted || 0) + ' · 更新 ' + (result.updated || 0) +
+      ' · 跳过 ' + (result.skipped || 0) + (cost ? ' · 用时 ' + cost : '') +
+      ' · 来源 ' + (result.sources_ok || 0) + '/' + countSources(result);
+    el.appendChild(sub);
+
+    if (result.errors && result.errors.length) {
+      const errors = document.createElement('div');
+      errors.className = 'errors';
+      const b = document.createElement('b');
+      b.textContent = '需要检查';
+      errors.appendChild(b);
+      errors.appendChild(document.createTextNode(result.errors.join('\n')));
+      el.appendChild(errors);
+    }
+  }
+
+  function countSources(result) {
+    return (result.sources || []).filter((entry) => entry && entry.target).length;
+  }
+
+  function updateLive() {
+    const live = $('scan-live');
+    if (!live || !state.data) return;
+    const parts = ['已用时 ' + fmtDuration(elapsedSeconds())];
+    const current = state.data.current_source;
+    if (current && current.target) {
+      const list = enabledSources();
+      const index = list.findIndex((s) => s.target === current.target && s.app === current.app);
+      const total = state.data.total_sources || list.length;
+      parts.push('正在读取 ' + (index >= 0 ? index + 1 : '?') + '/' + total +
+        ' · ' + (APP[current.app] || current.app) + ' / ' + current.target);
+    } else {
+      parts.push('正在准备设备…');
+    }
+    live.textContent = parts.join(' · ');
+  }
+
+  function startScanTimer() {
+    if (state.scanTimer) return;
+    state.scanTimer = setInterval(updateLive, 1000);
+  }
+
+  function stopScanTimer() {
+    if (state.scanTimer) {
+      clearInterval(state.scanTimer);
+      state.scanTimer = null;
+    }
+  }
+
+  function renderResults() {
+    const box = $('scan-results');
+    const result = state.data && state.data.result;
+    const sig = result ? result.cycle_id + '|' + result.status : '';
+    if (sig === state.resultSig) return;
+    state.resultSig = sig;
+    box.textContent = '';
+    if (!result) return;
+
+    (result.sources || []).forEach((entry) => {
+      if (!entry || !entry.target) return;
+      const row = document.createElement('div');
+      row.className = 'result-row';
+
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.dataset.app = entry.app;
+      badge.textContent = APP[entry.app] || entry.app || '?';
+
+      const name = document.createElement('span');
+      name.textContent = entry.target;
+
+      const chip = document.createElement('span');
+      const failed = !!entry.error;
+      const partial = !failed && (entry.partial || entry.last_status === 'timeout');
+      chip.className = 'chip ' + (failed ? 'failed' : (partial ? 'partial' : 'ok'));
+      chip.textContent = failed ? '失败' : (partial ? '部分' : '正常');
+
+      const counts = document.createElement('span');
+      counts.className = 'counts';
+      counts.textContent = '读取 ' + (entry.fetched || 0) + ' · 新增 ' + (entry.new_messages || 0) +
+        ' · 候选 ' + (entry.new_candidates || 0) +
+        (entry.baseline ? ' · 首次基线' : '');
+
+      row.appendChild(badge);
+      row.appendChild(name);
+      row.appendChild(chip);
+      row.appendChild(counts);
+
+      if (entry.error) {
+        const err = document.createElement('span');
+        err.className = 'err';
+        err.textContent = entry.error;
+        row.appendChild(err);
+      }
+      box.appendChild(row);
+    });
+  }
+
+  /* ---------------- 日历 ---------------- */
+  function applyCalendar() {
+    const data = state.data;
+    const ready = !!(data && data.calendar_ready);
+    $('cal-empty').hidden = ready;
+    $('cal-shell').hidden = !ready;
+    $('cal-open').hidden = !ready;
+    $('cal-refresh').disabled = !ready || (data && data.running);
+
+    if (!ready) {
+      $('cal-meta').textContent = '完成扫描后，日历会显示在这里。';
+      return;
+    }
+
+    const generated = data.calendar_generated_at;
+    $('cal-meta').textContent = generated
+      ? '上次生成 ' + generated.replace('T', ' ') + ' · 每轮扫描后自动更新'
+      : '每轮扫描后自动更新';
+
+    const key = generated || (data.result && data.result.cycle_id) || 'ready';
+    if (key !== state.calendarKey) {
+      state.calendarKey = key;
+      loadCalendar();
+    }
+  }
+
+  function loadCalendar() {
+    const frame = $('calendar');
+    const skel = $('cal-skel');
+    skel.hidden = false;
+    frame.style.opacity = '0';
+    frame.onload = () => {
+      skel.hidden = true;
+      frame.style.transition = 'opacity .18s';
+      frame.style.opacity = '1';
+    };
+    frame.src = '/ddl/calendar?t=' + Date.now();
+  }
+
+  /* ---------------- 数据应用与轮询 ---------------- */
+  function apply(data) {
+    state.data = data;
+    if (!data || !data.sources.some((s) => s.id === state.confirmId)) {
+      state.confirmId = null;
+    }
+    renderSources();
+    renderStatus();
+    renderResults();
+    applyCalendar();
+    syncControls();
+  }
+
+  function pollDelay() {
+    const running = !!(state.data && state.data.running);
+    return running ? 1200 : 8000;
+  }
+
+  function schedulePoll() {
+    clearTimeout(state.pollTimer);
+    state.pollTimer = setTimeout(poll, pollDelay());
+  }
+
+  async function poll() {
+    if (state.polling) return;
+    if (document.hidden) { schedulePoll(); return; }
+    state.polling = true;
+    try {
+      const data = await api('/api/ddl');
+      apply(data);
+    } catch (error) {
+      // 轮询失败不打断页面：连接状态降级，稍后自动重试
+      const conn = $('conn');
+      conn.dataset.state = 'error';
+      $('conn-text').textContent = '连接中断';
+    } finally {
+      state.polling = false;
+      schedulePoll();
+    }
+  }
+
+  async function refreshNow() {
+    try {
+      const data = await api('/api/ddl');
+      apply(data);
+      return data;
+    } catch (error) {
+      toast(error.message, 'error');
+      return null;
+    }
+  }
+
+  /* ---------------- 交互 ---------------- */
+  document.querySelectorAll('input[name="mode"]').forEach((input) => {
+    input.addEventListener('change', applyMode);
+  });
+
+  $('source-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (state.busy) return;
+    const text = $('source-text').value.trim();
+    const recurring = scanMode() === 'recurring';
+    if (!text) {
+      toast('请先填写检索目标', 'warn');
+      $('source-text').focus();
+      return;
+    }
+
+    state.busy = true;
+    setButtonBusy($('add-source'), true, recurring ? '保存中…' : '启动中…');
+    syncControls();
+    const payload = {mode: scanMode(), text: text};
+    if (recurring) payload.schedule = $('schedule').value.trim();
+
+    try {
+      const data = await api('/api/ddl/scan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      if (data.persisted) $('source-text').value = '';
+      toast(data.persisted ? '已保存为定期目标，开始扫描…' : '已开始本轮扫描…');
+      state.resultSig = '';
+      await refreshNow();
+    } catch (error) {
+      toast(error.message, 'error');
+      const status = $('scan-status');
+      status.dataset.kind = 'failed';
+    } finally {
+      state.busy = false;
+      setButtonBusy($('add-source'), false);
+      applyMode();
+      syncControls();
+    }
+  });
+
+  $('scan').addEventListener('click', async () => {
+    if (state.busy || state.scanStarting || (state.data && state.data.running)) return;
+    state.scanStarting = true;
+    syncControls();
+    try {
+      const data = await api('/api/ddl/scan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mode: 'recurring'}),
+      });
+      toast(data.persisted ? '已保存目标，开始扫描…' : '已开始扫描已保存目标…');
+      state.resultSig = '';
+      await refreshNow();
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      state.scanStarting = false;
+      syncControls();
+    }
+  });
+
+  $('cal-refresh').addEventListener('click', () => {
+    state.calendarKey = null;
+    loadCalendar();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) poll();
+  });
+
+  // 先渲染骨架，再拉取真实数据
+  renderSources();
+  applyMode();
+  poll();
+})();
 </script>
-</body></html>
+</body>
+</html>

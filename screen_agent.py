@@ -11,7 +11,7 @@ from pathlib import Path
 import httpx
 from phone_driver import create_phone_controller
 from adb_controller import TreeUnavailable
-from app_launcher import AppLauncher
+from app_launcher import AppLauncher, detect_task_app
 from memory import TaskMemory, format_steps_compact
 from ocr_locator import (OCRLocator, mark_text_in_input_boxes, resolve_action_element,
                          canonical_action_target, should_trigger_ocr, snap_action_coords,
@@ -146,6 +146,10 @@ class ReadOnlyTaskRefused(RuntimeError):
 
 class TargetNotLocated(RuntimeError):
     """连续两次没有匹配证据，拒绝按坐标猜测点击。"""
+
+
+class AppMismatchError(RuntimeError):
+    """任务指定的 App 与当前前台 App 不一致，拒绝在错误 App 内执行。"""
 
 
 _READ_ONLY_NEGATED = re.compile(
@@ -492,6 +496,8 @@ class ScreenAgent:
         self._last_observation_note = ""
         self._last_observe_ocr_seconds = 0.0  # 本步滚动 OCR 耗时（未触发为 0）
         self._rule_state = {}             # 规则快路跨步状态（已进入的群、滚动次数等）
+        self._task_app = None             # 任务声明的目标 App 包名
+        self._task_app_label = ""         # 目标 App 展示名
         self._rule_hits = []              # 规则命中记录，任务结束写汇总
         self._last_rule_seconds = 0.0     # 本步规则检查（控件树 dump）耗时
         self._total_step_seconds = 0.0    # 全部步骤墙钟耗时合计（统计规则步占比）
@@ -730,7 +736,7 @@ class ScreenAgent:
 
     ## 操作规则
     {coord_rule}
-    2. 已打开的 App 不要重复 open_app
+    2. 任务开头写明的目标 App 是硬约束：每一步先确认当前界面属于该 App。当前不是目标 App（例如任务是微信、屏幕是 QQ）时，必须先 open_app 切到目标 App；只有当前已是目标 App 时才不要重复 open_app，禁止在其他 App 里执行本任务
     {progress_rule}
     4. 默认每次只返回一个动作；只有连续动作彼此不依赖时（例如连续两次 swipe、swipe 后 back）才可用 "actions" 数组一次返回，程序按顺序执行、仍只算一步；需要看执行结果再决定的一律只返回一个动作
     5. 可直接打开的 App：{known_apps}
@@ -1483,7 +1489,26 @@ class ScreenAgent:
                 return False
 
         if t == "open_app":
-            self.launcher.launch(action.get("app_name", ""))
+            app_name = action.get("app_name", "")
+            package = self.launcher.resolve_package(app_name)
+            ensure = getattr(self.launcher, "ensure_foreground", None)
+            opened = (
+                bool(ensure(package)) if package and callable(ensure)
+                else self.launcher.launch(app_name)
+            )
+            if not opened:
+                reason = f"无法打开「{app_name}」，已停止，避免在错误的 App 内继续操作"
+                self.last_block_reason = reason
+                ui_state.set_status("error", reason)
+                raise AppMismatchError(reason)
+            if package and self._task_app and package != self._task_app:
+                reason = (
+                    f"模型要求打开「{app_name}」（{package}），与任务声明的 App "
+                    f"「{self._task_app_label}」不一致；已停止，避免串 App 执行"
+                )
+                self.last_block_reason = reason
+                ui_state.set_status("error", reason)
+                raise AppMismatchError(reason)
         elif t == "tap_input_box":
             if not self.phone.tap_input_box():
                 print("  ⚠️  未找到输入框（控件树/YOLO 都不可用），保持当前界面")
@@ -2143,10 +2168,60 @@ class ScreenAgent:
     #  主循环（保持原样，不改动）
     # ══════════════════════════════════════════════════════════
 
+    def _reset_task_state(self) -> None:
+        """每个任务开始清空跨步/规则状态，避免上一个任务串到下一个任务。"""
+        self._rule_state = {}
+        self._ocr_nav_state = {}
+        self._search_input_active = False
+        self._search_target = ""
+        self._search_name_misses = 0
+        self._chinese_ime_available_flag = None
+        self.tree_unsupported = False
+        self.last_block_reason = ""
+
+    def _bind_task_app(self, task: str, app_label: str = "") -> None:
+        """把任务声明的 App 绑定到前台：不是目标 App 就切过去，切不过去就停止。
+
+        之前只依赖视觉模型自己决定是否 ``open_app``：周期性任务连续跑 QQ →
+        微信时，模型可能跳过启动，直接在 QQ 里搜索微信的目标。这里用任务文本
+        做确定性解析，确保每个任务只在它声明的 App 内执行。
+
+        ``app_label`` 用于多应用子任务：目标文本里不一定出现 App 名，由编排器
+        显式传入。每次都强制回桌面重新启动，同一个 App 的第二个来源才不会
+        停在上一个来源的会话页面上。
+        """
+        detected = detect_task_app(app_label) if app_label else None
+        if detected is None:
+            detected = detect_task_app(task)
+        self._task_app = None
+        if detected is None:
+            return
+        label, package = detected
+        self._task_app = package
+        self._task_app_label = label
+        ensure = getattr(self.launcher, "ensure_foreground", None)
+        if not callable(ensure):
+            return
+        if ensure(package, label, restart=True):
+            print(f"  🧭  目标 App 已确认在前台：{label}（{package}）")
+            return
+        probe = getattr(self.launcher, "current_package", None)
+        current = (probe() if callable(probe) else None) or "未知"
+        reason = (
+            f"任务要求打开「{label}」（{package}），但当前前台是「{current}」，"
+            "无法切换到目标 App；为避免在错误的 App 内执行，已停止"
+        )
+        print(f"\n  ⛔  {reason}")
+        self.last_status = "failed"
+        self.last_block_reason = reason
+        ui_state.set_status("error", reason)
+        raise AppMismatchError(reason)
+
     def run(self, task: str):
         memory = TaskMemory(task)
         self.last_memory = memory   # 供实验脚本统计实际步数
         ui_state.init_state(task)
+        self._reset_task_state()
 
         refusal = read_only_task_refusal(task, self.read_only)
         if refusal:
@@ -2155,11 +2230,15 @@ class ScreenAgent:
             ui_state.set_status("error", refusal)
             raise ReadOnlyTaskRefused(refusal)
 
-        # 微信在真机上不暴露控件树：跳过 dump，直接走截图/OCR，省一次失败往返。
-        if not getattr(self, "tree_unsupported", False) and self.driver_kind == "adb_dump":
-            self.tree_unsupported = bool(
-                re.search(r"微信|wechat|com\.tencent\.mm", task or "", re.I)
-            )
+        # 任务声明的 App 必须在前台：周期性任务连续跑多个 App 时，
+        # 先按任务文本确定性切到目标 App 并确认前台包名，切不过去就停止。
+        self._bind_task_app(task)
+
+        # 微信在真机上不暴露控件树：按任务解析出的 App 判定，不再只靠正则；
+        # 任务未声明 App 时保留调用方设置。
+        detected = detect_task_app(task)
+        if detected is not None:
+            self.tree_unsupported = detected[1] == "com.tencent.mm"
         if hasattr(self.phone, "tree_unsupported"):
             self.phone.tree_unsupported = bool(getattr(self, "tree_unsupported", False))
 
@@ -2424,6 +2503,9 @@ class ScreenAgent:
                 return action
             except TargetNotLocated:
                 # 定位失败是确定性结论：重试只会再花一次模型调用，直接显式失败
+                raise
+            except AppMismatchError:
+                # App 切错是确定性结论，重试只会继续在错误的 App 里操作
                 raise
             except Exception as e:
                 last_error = e

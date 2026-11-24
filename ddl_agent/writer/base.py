@@ -98,6 +98,13 @@ def _should_update(old: ResolvedRecord, new: ResolvedRecord) -> bool:
     )
 
 
+def _row_still_supported(row: ResolvedRecord, keep_evidence_ids: set[str]) -> bool:
+    """旧行至少要有一条仍有效的证据候选；没有证据字段的行保守保留。"""
+    if not row.evidence_ids:
+        return True
+    return any(item in keep_evidence_ids for item in row.evidence_ids)
+
+
 def _cell(record: ResolvedRecord) -> str:
     if record.deadline_iso:
         return f"{record.task_name} | {record.course or '-'} | {record.deadline_iso} | {record.status}"
@@ -122,7 +129,8 @@ class DeadlineWriter(ABC):
         return self._read()
 
     def upsert(self, records: list[ResolvedRecord],
-               timestamp: datetime | None = None) -> WriteResult:
+               timestamp: datetime | None = None,
+               keep_evidence_ids: set[str] | None = None) -> WriteResult:
         stamp = timestamp or datetime.now(TZ)
         existed = self.path.exists()
         backup = Path(f"{self.path}.bak")
@@ -133,6 +141,11 @@ class DeadlineWriter(ABC):
             existing = self.read()
         except Exception as exc:
             return WriteResult(ok=False, path=str(self.path), error=f"读取现有文档失败：{exc}")
+
+        if keep_evidence_ids is not None:
+            # 已删除来源 / 已改目标来源的旧行不再有有效证据，必须一并移除
+            existing = [row for row in existing
+                        if _row_still_supported(row, keep_evidence_ids)]
 
         outcome = merge_records(existing, records, stamp)
 

@@ -128,6 +128,35 @@ class MessageStore:
                 handle.write(json.dumps(_message_to_dict(message), ensure_ascii=False) + "\n")
         return fresh
 
+    def drop(self, source_id: str | None = None) -> int:
+        """删除某个来源（``None`` 表示全部）的缓存消息。
+
+        reset-cursor 只清游标时，下一轮读到的消息会被这里的 message_id 去重
+        拦掉，等于没有重扫；必须同时清掉消息缓存。
+        """
+        before = len(self._messages)
+        if source_id is None:
+            self._messages.clear()
+        else:
+            self._messages = {
+                message_id: message
+                for message_id, message in self._messages.items()
+                if message.thread_id != source_id
+            }
+        self._save()
+        return before - len(self._messages)
+
+    def _save(self) -> None:
+        if not self._messages:
+            if self.path.exists():
+                self.path.unlink()
+            return
+        text = "".join(
+            json.dumps(_message_to_dict(message), ensure_ascii=False) + "\n"
+            for message in self._messages.values()
+        )
+        _atomic_write_text(self.path, text)
+
 
 class CandidateStore:
     """跨轮保留候选；LLM 只抽取新消息，旧候选直接复用。"""
@@ -158,6 +187,37 @@ class CandidateStore:
 
     def all(self) -> list[DeadlineCandidate]:
         return list(self._candidates.values())
+
+    def rewrite(self) -> None:
+        """把内存里的候选原子重写回磁盘。
+
+        回填「更正」标记只改内存，不落盘的话每轮都会重新回填同一批候选。
+        """
+        if not self._candidates:
+            if self.path.exists():
+                self.path.unlink()
+            return
+        text = "".join(
+            json.dumps(_candidate_to_dict(candidate), ensure_ascii=False) + "\n"
+            for candidate in self._candidates.values()
+        )
+        _atomic_write_text(self.path, text)
+
+    def retain(self, message_ids: set[str]) -> int:
+        """只保留仍能追溯到消息库的候选，返回删除条数。
+
+        reset-cursor 清掉消息后，对应候选必须一起移除，否则旧 DDL 仍会进输出。
+        """
+        before = len(self._candidates)
+        self._candidates = {
+            candidate_id: candidate
+            for candidate_id, candidate in self._candidates.items()
+            if not candidate.message_id or candidate.message_id in message_ids
+        }
+        removed = before - len(self._candidates)
+        if removed:
+            self.rewrite()
+        return removed
 
 
 def _json_value(value):

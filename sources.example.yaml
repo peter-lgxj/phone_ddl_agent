@@ -1,6 +1,9 @@
 # DDL 监控配置示例。复制为 sources.yaml 后可直接编辑，或全部用自然语言命令生成：
 #   python -m ddl_agent.monitor.cli add "监控微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次"
 #
+# 跨 App 切换的标准复验配置：微信、QQ、Outlook 各一个来源。
+# 真机复验「换源不串 App」时优先用这个混合配置，而不是多个同 App 来源。
+#
 # 手机来源全部通过现有手机智能体读屏，未经真机验证。
 version: 1
 schedule: every 6h

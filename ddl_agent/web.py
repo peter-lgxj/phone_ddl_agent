@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import os
 import threading
+from datetime import datetime
 from pathlib import Path
 
 from flask import Blueprint, jsonify, render_template, request, send_file
@@ -13,17 +14,26 @@ from device_lock import device_lock
 
 from .monitor.config import (
     ConfigError, MonitorConfig, add_from_text, load_config, parse_monitor_text,
-    remove_source, save_config,
+    remove_source, save_config, set_enabled,
 )
 from .monitor.launcher import check_device, resolve_adb
 from .monitor.runner import run_cycle
 from .monitor.sources import MobileAppSource
+from .settings import TZ
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "sources.yaml"
 blueprint = Blueprint("ddl", __name__)
 _guard = threading.Lock()
-_scan = {"running": False, "result": None, "error": None}
+_scan = {
+    "running": False,
+    "result": None,
+    "error": None,
+    "started_at": None,
+    "finished_at": None,
+    "current_source": None,
+    "total_sources": None,
+}
 _LOOPBACK = {"127.0.0.1", "::1", None}
 
 
@@ -48,6 +58,17 @@ def _source_without_lock(source) -> MobileAppSource:
     return MobileAppSource(source, use_device_lock=False)
 
 
+def _source_factory(on_source=None):
+    """构造数据源，并在开始读取某个来源时回报进度给页面。"""
+
+    def factory(source) -> MobileAppSource:
+        if on_source is not None:
+            on_source(source)
+        return _source_without_lock(source)
+
+    return factory
+
+
 def _project_path(value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else ROOT / path
@@ -55,13 +76,22 @@ def _project_path(value: str) -> Path:
 
 def _config_payload() -> dict:
     config = load_config(CONFIG_PATH)
+    calendar_path = _project_path(config.output_dir) / "calendar.html"
+    ready = calendar_path.is_file()
+    generated_at = None
+    if ready:
+        generated_at = datetime.fromtimestamp(
+            calendar_path.stat().st_mtime, TZ
+        ).isoformat(timespec="seconds")
     return {
         "sources": [
-            {"id": s.id, "app": s.app, "target": s.target,
-             "lookback_days": s.lookback_days, "enabled": s.enabled}
+            {"id": s.id, "app": s.app, "kind": s.kind, "target": s.target,
+             "source_type": s.source_type, "lookback_days": s.lookback_days,
+             "enabled": s.enabled}
             for s in config.sources
         ],
-        "calendar_ready": (_project_path(config.output_dir) / "calendar.html").is_file(),
+        "calendar_ready": ready,
+        "calendar_generated_at": generated_at,
         "schedule": config.schedule,
         "interval_minutes": config.interval_minutes,
     }
@@ -143,6 +173,25 @@ def delete_source(source_id: str):
     return jsonify(**_config_payload())
 
 
+@blueprint.patch("/api/ddl/sources/<source_id>")
+def toggle_source(source_id: str):
+    denied = _write_denied()
+    if denied:
+        return denied
+    payload = request.get_json(silent=True) or {}
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        return jsonify(error="enabled 必须是布尔值"), 400
+    with _guard:
+        if _scan["running"]:
+            return jsonify(error="扫描中不能修改检索目标"), 409
+        config = load_config(CONFIG_PATH)
+        if not set_enabled(config, source_id, enabled):
+            return jsonify(error="检索目标不存在"), 404
+        save_config(config, CONFIG_PATH)
+    return jsonify(**_config_payload())
+
+
 @blueprint.post("/api/ddl/scan")
 def start_scan():
     denied = _write_denied()
@@ -168,12 +217,21 @@ def start_scan():
             return jsonify(error="扫描已经在运行"), 409
         if persist:
             save_config(config, CONFIG_PATH)
-        _scan.update(running=True, result=None, error=None)
+        _scan.update(
+            running=True, result=None, error=None,
+            started_at=datetime.now(TZ).isoformat(timespec="seconds"),
+            finished_at=None, current_source=None,
+            total_sources=sum(1 for source in config.sources if source.enabled),
+        )
     threading.Thread(target=_scan_worker, args=(config,), daemon=True).start()
     return jsonify(running=True, persisted=persist), 202
 
 
 def _scan_worker(config: MonitorConfig | None = None) -> None:
+    def on_source(source) -> None:
+        with _guard:
+            _scan["current_source"] = {"app": source.app, "target": source.target}
+
     try:
         with device_lock(timeout=30) as acquired:
             if not acquired:
@@ -181,11 +239,15 @@ def _scan_worker(config: MonitorConfig | None = None) -> None:
                     _scan.update(error="设备锁被占用：请关闭其他 run.py / app.py / 窗口后重试")
                 return
             config = config or load_config(CONFIG_PATH)
+            with _guard:
+                _scan["total_sources"] = sum(
+                    1 for source in getattr(config, "sources", []) if source.enabled
+                )
             result = run_cycle(
                 config, config_path=CONFIG_PATH,
                 out_dir=_project_path(config.output_dir),
                 state_dir=_project_path(config.state_dir),
-                connector_factory=_source_without_lock,
+                connector_factory=_source_factory(on_source),
             )
         with _guard:
             _scan.update(result=result.to_dict(), error=None)
@@ -194,7 +256,10 @@ def _scan_worker(config: MonitorConfig | None = None) -> None:
             _scan.update(error=str(exc))
     finally:
         with _guard:
-            _scan["running"] = False
+            _scan.update(
+                running=False, current_source=None,
+                finished_at=datetime.now(TZ).isoformat(timespec="seconds"),
+            )
 
 
 @blueprint.get("/ddl/calendar")

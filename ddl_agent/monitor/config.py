@@ -131,6 +131,11 @@ def load_config(path: str | Path) -> MonitorConfig:
         raise ConfigError(f"配置文件字段不合法：{exc}") from exc
 
 
+def source_display_name(source: MonitorSource) -> str:
+    """来源在输出里的展示名：带上 App，避免跨 App 同名群互相覆盖。"""
+    return f"{APP_LABELS.get(source.app, source.app)} / {source.target}"
+
+
 def save_config(config: MonitorConfig, path: str | Path) -> Path:
     file = Path(path)
     file.parent.mkdir(parents=True, exist_ok=True)

@@ -369,10 +369,12 @@ def build_mobile_messages(agent: Any, *, source_name: str, source_type: str,
         step_no = int(step.get("step") or index)
         evidence = run_dir / f"step_{step_no:03d}.json"
         evidence_path = str(evidence) if evidence.exists() else None
-        for position, record in enumerate(split_observation(observation, now=current), start=1):
+        for record in split_observation(observation, now=current):
+            # 稳定 id 只由消息内容决定：步号/行号会随翻页重复出现同一条消息而
+            # 变化，导致同一条消息被当成新消息重复入库。
             digest = hashlib.sha1(
-                f"{thread_id}|{step_no}|{position}|{record.body}|"
-                f"{record.sender}|{record.published_at}".encode("utf-8")
+                f"{thread_id}|{record.sender}|{record.published_at}|{record.body}"
+                .encode("utf-8")
             ).hexdigest()[:16]
             if digest in seen:
                 continue
