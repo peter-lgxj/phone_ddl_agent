@@ -434,6 +434,47 @@ def test_update_in_target_group_tracks_entry_and_exit():
     assert agent._in_target_group is False
 
 
+def test_verify_group_entry_rejects_wrong_chat_title():
+    """点击记录说进了群，但标题不是目标群：该步观察不得计入来源。"""
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent._in_target_group = True
+    agent._last_rule_xml = (
+        Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "android17"
+        / "qq_group_top.xml"
+    ).read_text(encoding="utf-8")
+    agent.tree_unsupported = False
+    memory = TaskMemory(f"打开QQ，进入「{DISTRACTOR}」并读消息")
+
+    assert agent._confirm_group_title(memory) is False
+    assert agent._in_target_group is False
+    assert agent._title_mismatch == "2026 计算机班级群"
+
+
+def test_verify_group_entry_accepts_matching_chat_title():
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent._in_target_group = True
+    agent._last_rule_xml = (
+        Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "android17"
+        / "qq_group_top.xml"
+    ).read_text(encoding="utf-8")
+    agent.tree_unsupported = False
+    memory = TaskMemory("打开QQ，进入「2026 计算机班级群」并读消息")
+
+    assert agent._confirm_group_title(memory) is True
+    assert agent._in_target_group is True
+    assert agent._title_mismatch == ""
+
+
+def test_verify_group_entry_keeps_behavior_when_title_unreadable():
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent._in_target_group = True
+    agent._last_rule_xml = None
+    agent.tree_unsupported = False
+
+    assert agent._confirm_group_title(TaskMemory(f"进入「{TARGET}」")) is True
+    assert agent._in_target_group is True
+
+
 def test_qq_search_type_is_allowed_in_read_only():
     """搜索优先后，QQ 也要能在只读模式下往搜索框输入中文群名。"""
     agent = object.__new__(screen_agent.ScreenAgent)

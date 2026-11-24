@@ -474,6 +474,10 @@ class ScreenAgent:
         self._ocr_nav_state: dict = {}
         # 是否已进入目标会话：用于把列表/搜索阶段的观察排除出消息池
         self._in_target_group = False
+        # 本步规则观察用的控件树；进群后用它读标题校验「真的在目标群」
+        self._last_rule_xml: str | None = None
+        self._last_chat_title = ""
+        self._title_mismatch = ""
         self.launcher = AppLauncher(self.phone)
         if self.driver_kind != "uiautomator2":
             print(
@@ -2166,7 +2170,9 @@ class ScreenAgent:
             if getattr(self, "tree_unsupported", False):
                 return head
             try:
-                text = rule_policy.screen_text(self.phone.dump_hierarchy())
+                xml = self.phone.dump_hierarchy()
+                self._last_rule_xml = xml
+                text = rule_policy.screen_text(xml)
             except TreeUnavailable:
                 return head
             except Exception as e:
@@ -2185,8 +2191,12 @@ class ScreenAgent:
             return head
 
         try:
-            text = "" if getattr(self, "tree_unsupported", False) else \
-                rule_policy.screen_text(self.phone.dump_hierarchy())
+            if getattr(self, "tree_unsupported", False):
+                text = ""
+            else:
+                xml = self.phone.dump_hierarchy()
+                self._last_rule_xml = xml
+                text = rule_policy.screen_text(xml)
         except TreeUnavailable:
             text = ""
         except Exception as e:
@@ -2210,6 +2220,9 @@ class ScreenAgent:
         self.last_block_reason = ""
         self.last_ambiguous = None
         self._in_target_group = False
+        self._last_rule_xml = None
+        self._last_chat_title = ""
+        self._title_mismatch = ""
 
     def _update_in_target_group(self, action: dict) -> None:
         """按动作维护「当前是否在目标会话内」。
@@ -2223,6 +2236,11 @@ class ScreenAgent:
         action_type = str(action.get("action_type") or "")
         if action_type in {"open_app", "home", "back"}:
             self._in_target_group = False
+            # 离开会话页后规则不能再按「已进群」继续上滑：否则放宽滚动上限后
+            # 会把消息列表当成群聊一直翻。
+            rule_state = getattr(self, "_rule_state", None)
+            if isinstance(rule_state, dict):
+                rule_state["entered_group"] = None
             return
         if action_type != "tap":
             return
@@ -2235,6 +2253,56 @@ class ScreenAgent:
         label = str(action.get("target") or "")
         if any(rule_policy.label_matches_target(label, target) for target in targets):
             self._in_target_group = True
+
+    @staticmethod
+    def _entered_group_action(action: dict) -> bool:
+        """本步是否声明「进入了目标会话」；只有这类步骤需要读标题复核。"""
+        if not isinstance(action, dict) or action.get("blocked"):
+            return False
+        if str(action.get("action_type") or "") != "tap":
+            return False
+        rule_name = str((action.get("rule") or {}).get("name") or "")
+        return rule_name in {"open_group", "search_result"} or bool(
+            action.get("ocr_list_hit"))
+
+    def _confirm_group_title(self, memory: TaskMemory) -> bool:
+        """进群后用控件树标题硬校验：标题不是目标群就不认为读到了该来源。
+
+        只看点击记录不足以证明「进的就是这个群」：坐标点击可能落在相邻行，OCR
+        也可能把别的会话当成目标。这里用动作之后那一屏的标题逐字符比对，比对
+        不上就撤销 ``_in_target_group``，该步观察不会进入消息池。
+        """
+        self._last_chat_title = ""
+        self._title_mismatch = ""
+        xml = getattr(self, "_last_rule_xml", None)
+        if not xml or getattr(self, "tree_unsupported", False):
+            return True
+        targets = rule_policy.extract_quoted_targets(getattr(memory, "task", "") or "")
+        if not targets:
+            return True
+        title = rule_policy.chat_title(xml)
+        self._last_chat_title = title
+        if not title:
+            # 标题栏读不出来时保持原有动作判定，避免因控件树差异误判
+            return True
+        if any(rule_policy.label_matches_target(title, target) for target in targets):
+            return True
+        self._title_mismatch = title
+        self._in_target_group = False
+        print(f"  ⚠️  进群校验：当前会话标题是「{title}」，不是目标任务群，已停止计入该来源")
+        return False
+
+    def _record_chat_title(self, memory: TaskMemory) -> None:
+        """把本步读到的会话标题写进 step，便于事后核对「进的是哪个群」。"""
+        if not memory.steps:
+            return
+        step = memory.steps[-1]
+        title = getattr(self, "_last_chat_title", "")
+        mismatch = getattr(self, "_title_mismatch", "")
+        if title:
+            step["chat_title"] = title
+        if mismatch:
+            step["title_mismatch"] = mismatch
 
     def _bind_task_app(self, task: str, app_label: str = "") -> None:
         """把任务声明的 App 绑定到前台：不是目标 App 就切过去，切不过去就停止。
@@ -2423,6 +2491,7 @@ class ScreenAgent:
         # 动作只执行一次，不随观察/完成检测失败而重放
         # 动作执行后旧截图作废，观察成功才重新有效
         self._observe_valid = False
+        self._last_rule_xml = None
         pre_in_group = bool(getattr(self, "_in_target_group", False))
         started = time.time()
         if action.get("action_type") == "sequence":
@@ -2464,6 +2533,9 @@ class ScreenAgent:
                 # 合并模式下这一步没有独立的观察请求；等待界面稳定，供下一步截图
                 started = time.time()
                 timings["settle"] = self._settle_screen()
+            if (observation_in_group and self._entered_group_action(action)
+                    and not self._confirm_group_title(memory)):
+                observation_in_group = False
             print(f"│  👁   {observation}")
             ui_state.update_observation(observation)
             memory.add_step(
@@ -2473,6 +2545,7 @@ class ScreenAgent:
                 observation_messages=getattr(self, "_last_observation_messages", None),
             )
             memory.steps[-1]["in_target_group"] = observation_in_group
+            self._record_chat_title(memory)
             done = False
             started = time.time()
             if not finished and step >= 3 and action.get("task_done"):
@@ -2505,6 +2578,9 @@ class ScreenAgent:
             timings["observe_ocr"] = round(
                 getattr(self, "_last_observe_ocr_seconds", 0.0), 2
             )
+        if (observation_in_group and self._entered_group_action(action)
+                and not self._confirm_group_title(memory)):
+            observation_in_group = False
         print(f"│  👁   {observation}")
         ui_state.update_observation(observation)
 
@@ -2515,6 +2591,7 @@ class ScreenAgent:
             observation_messages=getattr(self, "_last_observation_messages", None),
         )
         memory.steps[-1]["in_target_group"] = observation_in_group
+        self._record_chat_title(memory)
 
         # 完成判断：默认直接用决策响应里的 task_done，省掉每步一次带图请求
         done = False

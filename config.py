@@ -219,8 +219,11 @@ RULE_EXECUTE_SECONDS = float(os.getenv("RULE_EXECUTE_SECONDS", "0.3"))
 # 列表导航请求，任务总耗时 11.44s vs 17.81s，因此默认开启。可用环境变量覆盖。
 RULE_MODEL_DECISION_SECONDS = float(os.getenv("RULE_MODEL_DECISION_SECONDS", "5.6"))
 # 同一次会话里规则最多连续滚多少步；到上限后交回 VLM，避免无限翻页。
-# 默认 2：真实群消息翻两屏仍未出现答案时，规则继续滚的收益抵不过每次 dump 的开销。
-RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "2"))
+# 群聊里「上滑读更早消息」是只读、可判定动作：连续两屏文字不变、出现「没有更多」
+# 或屏幕已含答案关键词时规则会自己停。真机日志（20261125-004027/004654）里
+# 28 步翻页只有 2 步走规则，其余 24 次都花在模型决策上，因此默认放宽到 30，
+# 与单任务 MAX_STEPS 对齐，让翻页不再占用模型调用。
+RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "30"))
 
 # QQ 群定位改为列表滚动 + OCR 匹配（不输入中文、不使用搜索框）。
 # 列表页一屏通常 6~8 个群，默认最多滚 8 屏；连续两屏内容不变则提前停止。

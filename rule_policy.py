@@ -27,6 +27,20 @@ _QUOTED_RE = re.compile(r"[「“\"]([^」”\"]{2,40})[」”\"]|‘([^’]{2,4
 # 界面已经翻到底/顶的提示词；命中后停止规则滚动，交回模型做语义判断
 _END_MARKERS = ("没有更多", "已加载全部", "查看更多消息", "没有更多消息")
 
+# 单次上滑的手指起点与位移（相对屏幕高度）：起点 0.82、位移 0.62，比原来的
+# 0.75→0.30（位移 0.45）多读约 38% 的屏幕内容，同样的 3 天记录少滑数次。
+SCROLL_START_RATIO = 0.82
+SCROLL_TRAVEL_RATIO = 0.62
+
+# 会话页标题栏区域：屏幕高度 12% 以内；标题左侧通常是返回键，右侧是群设置
+_CHAT_TITLE_ZONE_RATIO = 0.12
+_CHAT_CHROME = {
+    "返回", "返回消息", "返回上一级", "消息", "消息列表", "QQ", "关闭", "更多",
+    "聊天设置", "听筒模式", "发送", "语音", "相册", "拍照", "表情", "更多功能",
+    "搜索", "群聊", "联系人", "动态",
+}
+_CHAT_COUNT_RE = re.compile(r"[（(]\s*\d+\s*[)）]\s*$")
+
 # 任务答案关键词：当前屏幕已经出现这些内容时，继续规则滚动没有收益。
 # 「作业通知群」这类群名不会被 _HOMEWORK_RE 命中（作业后面不是序号），
 # 避免标题栏里的群名把滚动永远卡在第 0 步。
@@ -56,7 +70,7 @@ class RuleContext:
     xml: str
     last_action: dict = field(default_factory=dict)
     state: dict = field(default_factory=dict)
-    max_scrolls: int = 2
+    max_scrolls: int = 30
     known_input_resource_ids: tuple[str, ...] = ()
     screen_size: tuple[int, int] | None = None
     # adb_dump 的 input text 只支持 ASCII；为 True 时用名称里的 ASCII 唯一片段搜索
@@ -128,7 +142,7 @@ def root_size(xml_text: str) -> tuple[int, int] | None:
     return None
 
 
-def screen_text(xml_text: str, limit: int = 60) -> str:
+def screen_text(xml_text: str, limit: int = 200) -> str:
     """按控件树顺序提取可见文字，去空去重。"""
     root = parse_xml(xml_text)
     if root is None:
@@ -321,6 +335,38 @@ def label_matches_target(label: str, target: str) -> bool:
     if title.startswith(name):
         return _unread_suffix_ok(title[len(name):])
     return False
+
+
+def chat_title(xml_text: str) -> str:
+    """当前会话页标题栏里的群名/会话名；无法判定时返回空串。
+
+    进入会话后用它做一次硬校验：只有标题逐字符等于任务点名的目标群，才允许把
+    这一屏的观察算进该来源。返回键、群设置、人数后缀、顶部系统提示都不算标题。
+    """
+    root = parse_xml(xml_text)
+    if root is None:
+        return ""
+    size = root_size(xml_text)
+    height = size[1] if size else 2374
+    best = ""
+    for node in root.iter("node"):
+        text = (node.get("text") or "").strip()
+        if not text:
+            continue
+        text = _CHAT_COUNT_RE.sub("", text).strip()
+        if not text or text in _CHAT_CHROME:
+            continue
+        if _CHAT_COUNT_RE.fullmatch(text) or not re.search(r"[\w\u4e00-\u9fff]", text):
+            continue
+        center = _center(node.get("bounds") or "")
+        if not center or center[1] >= height * _CHAT_TITLE_ZONE_RATIO:
+            continue
+        # 顶部系统提示（改名/邀请/入群横幅）不是标题：带引号且很长的句子排除
+        if len(text) > 20:
+            continue
+        if len(text) > len(best):
+            best = text
+    return best
 
 
 def find_exact_target_rows(xml_text: str, needle: str) -> list[dict]:
@@ -618,8 +664,8 @@ def _list_scroll_action(ctx: RuleContext, state: dict) -> dict | None:
     width, height = ctx.screen_size or root_size(ctx.xml) or (1080, 2374)
     return _action(
         "swipe", "list_scroll", "规则快路：目标不在可见行，向上滚动群/会话列表",
-        x=width // 2, y=int(height * 0.72),
-        x2=width // 2, y2=int(height * 0.30),
+        x=width // 2, y=int(height * SCROLL_START_RATIO),
+        x2=width // 2, y2=int(height * (SCROLL_START_RATIO - SCROLL_TRAVEL_RATIO)),
     )
 
 
@@ -800,8 +846,8 @@ def decide(ctx: RuleContext) -> dict | None:
         state["scrolls"] = state.get("scrolls", 0) + 1
         return _action(
             "swipe", "scroll", "规则快路：向上滚动读更早的消息",
-            x=width // 2, y=int(height * 0.75),
-            x2=width // 2, y2=int(height * 0.30),
+            x=width // 2, y=int(height * SCROLL_START_RATIO),
+            x2=width // 2, y2=int(height * (SCROLL_START_RATIO - SCROLL_TRAVEL_RATIO)),
         )
 
     return None
