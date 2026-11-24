@@ -420,6 +420,8 @@ def test_data_json_and_ics_content(tmp_path: Path):
 
     page = (tmp_path / "out" / "calendar.html").read_text(encoding="utf-8")
     assert "DDL 日历" in page and '"task_name": "HW1"' in page
+    # 月视图需要显式的月份标题与今天高亮，避免用户分不清当前看的是哪个月
+    assert 'id="month-label"' in page and "today" in page
 
     ics = (tmp_path / "out" / "deadlines.ics").read_text(encoding="utf-8")
     assert ics.count("BEGIN:VEVENT") == 1  # 只有 confirmed 记录进日历
