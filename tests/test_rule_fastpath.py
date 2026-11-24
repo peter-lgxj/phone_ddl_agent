@@ -38,6 +38,21 @@ def test_extract_quoted_targets_supports_chinese_and_ascii_quotes():
     assert rule_policy.extract_quoted_targets("没有引号的任务") == []
 
 
+def test_extract_quoted_targets_prefers_group_brackets_over_ui_path():
+    """任务文案同时引用界面路径和目标群时，只把「」里的群名当目标。"""
+    task = (
+        "打开QQ。先看首屏消息列表或“联系人 > 群聊”里有没有「逗鱼时刻素材3群」："
+        "有就直接点它进入群聊；没有就用顶部搜索框输入「逗鱼时刻素材3群」。"
+    )
+    assert rule_policy.extract_quoted_targets(task) == ["逗鱼时刻素材3群"]
+
+
+def test_extract_quoted_targets_falls_back_to_other_quotes():
+    assert rule_policy.extract_quoted_targets('进入“COMP7503 作业通知群”读消息') == [
+        "COMP7503 作业通知群"
+    ]
+
+
 def test_chat_title_reads_group_name_from_top_bar():
     """进群后标题校验：会话页标题栏读到的就是群名，人数后缀不算。"""
     assert rule_policy.chat_title(CHAT_XML) == "2026 计算机班级群"

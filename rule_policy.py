@@ -22,6 +22,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
 # 任务里用「」、“”、"" 或 '' 点名的目标，例如「COMP7503 作业通知群」
+_TARGET_QUOTED_RE = re.compile(r"「([^」]{2,40})」")
 _QUOTED_RE = re.compile(r"[「“\"]([^」”\"]{2,40})[」”\"]|‘([^’]{2,40})’")
 
 # 界面已经翻到底/顶的提示词；命中后停止规则滚动，交回模型做语义判断
@@ -85,9 +86,19 @@ class RuleContext:
 
 
 def extract_quoted_targets(task: str) -> list[str]:
-    """取出任务里被引号点名的目标，保持出现顺序并去重。"""
+    """取出任务里被引号点名的目标，保持出现顺序并去重。
+
+    任务文案里可能同时出现界面路径（如“联系人 > 群聊”）和目标群名；「」是
+    我们约定给目标群用的括号，优先只取它，避免把界面路径当成群名去搜索。
+    """
+    task = task or ""
+    primary = [m.group(1).strip() for m in _TARGET_QUOTED_RE.finditer(task)]
+    primary = [value for value in primary
+               if value and not any(sep in value for sep in (">", "/", "->"))]
+    if primary:
+        return list(dict.fromkeys(primary))
     targets: list[str] = []
-    for match in _QUOTED_RE.finditer(task or ""):
+    for match in _QUOTED_RE.finditer(task):
         value = (match.group(1) or match.group(2) or "").strip()
         if value and value not in targets:
             targets.append(value)
