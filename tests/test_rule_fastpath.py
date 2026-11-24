@@ -119,6 +119,32 @@ def test_desktop_page_is_not_treated_as_stale_chat():
     assert action is None or action["rule"]["name"] != "leave_stale_chat"
 
 
+# 真机 QQ 消息主页（2026-11-25 导出）：昵称「さ`扑梦成空丶」在 y≈156，
+# 「在线 - WiFi」在 y≈211（都在标题区）；会话行预览里带「表情/害羞」，
+# 顶部「搜索」在 0.4 屏高以内。这些文字以前会让主页被当成残留会话页。
+QQ_HOME_XML = (
+    '<hierarchy><node bounds="[0,0][1080,2374]">'
+    '<node text="搜索" clickable="true" bounds="[0,244][1080,405]" />'
+    '<node text="林福琳, ,表情/害羞,昨天 16:57,置顶聊天" bounds="[0,1306][1080,1499]" />'
+    '<node text="さ`扑梦成空丶" bounds="[162,122][466,190]" />'
+    '<node text="在线 - WiFi" bounds="[162,193][327,230]" />'
+    '<node text="消息" clickable="true" bounds="[106,2269][164,2310]" />'
+    '<node text="联系人" clickable="true" bounds="[631,2269][718,2310]" />'
+    '<node text="动态" clickable="true" bounds="[916,2269][974,2310]" />'
+    '</node></hierarchy>'
+)
+
+
+def test_qq_home_page_with_stickers_is_not_stale_chat():
+    """QQ 消息主页顶部有昵称和「在线 - WiFi」，会话预览带「表情」；不按返回键。"""
+    action = rule_policy.decide(
+        make_ctx(QQ_HOME_XML, "打开QQ，进入「超商书友群」读消息"))
+    assert action is not None
+    # 主页有搜索入口：应直接走搜索，而不是在主页反复按返回键回到桌面
+    assert action["rule"]["name"] == "search_entry"
+    assert action["action_type"] == "tap"
+
+
 def test_chat_title_reads_group_name_from_top_bar():
     """进群后标题校验：会话页标题栏读到的就是群名，人数后缀不算。"""
     assert rule_policy.chat_title(CHAT_XML) == "2026 计算机班级群"
