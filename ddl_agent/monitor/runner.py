@@ -16,7 +16,13 @@ from ..settings import TZ
 from ..writer.xlsx_writer import XlsxWriter
 from ..output import PhoneCalendarWriter, export_outputs
 from .config import MonitorConfig, MonitorSource
-from .cursor import CandidateStore, CursorStore, MessageStore, _atomic_write_text
+from .cursor import (
+    CandidateStore,
+    CursorStore,
+    MessageStore,
+    _atomic_write_text,
+    backfill_correction_flags,
+)
 from .sources import MobileAppSource
 
 
@@ -88,6 +94,10 @@ def run_cycle(config: MonitorConfig, config_path: str | Path | None = None,
     cursors = CursorStore(state / "cursors.json")
     message_store = MessageStore(state / "messages.jsonl")
     candidate_store = CandidateStore(state / "candidates.jsonl")
+    # 旧版状态文件没持久化 is_correction，按消息正文补回，避免「更正」被旧值覆盖
+    backfilled = backfill_correction_flags(candidate_store.all(), message_store)
+    if backfilled:
+        print(f"  ℹ️  回填 {backfilled} 条历史候选的「更正」标记")
 
     result = CycleResult(
         cycle_id=cycle_id,

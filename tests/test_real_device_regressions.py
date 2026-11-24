@@ -269,16 +269,28 @@ def test_qq_g4_correction_wins_and_duplicate_old_value_is_merged():
     assert len(record.superseded_by[0]["evidence_ids"]) == 2
 
 
-def test_same_source_without_order_marks_review_instead_of_listing_both():
+def test_same_source_without_order_uses_correction_semantics():
+    """读屏拿不到发布时间/顺序时，显式「延期/更正」仍应生效，而不是并列或交人工。"""
     candidates = _saved_candidates("W4", wx=True)
     for candidate in candidates:
         candidate.source_order = None
         candidate.published_at = WX_NOW
     records = _resolve(candidates)
+    assert records[0].status == "confirmed"
+    assert records[0].deadline_iso == "2026-12-03T23:59:00+08:00"
+    assert records[0].superseded_by[0]["deadline"] == "2026-11-22T23:59:00+08:00"
+
+
+def test_same_source_without_order_or_correction_marks_review():
+    candidates = _saved_candidates("W4", wx=True)
+    for candidate in candidates:
+        candidate.source_order = None
+        candidate.published_at = WX_NOW
+        candidate.is_correction = False
+        candidate.correction_marker = None
+    records = _resolve(candidates)
     assert records[0].status == "uncertain"
     assert records[0].deadline_iso is None
-    assert records[0].alternatives == []
-    assert "无法判断" in records[0].resolution_note
 
 
 # ---------------------------------------------------------------- P0-3 跨来源
