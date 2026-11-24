@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime
 from pathlib import Path
 
+from ..extract.message_context import detect_correction
 from ..models import DeadlineCandidate, RawMessage
 from ..settings import TZ
 
@@ -110,6 +111,12 @@ class MessageStore:
     def seen(self, message_id: str) -> bool:
         return message_id in self._messages
 
+    def get(self, message_id: str) -> RawMessage | None:
+        return self._messages.get(message_id)
+
+    def all(self) -> list[RawMessage]:
+        return list(self._messages.values())
+
     def add(self, messages: list[RawMessage]) -> list[RawMessage]:
         fresh = [message for message in messages if message.message_id not in self._messages]
         if not fresh:
@@ -153,77 +160,60 @@ class CandidateStore:
         return list(self._candidates.values())
 
 
+def _json_value(value):
+    return value.isoformat() if isinstance(value, datetime) else value
+
+
 def _message_to_dict(message: RawMessage) -> dict:
-    return {
-        "message_id": message.message_id,
-        "source_name": message.source_name,
-        "source_type": message.source_type,
-        "sender": message.sender,
-        "published_at": message.published_at.isoformat() if message.published_at else None,
-        "subject": message.subject,
-        "body": message.body,
-        "evidence_path": message.evidence_path,
-        "thread_id": message.thread_id,
-        "needs_review": message.needs_review,
-        "review_reason": message.review_reason,
-    }
+    """按 dataclass 字段全量序列化；新增字段不会再被静默丢弃。"""
+    return {field.name: _json_value(getattr(message, field.name))
+            for field in fields(message)}
 
 
 def _message_from_dict(item: dict) -> RawMessage:
-    return RawMessage(
-        message_id=item["message_id"],
-        source_name=item["source_name"],
-        source_type=item["source_type"],
-        sender=item.get("sender") or "",
-        published_at=(
-            datetime.fromisoformat(item["published_at"]) if item.get("published_at") else None
-        ),
-        subject=item.get("subject") or "",
-        body=item.get("body") or "",
-        evidence_path=item.get("evidence_path"),
-        thread_id=item.get("thread_id"),
-        needs_review=bool(item.get("needs_review")),
-        review_reason=item.get("review_reason") or "",
-    )
+    kwargs = {}
+    for field in fields(RawMessage):
+        if field.name not in item:
+            continue
+        value = item[field.name]
+        if field.name in {"published_at", "observed_at"} and isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        kwargs[field.name] = value
+    return RawMessage(**kwargs)
 
 
 def _candidate_to_dict(candidate: DeadlineCandidate) -> dict:
-    return {
-        "candidate_id": candidate.candidate_id,
-        "task_name_raw": candidate.task_name_raw,
-        "course": candidate.course,
-        "deadline_raw": candidate.deadline_raw,
-        "deadline_iso": candidate.deadline_iso,
-        "source_type": candidate.source_type,
-        "source_name": candidate.source_name,
-        "published_at": candidate.published_at.isoformat() if candidate.published_at else None,
-        "message_id": candidate.message_id,
-        "message_subject": candidate.message_subject,
-        "missing_fields": candidate.missing_fields,
-        "unresolved_time": candidate.unresolved_time,
-        "extractor_confidence": candidate.extractor_confidence,
-        "needs_review": candidate.needs_review,
-        "review_reason": candidate.review_reason,
-    }
+    """按 dataclass 字段全量序列化，避免 is_correction/source_order 等审计字段丢失。"""
+    return {field.name: _json_value(getattr(candidate, field.name))
+            for field in fields(candidate)}
 
 
 def _candidate_from_dict(item: dict) -> DeadlineCandidate:
-    return DeadlineCandidate(
-        candidate_id=item["candidate_id"],
-        task_name_raw=item["task_name_raw"],
-        course=item.get("course"),
-        deadline_raw=item.get("deadline_raw"),
-        deadline_iso=item.get("deadline_iso"),
-        source_type=item["source_type"],
-        source_name=item["source_name"],
-        published_at=(
-            datetime.fromisoformat(item["published_at"]) if item.get("published_at") else None
-        ),
-        message_id=item["message_id"],
-        message_subject=item.get("message_subject") or "",
-        missing_fields=item.get("missing_fields") or [],
-        unresolved_time=bool(item.get("unresolved_time")),
-        extractor_confidence=item.get("extractor_confidence"),
-        needs_review=bool(item.get("needs_review")),
-        review_reason=item.get("review_reason") or "",
-    )
+    kwargs = {}
+    for field in fields(DeadlineCandidate):
+        if field.name not in item:
+            continue
+        value = item[field.name]
+        if field.name in {"published_at", "observed_at"} and isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        kwargs[field.name] = value
+    return DeadlineCandidate(**kwargs)
+
+
+def backfill_correction_flags(
+    candidates: list[DeadlineCandidate], messages: MessageStore,
+) -> int:
+    """为历史候选补回「更正」标记：旧版状态文件未持久化该字段。"""
+    changed = 0
+    for candidate in candidates:
+        if candidate.is_correction:
+            continue
+        message = messages.get(candidate.message_id)
+        if message is None:
+            continue
+        marker = detect_correction(message.body)
+        if marker:
+            candidate.is_correction = True
+            candidate.correction_marker = marker
+            changed += 1
+    return changed

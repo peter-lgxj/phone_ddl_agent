@@ -343,15 +343,37 @@ class ConflictResolver:
 
             order_known = any(candidate.source_order is not None for candidate in dated)
             time_known = len({candidate.published_at for candidate in dated}) > 1
-            if not order_known and not time_known:
-                ambiguous_note = (
-                    "同一来源内出现多条互相矛盾的截止时间，但读不到发布时间/顺序，"
-                    "无法判断哪条最新，标记 needs_review 交人工"
-                )
-                kept.extend(group)
-                continue
 
-            winner = max(dated, key=_time_key)
+            if not time_known:
+                # 没有绝对发布时间时，读屏顺序不等于时间顺序；
+                # 以「更正」语义为准：唯一更正截止值胜出，多个更正值或无更正则交人工。
+                correction_deadlines = {
+                    candidate.deadline_iso for candidate in dated if candidate.is_correction
+                }
+                if len(correction_deadlines) == 1:
+                    winner = next(
+                        candidate for candidate in dated
+                        if candidate.is_correction
+                        and candidate.deadline_iso in correction_deadlines
+                    )
+                elif len(correction_deadlines) > 1:
+                    ambiguous_note = (
+                        "同一来源内有多条不同截止值的「更正」且没有发布时间，"
+                        "无法判断最终生效值，标记 needs_review 交人工"
+                    )
+                    kept.extend(group)
+                    continue
+                elif order_known:
+                    winner = max(dated, key=_time_key)
+                else:
+                    ambiguous_note = (
+                        "同一来源内出现多条互相矛盾的截止时间，但读不到发布时间/顺序，"
+                        "无法判断哪条最新，标记 needs_review 交人工"
+                    )
+                    kept.extend(group)
+                    continue
+            else:
+                winner = max(dated, key=_time_key)
             losers = [
                 candidate for candidate in dated
                 if candidate.deadline_iso != winner.deadline_iso
