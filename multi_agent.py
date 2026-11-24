@@ -14,7 +14,12 @@ import time
 import subprocess
 
 from task_planner import TaskPlanner, TaskPlan, SubTask, build_exec_goal, unfinished_subtasks
-from screen_agent import ScreenAgent, make_run_dir
+from screen_agent import (
+    ReadOnlyTaskRefused,
+    ScreenAgent,
+    make_run_dir,
+    read_only_task_refusal,
+)
 from device_lock import device_lock
 from adb_utils import ADB
 from memory import TaskMemory
@@ -48,6 +53,12 @@ class SubTaskScreenAgent(ScreenAgent):
         super().__init__(**kwargs)
         self.last_summary = ""
         self._sub_index   = 0
+        # 编排器显式传入的子任务 App；目标文本里不一定出现 App 名
+        self._subtask_app_label = ""
+
+    def bind_app(self, app_label: str) -> None:
+        """多应用编排器在 run() 前指定本子任务的 App，供前台绑定与控件树判定。"""
+        self._subtask_app_label = str(app_label or "")
 
     def run(self, task: str) -> str:
         """执行单个子任务，返回结果摘要（共用基类的重试与证据归档）"""
@@ -61,6 +72,22 @@ class SubTaskScreenAgent(ScreenAgent):
 
         import ui_state
         ui_state.init_state(task)
+        # 与 ScreenAgent.run 对齐：清掉上一个子任务的状态，再把本子任务的 App
+        # 切到前台；否则同一个 App 的第二个来源会停在上一个会话页面里读屏。
+        self._reset_task_state()
+
+        refusal = read_only_task_refusal(task, self.read_only)
+        if refusal:
+            print(f"\n  ⛔  {refusal}")
+            self.last_status = "refused"
+            ui_state.set_status("error", refusal)
+            raise ReadOnlyTaskRefused(refusal)
+
+        self._bind_task_app(task, self._subtask_app_label)
+        if self._task_app:
+            self.tree_unsupported = self._task_app == "com.tencent.mm"
+        if hasattr(self.phone, "tree_unsupported"):
+            self.phone.tree_unsupported = bool(getattr(self, "tree_unsupported", False))
 
         for step in range(1, self.max_steps + 1):
             print(f"\n{C.BLUE}  ┌─ Step {step} {'─'*34}{C.RESET}")
@@ -213,6 +240,9 @@ class MultiAppAgent:
                 print(f"{C.DIM}  🔗  注入上下文：{current.context_needed}{C.RESET}")
 
             try:
+                bind_app = getattr(self.exec_agent, "bind_app", None)
+                if callable(bind_app):
+                    bind_app(current.app)
                 result = self.exec_agent.run(exec_goal)
                 current.result = result
                 # 只有真正完成才标 done；超步数为 timeout，异常为 failed

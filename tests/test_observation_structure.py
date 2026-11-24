@@ -264,6 +264,42 @@ def test_build_mobile_messages_prefers_archived_observation_messages(tmp_path):
     assert messages[0].published_at is None
 
 
+def test_build_mobile_messages_dedupes_same_message_across_steps(tmp_path):
+    """翻页后同一条消息会出现在不同步：id 不能带步号/行号，否则重复入库。"""
+    steps = [
+        {
+            "step": 1,
+            "observation": "群聊",
+            "observation_messages": [
+                {"sender": "叶小凡", "time": "昨天 20:00", "body": "作业三 11.29 23:59"},
+            ],
+        },
+        {
+            "step": 2,
+            "observation": "继续向上",
+            "observation_messages": [
+                {"sender": "叶小凡", "time": "昨天 20:00", "body": "作业三 11.29 23:59"},
+                {"sender": "TA", "time": "昨天 18:00", "body": "作业二 11.25 23:59"},
+            ],
+        },
+    ]
+    agent = type("Agent", (), {
+        "last_memory": type("Memory", (), {"steps": steps})(),
+        "run_dir": str(tmp_path),
+    })()
+
+    messages = build_mobile_messages(
+        agent, source_name="微信 / 21级课程群", source_type="student_chat",
+        subject="微信 / 21级课程群", thread_id="wechat-a", now=NOW,
+    )
+
+    assert [message.body for message in messages] == [
+        "作业三 11.29 23:59",
+        "作业二 11.25 23:59",
+    ]
+    assert len({message.message_id for message in messages}) == 2
+
+
 def test_merged_prose_without_messages_archives_fallback_marker(tmp_path, monkeypatch):
     agent = _agent(tmp_path, monkeypatch, {
         "observation": "群里有 11.20 的置顶消息",

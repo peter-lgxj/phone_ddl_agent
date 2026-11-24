@@ -219,6 +219,135 @@ def test_candidate_store_persists(tmp_path: Path):
     assert [item.candidate_id for item in CandidateStore(tmp_path / "candidates.jsonl").all()] == ["m1:1"]
 
 
+def test_message_store_drop_by_source(tmp_path: Path):
+    path = tmp_path / "messages.jsonl"
+    keep = _message("m2", "b")
+    keep.thread_id = "qq-b"
+    drop = _message("m1", "a")
+    drop.thread_id = "wechat-a"
+    store = MessageStore(path)
+    store.add([drop, keep])
+
+    assert store.drop("wechat-a") == 1
+    reloaded = MessageStore(path)
+    assert reloaded.seen("m2") is True
+    assert reloaded.seen("m1") is False
+
+
+def test_candidate_store_rewrite_persists_flags(tmp_path: Path):
+    from ddl_agent.models import DeadlineCandidate
+
+    path = tmp_path / "candidates.jsonl"
+    store = CandidateStore(path)
+    store.add([DeadlineCandidate(
+        candidate_id="m1:1", task_name_raw="HW1", course="COMP7608",
+        deadline_raw="2026-11-20 23:59", deadline_iso="2026-11-20T23:59:00+08:00",
+        source_type="student_chat", source_name="21级课程群",
+        published_at=NOW, message_id="m1",
+    )])
+    store.all()[0].is_correction = True
+    store.rewrite()
+
+    assert CandidateStore(path).all()[0].is_correction is True
+
+
+def test_cycle_drops_candidates_from_removed_or_retargeted_source(tmp_path: Path):
+    """删除来源 / 改目标后，旧候选不能再写进 data.json 与 xlsx。"""
+    from ddl_agent.monitor.config import APP_LABELS
+
+    config = _monitor_config(tmp_path)
+    config.sources.append(MonitorSource(
+        id="qq-机器学习课程群", app="qq", kind="group", target="机器学习课程群",
+        source_type="student_chat", lookback_days=14,
+    ))
+
+    def _per_source_message(source, message_id: str, body: str) -> RawMessage:
+        message = _message(message_id, body)
+        message.source_name = f"{APP_LABELS[source.app]} / {source.target}"
+        message.subject = message.source_name
+        message.thread_id = source.id
+        return message
+
+    # 第一轮：两个来源各写一条 DDL
+    first = run_cycle(
+        config, engine="rules", now=NOW,
+        connector_factory=lambda source: FakeConnector([
+            _per_source_message(
+                source,
+                f"{source.id}-m1",
+                "COMP7608 HW1 deadline 2026-11-20 23:59"
+                if source.app == "wechat" else
+                "COMP7608 Quiz1 deadline 2026-11-21 23:59",
+            )
+        ]),
+    )
+    assert first.inserted == 2
+
+    # 改目标（保留 id）并删除另一个来源；手机侧这一轮没有新消息
+    config.sources = [config.sources[0]]
+    config.sources[0].target = "新课程群"
+    second = run_cycle(config, engine="rules", now=NOW.replace(hour=12),
+                       connector_factory=lambda _source: FakeConnector([]))
+
+    rows = json.loads((tmp_path / "out" / "data.json").read_text(encoding="utf-8"))["records"]
+    assert rows == []
+    assert second.sources_ok == 1
+
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(tmp_path / "out" / "deadlines.xlsx", read_only=True)
+    try:
+        values = list(workbook["Deadlines"].iter_rows(values_only=True))
+    finally:
+        workbook.close()
+    assert len(values) == 1  # 只剩表头，旧行已被清理
+
+
+def test_backfilled_correction_flag_is_persisted(tmp_path: Path):
+    from ddl_agent.models import DeadlineCandidate
+
+    config = _monitor_config(tmp_path)
+    state = Path(config.state_dir)
+    message = _message("m1", "【更正】COMP7608 HW1 已改到 2026-11-22 23:59")
+    MessageStore(state / "messages.jsonl").add([message])
+    CandidateStore(state / "candidates.jsonl").add([DeadlineCandidate(
+        candidate_id="m1:1", task_name_raw="HW1", course="COMP7608",
+        deadline_raw="2026-11-22 23:59", deadline_iso="2026-11-22T23:59:00+08:00",
+        source_type="student_chat", source_name="21级课程群",
+        published_at=NOW, message_id="m1",
+    )])
+
+    _run(config, [], NOW.replace(hour=12))
+
+    restored = CandidateStore(state / "candidates.jsonl").all()[0]
+    assert restored.is_correction is True
+    assert restored.correction_marker == "更正"
+
+
+def test_cli_reset_cursor_clears_messages_so_rescan_works(tmp_path: Path):
+    from ddl_agent.models import DeadlineCandidate
+
+    config = _monitor_config(tmp_path)
+    config_path = tmp_path / "sources.yaml"
+    save_config(config, config_path)
+    state = Path(config.state_dir)
+    MessageStore(state / "messages.jsonl").add([_message("m1", "COMP7608 HW1")])
+    CandidateStore(state / "candidates.jsonl").add([DeadlineCandidate(
+        candidate_id="m1:1", task_name_raw="HW1", course="COMP7608",
+        deadline_raw="2026-11-20 23:59", deadline_iso="2026-11-20T23:59:00+08:00",
+        source_type="student_chat", source_name="21级课程群",
+        published_at=NOW, message_id="m1",
+    )])
+    source_id = config.sources[0].id
+    CursorStore(state / "cursors.json").advance(source_id, [_message("m1", "x")])
+
+    assert cli_main(["--config", str(config_path), "reset-cursor"]) == 0
+
+    assert CursorStore(state / "cursors.json").get(source_id).baseline_done is False
+    assert MessageStore(state / "messages.jsonl").all() == []
+    assert CandidateStore(state / "candidates.jsonl").all() == []
+
+
 # --------------------------------------------------------------------------- #
 # 定期检索：基线 → 跳过 → 更新
 # --------------------------------------------------------------------------- #
@@ -377,7 +506,7 @@ def test_mobile_source_builds_search_task_and_reads_steps():
     assert len(messages) == 1
     assert "搜索框输入「21级课程群」" in agent.tasks[0]
     assert "最近 7 天" in agent.tasks[0]
-    assert messages[0].source_name == "21级课程群"
+    assert messages[0].source_name == "微信 / 21级课程群"
 
 
 def test_mobile_source_forces_read_only_on_production_agent():

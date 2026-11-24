@@ -2179,14 +2179,20 @@ class ScreenAgent:
         self.tree_unsupported = False
         self.last_block_reason = ""
 
-    def _bind_task_app(self, task: str) -> None:
+    def _bind_task_app(self, task: str, app_label: str = "") -> None:
         """把任务声明的 App 绑定到前台：不是目标 App 就切过去，切不过去就停止。
 
         之前只依赖视觉模型自己决定是否 ``open_app``：周期性任务连续跑 QQ →
         微信时，模型可能跳过启动，直接在 QQ 里搜索微信的目标。这里用任务文本
         做确定性解析，确保每个任务只在它声明的 App 内执行。
+
+        ``app_label`` 用于多应用子任务：目标文本里不一定出现 App 名，由编排器
+        显式传入。每次都强制回桌面重新启动，同一个 App 的第二个来源才不会
+        停在上一个来源的会话页面上。
         """
-        detected = detect_task_app(task)
+        detected = detect_task_app(app_label) if app_label else None
+        if detected is None:
+            detected = detect_task_app(task)
         self._task_app = None
         if detected is None:
             return
@@ -2196,7 +2202,7 @@ class ScreenAgent:
         ensure = getattr(self.launcher, "ensure_foreground", None)
         if not callable(ensure):
             return
-        if ensure(package, label):
+        if ensure(package, label, restart=True):
             print(f"  🧭  目标 App 已确认在前台：{label}（{package}）")
             return
         probe = getattr(self.launcher, "current_package", None)

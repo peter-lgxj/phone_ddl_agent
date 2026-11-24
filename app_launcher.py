@@ -146,14 +146,26 @@ class AppLauncher:
         match = _FOCUS_RE.search(text) or _FOCUSED_APP_RE.search(text)
         return match.group(1) if match else None
 
+    def go_home(self, wait: float = 1.0) -> None:
+        """回到桌面，供切换 App 前清掉上一个来源留下的页面。"""
+        from adb_utils import ADB
+
+        subprocess.run([ADB, "shell", "input", "keyevent", "3"], capture_output=True)
+        time.sleep(wait)
+
     def ensure_foreground(self, package: str, label: str = "",
-                          timeout: float = 8.0) -> bool:
+                          timeout: float = 8.0, restart: bool = False) -> bool:
         """确保目标 App 在前台：已在前台则直接返回，否则启动并轮询确认。
 
         只在确认前台包名等于 ``package`` 时返回 True；否则返回 False，
         调用方必须停止，不能把任务放到上一个 App 里继续执行。
+
+        ``restart=True`` 时先回桌面再重新启动：同一个 App 的第二个来源如果
+        仅判断包名相同就跳过启动，会停在上一个来源的会话页面里继续读屏。
         """
-        if self.current_package() == package:
+        if restart:
+            self.go_home()
+        elif self.current_package() == package:
             return True
         if not self.launch(package):
             return False

@@ -30,7 +30,7 @@ from .config import (
     set_enabled,
     update_source,
 )
-from .cursor import CursorStore
+from .cursor import CandidateStore, CursorStore, MessageStore
 from .runner import run_cycle
 
 DEFAULT_CONFIG = "sources.yaml"
@@ -62,7 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
     schedule = sub.add_parser("schedule", help="单独设置检索周期")
     schedule.add_argument("text", help="例如：每6小时 / 每天一次 / 每30分钟")
 
-    reset = sub.add_parser("reset-cursor", help="重置增量游标（下一次会重新做基线扫描）")
+    reset = sub.add_parser("reset-cursor", help="重置增量游标与已读消息（下一次会重新扫描）")
     reset.add_argument("--source", dest="source_id", default=None)
 
     run = sub.add_parser("run", help="执行一轮或常驻定期检索")
@@ -132,10 +132,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "reset-cursor":
-            state_dir = Path(args.state or config.state_dir)
-            store = CursorStore(state_dir / "cursors.json")
-            store.reset(args.source_id)
-            print("已重置" + (f" {args.source_id}" if args.source_id else "全部") + "游标")
+            state_dir = Path(getattr(args, "state", None) or config.state_dir)
+            CursorStore(state_dir / "cursors.json").reset(args.source_id)
+            # 只清游标时下一轮读到的消息仍会被 message_id 去重拦掉，等于没重扫；
+            # 消息清掉后对应候选也一并移除，避免旧 DDL 继续出现在输出里。
+            messages = MessageStore(state_dir / "messages.jsonl")
+            messages.drop(args.source_id)
+            CandidateStore(state_dir / "candidates.jsonl").retain(
+                {message.message_id for message in messages.all()}
+            )
+            print("已重置" + (f" {args.source_id}" if args.source_id else "全部") + "游标与已读消息")
             return 0
 
         if args.command == "run":

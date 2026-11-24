@@ -43,6 +43,7 @@ def _launcher_with(packages: list[str | None], launch_ok: bool = True):
     launcher.phone = None
     remaining = list(packages)
     launched: list[str] = []
+    homes: list[bool] = []
 
     def _current():
         return remaining.pop(0) if remaining else (packages[-1] if packages else None)
@@ -53,7 +54,17 @@ def _launcher_with(packages: list[str | None], launch_ok: bool = True):
 
     launcher.current_package = _current
     launcher.launch = _launch
+    launcher.go_home = lambda: homes.append(True)
     return launcher, launched
+
+
+def test_ensure_foreground_restart_goes_home_and_relaunches_same_app():
+    # 同一个 App 的第二个来源：包名相同也必须回桌面重开，不能沿用上一个会话页
+    launcher, launched = _launcher_with([WECHAT, WECHAT])
+    launcher.go_home = lambda: launched.append("HOME")
+
+    assert launcher.ensure_foreground(WECHAT, restart=True) is True
+    assert launched == ["HOME", WECHAT]
 
 
 def test_ensure_foreground_noop_when_target_already_active():
@@ -105,9 +116,11 @@ class _FakeLauncher:
         self.foreground = foreground
         self.ensure_ok = ensure_ok
         self.ensured: list[str] = []
+        self.restarted: list[bool] = []
 
-    def ensure_foreground(self, package, label="", timeout=8.0):
+    def ensure_foreground(self, package, label="", timeout=8.0, restart=False):
         self.ensured.append(package)
+        self.restarted.append(restart)
         return self.ensure_ok
 
     def current_package(self):
@@ -119,6 +132,18 @@ def test_bind_task_app_switches_to_wechat_before_running():
     agent = _agent(launcher)
 
     agent._bind_task_app("打开微信，通过搜索框输入「课程群」")
+
+    assert agent._task_app == WECHAT
+    assert launcher.ensured == [WECHAT]
+    # 每次绑定都强制干净启动，而不是判断「同包名已在前台」就跳过
+    assert launcher.restarted == [True]
+
+
+def test_bind_task_app_uses_explicit_subtask_app_when_goal_lacks_name():
+    launcher = _FakeLauncher(foreground=QQ)
+    agent = _agent(launcher)
+
+    agent._bind_task_app("在课程群里向上翻阅消息", app_label="微信")
 
     assert agent._task_app == WECHAT
     assert launcher.ensured == [WECHAT]
@@ -183,6 +208,36 @@ def test_reset_task_state_clears_previous_rule_state():
     assert agent._ocr_nav_state == {}
     assert agent._search_input_active is False
     assert agent._search_target == ""
+
+
+def test_subtask_run_resets_state_and_binds_declared_app(tmp_path, monkeypatch):
+    """多 App 子任务：上一个子任务的规则状态不能串进来，且必须切到本子任务 App。"""
+    import multi_agent
+
+    def _run_dir(name: str):
+        path = tmp_path / name
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(multi_agent, "make_run_dir", _run_dir)
+    agent = object.__new__(multi_agent.SubTaskScreenAgent)
+    agent.max_steps = 2
+    agent.read_only = True
+    agent.launcher = _FakeLauncher(foreground=QQ)
+    agent.phone = SimpleNamespace()
+    agent.last_status = ""
+    agent._sub_index = 0
+    agent._rule_state = {"entered_group": "上一个子任务的群"}
+    agent._execute_step = lambda step, memory: (True, True, "完成")
+    agent.bind_app("微信")
+
+    summary = agent.run("在课程群里向上翻阅消息")
+
+    assert summary == "完成"
+    assert agent._rule_state == {}
+    assert agent.launcher.ensured == [WECHAT]
+    assert agent.launcher.restarted == [True]
 
 
 def test_alias_table_covers_monitor_apps():

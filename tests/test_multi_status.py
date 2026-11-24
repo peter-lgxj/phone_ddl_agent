@@ -12,6 +12,10 @@ class FakeExec:
     def __init__(self, status):
         self.last_status = status
         self.last_memory = None
+        self.bound_apps: list[str] = []
+
+    def bind_app(self, app_label):
+        self.bound_apps.append(app_label)
 
     def run(self, goal):
         return f"{goal} 的执行摘要"
@@ -96,6 +100,17 @@ class TwoTaskPlanner:
 
     def replan(self, plan, current):
         return all(t.status == "done" for t in plan.subtasks), "完成"
+
+
+def test_every_subtask_binds_its_own_app(monkeypatch, tmp_path):
+    """多 App 子任务必须显式把本子任务的 App 传给执行器，不能沿用上一个。"""
+    monkeypatch.chdir(tmp_path)
+    agent = make_agent(tmp_path, "done")
+    agent.planner = TwoTaskPlanner()
+
+    agent.run("打开设置再看微信")
+
+    assert agent.exec_agent.bound_apps == ["设置", "微信"]
 
 
 def test_every_subtask_has_traceable_run_dir(monkeypatch, tmp_path):
