@@ -94,6 +94,31 @@ def test_extract_quoted_targets_falls_back_to_other_quotes():
     ]
 
 
+def test_chat_title_ignores_status_bar_text():
+    """状态栏的「在线 - WiFi」在顶部 12% 内，但不是会话标题。"""
+    xml = (
+        '<hierarchy><node bounds="[0,0][1080,2374]">'
+        '<node text="在线 - WiFi" bounds="[0,0][540,72]" />'
+        '<node text="超商书友群" clickable="true" bounds="[103,156][488,218]" />'
+        '<node text="按住说话" bounds="[200,2200][880,2260]" />'
+        '</node></hierarchy>'
+    )
+    assert rule_policy.chat_title(xml) == "超商书友群"
+
+
+def test_desktop_page_is_not_treated_as_stale_chat():
+    """桌面没有聊天输入栏，不能按标题判成残留会话页去按返回键。"""
+    xml = (
+        '<hierarchy><node bounds="[0,0][1080,2374]">'
+        '<node text="在线 - WiFi" bounds="[0,0][540,72]" />'
+        '<node text="相册" bounds="[80,900][240,1000]" />'
+        '<node text="Chrome" bounds="[300,900][460,1000]" />'
+        '</node></hierarchy>'
+    )
+    action = rule_policy.decide(make_ctx(xml, "打开QQ，进入「超商书友群」读消息"))
+    assert action is None or action["rule"]["name"] != "leave_stale_chat"
+
+
 def test_chat_title_reads_group_name_from_top_bar():
     """进群后标题校验：会话页标题栏读到的就是群名，人数后缀不算。"""
     assert rule_policy.chat_title(CHAT_XML) == "2026 计算机班级群"
@@ -165,9 +190,8 @@ def test_title_bar_row_is_rejected_even_without_input_box():
         '</node></hierarchy>'
     )
     action = rule_policy.decide(make_ctx(xml, "打开「2026 计算机班级群」"))
-    assert action is not None
-    assert action["action_type"] == "wait"
-    assert action["rule"]["name"] == "confirm_group"
+    # 没有聊天输入栏就不判定为会话页，交回模型；至少不会去点标题
+    assert action is None
 
 
 def test_scroll_only_after_entering_target_group():
