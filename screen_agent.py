@@ -472,7 +472,8 @@ class ScreenAgent:
         self.ocr.set_tree_provider(self.phone.dump_hierarchy)
         # QQ 列表定位的 OCR 状态：已进入的群、滚动次数、上一屏文字
         self._ocr_nav_state: dict = {}
-        self._list_only_mode = False
+        # 是否已进入目标会话：用于把列表/搜索阶段的观察排除出消息池
+        self._in_target_group = False
         self.launcher = AppLauncher(self.phone)
         if self.driver_kind != "uiautomator2":
             print(
@@ -1463,19 +1464,6 @@ class ScreenAgent:
         t = action.get("action_type", "wait")
         search_type_allowed = False
 
-        if getattr(self, "_list_only_mode", False) and t == "type" and (
-            self.read_only or not str(action.get("text") or "").isascii()
-        ):
-            # QQ 群定位一律列表滚动 + OCR；不允许中文输入，也不打开搜索框
-            reason = (
-                "QQ 群定位改为列表滚动 + OCR，不输入中文、不使用搜索框；"
-                "请继续滚动列表"
-            )
-            action["blocked"] = True
-            action["blocked_reason"] = reason
-            print(f"  ⛔  {reason}")
-            return False
-
         if self.read_only and t in READ_ONLY_BLOCKED_ACTIONS:
             rule_name = (action.get("rule") or {}).get("name")
             # 只放行「搜索框输入」：它只改搜索框，不产生外发；
@@ -2135,16 +2123,10 @@ class ScreenAgent:
             last_action=last_action,
             state=state,
             max_scrolls=int(getattr(config, "RULE_MAX_SCROLLS", 2)),
-            search_ascii_only=self.driver_kind != "uiautomator2",
             search_force=bool(getattr(config, "RULE_SEARCH_FORCE", False)),
-            search_allowed=(
-                self.driver_kind == "uiautomator2"
-                or bool(getattr(config, "RULE_SEARCH_FORCE", False))
-            ),
             known_input_resource_ids=(
                 getattr(config, "WECHAT_INPUT_RESOURCE_ID", ""),
             ),
-            list_only=_is_qq_task(task),
             list_max_scrolls=int(getattr(config, "QQ_LIST_MAX_SCROLLS", 8)),
         ))
         if action is None:
@@ -2227,6 +2209,32 @@ class ScreenAgent:
         self.tree_unsupported = False
         self.last_block_reason = ""
         self.last_ambiguous = None
+        self._in_target_group = False
+
+    def _update_in_target_group(self, action: dict) -> None:
+        """按动作维护「当前是否在目标会话内」。
+
+        只有进入目标群的动作才置 True；打开 App、回桌面、返回上一级都视为离开。
+        ``build_mobile_messages`` 会丢弃不在目标会话时看到的观察，避免把消息列表
+        上其他会话的预览当成目标群消息。
+        """
+        if not isinstance(action, dict) or action.get("blocked"):
+            return
+        action_type = str(action.get("action_type") or "")
+        if action_type in {"open_app", "home", "back"}:
+            self._in_target_group = False
+            return
+        if action_type != "tap":
+            return
+        rule_name = str((action.get("rule") or {}).get("name") or "")
+        if rule_name in {"open_group", "search_result"} or action.get("ocr_list_hit"):
+            self._in_target_group = True
+            return
+        memory = getattr(self, "last_memory", None)
+        targets = rule_policy.extract_quoted_targets(getattr(memory, "task", "") or "")
+        label = str(action.get("target") or "")
+        if any(rule_policy.label_matches_target(label, target) for target in targets):
+            self._in_target_group = True
 
     def _bind_task_app(self, task: str, app_label: str = "") -> None:
         """把任务声明的 App 绑定到前台：不是目标 App 就切过去，切不过去就停止。
@@ -2367,9 +2375,10 @@ class ScreenAgent:
         # 纯控件树决策开关打开时，非合并模式也先试规则快路：命中就不截图、不发视觉请求
         tree_only = bool(getattr(config, "TREE_ONLY_DECISION", False))
         rule_action = self._rule_action(memory) if (merged_active or tree_only) else None
-        self._list_only_mode = _is_qq_task(memory.task)
-        if rule_action is None and self._list_only_mode:
-            # QQ 群定位兜底：控件树为空/目标不在可见行时，用截图 OCR 匹配 + 滚动
+        in_group = bool((getattr(self, "_rule_state", None) or {}).get("entered_group"))
+        if rule_action is None and _is_qq_task(memory.task) and not in_group:
+            # QQ 群定位兜底：规则路径（首屏 → 搜索 → 滚动）都没结论时，用截图 OCR
+            # 在列表里精确匹配 + 滚动；已在目标群内时绝不调用，避免误退回列表。
             rule_action = self._ocr_list_navigate(memory)
             if rule_action is not None:
                 rule_action.setdefault("rule", {"name": "ocr_list"})
@@ -2414,12 +2423,27 @@ class ScreenAgent:
         # 动作只执行一次，不随观察/完成检测失败而重放
         # 动作执行后旧截图作废，观察成功才重新有效
         self._observe_valid = False
+        pre_in_group = bool(getattr(self, "_in_target_group", False))
         started = time.time()
         if action.get("action_type") == "sequence":
-            finished = self._execute_sequence(action.get("actions") or [])
-            timings["actions"] = len(action.get("actions") or [])
+            items = action.get("actions") or []
+            finished = self._execute_sequence(items)
+            for item in items:
+                self._update_in_target_group(item)
+            timings["actions"] = len(items)
         else:
             finished = self._execute(action)
+            self._update_in_target_group(action)
+        post_in_group = bool(getattr(self, "_in_target_group", False))
+        # 规则步的观察是动作之后采集的；合并模式下的模型步观察是动作之前的屏幕。
+        # 标记必须与观察对应的那一刻对齐，否则会把进群前列表页的其他会话当成本群消息。
+        # 没有点名目标群的任务（如 Outlook 收件箱）不做这个过滤。
+        has_targets = bool(rule_policy.extract_quoted_targets(memory.task))
+        observation_in_group = (
+            True if not has_targets else
+            pre_in_group if (merged_active and not timings.get("rule_hit"))
+            else post_in_group
+        )
         timings["execute"] = round(time.time() - started, 2)
 
         if merged_active:
@@ -2448,6 +2472,7 @@ class ScreenAgent:
                 observation=observation,
                 observation_messages=getattr(self, "_last_observation_messages", None),
             )
+            memory.steps[-1]["in_target_group"] = observation_in_group
             done = False
             started = time.time()
             if not finished and step >= 3 and action.get("task_done"):
@@ -2489,6 +2514,7 @@ class ScreenAgent:
             observation=observation,
             observation_messages=getattr(self, "_last_observation_messages", None),
         )
+        memory.steps[-1]["in_target_group"] = observation_in_group
 
         # 完成判断：默认直接用决策响应里的 task_done，省掉每步一次带图请求
         done = False

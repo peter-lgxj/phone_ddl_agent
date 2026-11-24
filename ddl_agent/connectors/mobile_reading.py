@@ -363,6 +363,10 @@ def build_mobile_messages(agent: Any, *, source_name: str, source_type: str,
     seen: set[str] = set()
 
     for index, step in enumerate(steps, start=1):
+        if step.get("in_target_group") is False:
+            # 进目标会话之前（消息列表、搜索页）看到的是其他会话，
+            # 不能算成目标群的消息；旧日志没有这个标记时保持原有行为。
+            continue
         observation = _step_observation_text(step)
         if not observation:
             continue

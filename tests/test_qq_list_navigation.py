@@ -16,12 +16,12 @@ TARGET = "2026 计算机班级群"
 DISTRACTOR = "2026 计算机班级二群"
 
 ABSENT_XML = (
-    '<hierarchy rotation="0">'
+    '<hierarchy rotation="0"><node bounds="[0,0][1080,2374]">'
     '<node text="搜索" content-desc="搜索" class="android.widget.TextView" '
     'clickable="true" bounds="[0,0][200,100]" />'
     '<node text="张三" class="android.widget.TextView" clickable="true" '
     'bounds="[0,300][500,400]" />'
-    "</hierarchy>"
+    "</node></hierarchy>"
 )
 
 VISIBLE_XML = (
@@ -34,10 +34,10 @@ VISIBLE_XML = (
 )
 
 
-def test_qq_list_only_scrolls_instead_of_opening_search():
+def test_qq_without_search_scrolls_list_instead_of_opening_search():
     ctx = RuleContext(
         task=f"打开QQ，滚动列表找到「{TARGET}」", step=1, read_only=True,
-        xml=ABSENT_XML, list_only=True, list_max_scrolls=8,
+        xml=ABSENT_XML, search_allowed=False, list_max_scrolls=8,
     )
 
     action = rule_policy.decide(ctx)
@@ -48,10 +48,24 @@ def test_qq_list_only_scrolls_instead_of_opening_search():
     assert ctx.state["list_scrolls"] == 1
 
 
+def test_qq_prefers_search_when_target_not_on_first_screen():
+    ctx = RuleContext(
+        task=f"打开QQ，滚动列表找到「{TARGET}」", step=1, read_only=True,
+        xml=ABSENT_XML,
+    )
+
+    action = rule_policy.decide(ctx)
+
+    assert action is not None
+    assert action["action_type"] == "tap"
+    assert action["rule"]["name"] == "search_entry"
+    assert ctx.state["search_stage"] == "entry"
+
+
 def test_qq_list_only_still_opens_visible_exact_group():
     ctx = RuleContext(
         task=f"打开QQ，滚动列表找到「{TARGET}」", step=1, read_only=True,
-        xml=VISIBLE_XML, list_only=True,
+        xml=VISIBLE_XML,
     )
 
     action = rule_policy.decide(ctx)
@@ -65,7 +79,7 @@ def test_qq_list_only_still_opens_visible_exact_group():
 def test_qq_list_only_stops_after_max_scrolls():
     ctx = RuleContext(
         task=f"打开QQ，滚动列表找到「{TARGET}」", step=1, read_only=True,
-        xml=ABSENT_XML, list_only=True, list_max_scrolls=2,
+        xml=ABSENT_XML, search_allowed=False, list_max_scrolls=2,
     )
 
     assert rule_policy.decide(ctx)["action_type"] == "swipe"
@@ -398,20 +412,44 @@ def test_archive_step_refreshes_stale_current_screenshot(tmp_path, monkeypatch):
     assert not (tmp_path / "step_001_observe.png").exists()
 
 
-def test_qq_type_action_is_blocked_without_calling_phone():
+def test_update_in_target_group_tracks_entry_and_exit():
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent._in_target_group = False
+    agent.last_memory = TaskMemory(f"打开QQ，滚动列表找到「{TARGET}」")
+
+    agent._update_in_target_group(
+        {"action_type": "tap", "rule": {"name": "open_group"}, "target": TARGET})
+    assert agent._in_target_group is True
+
+    agent._update_in_target_group({"action_type": "back"})
+    assert agent._in_target_group is False
+
+    agent._update_in_target_group({"action_type": "tap", "target": DISTRACTOR})
+    assert agent._in_target_group is False
+
+    agent._update_in_target_group({"action_type": "tap", "target": TARGET})
+    assert agent._in_target_group is True
+
+    agent._update_in_target_group({"action_type": "open_app", "app_name": "QQ"})
+    assert agent._in_target_group is False
+
+
+def test_qq_search_type_is_allowed_in_read_only():
+    """搜索优先后，QQ 也要能在只读模式下往搜索框输入中文群名。"""
     agent = object.__new__(screen_agent.ScreenAgent)
     agent.read_only = True
-    agent._list_only_mode = True
     calls = []
 
     class _Phone:
         def type_text(self, text, allow_search=False):
-            calls.append(text)
+            calls.append((text, allow_search))
 
     agent.phone = _Phone()
 
-    action = {"action_type": "type", "text": "计算机班级群"}
+    action = {
+        "action_type": "type", "text": "计算机班级群",
+        "search_input": True, "rule": {"name": "search_type"},
+    }
     assert agent._execute(action) is False
-    assert action["blocked"] is True
-    assert "列表滚动" in action["blocked_reason"]
-    assert calls == []
+    assert not action.get("blocked")
+    assert calls == [("计算机班级群", True)]

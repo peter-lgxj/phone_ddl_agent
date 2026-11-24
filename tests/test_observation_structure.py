@@ -201,6 +201,31 @@ def test_finish_step_keeps_structured_messages(tmp_path, monkeypatch):
     ]
 
 
+def test_build_mobile_messages_skips_list_phase_observations(tmp_path):
+    """进入目标群之前看到的列表/搜索页内容不能算成该群的消息。"""
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent.run_dir = tmp_path
+    memory = TaskMemory("打开「超商书友群」，最近7天")
+    memory.steps = [
+        {
+            "step": 1, "action_type": "swipe", "in_target_group": False,
+            "observation": "发送者：张万湑 时间：00:12 原文：别的群的预览",
+        },
+        {
+            "step": 2, "action_type": "tap", "in_target_group": True,
+            "observation": "发送者：李四 时间：09:00 原文：目标群的DDL",
+        },
+    ]
+    agent.last_memory = memory
+
+    messages = build_mobile_messages(
+        agent, source_name="QQ / 超商书友群", source_type="im_group",
+        subject="QQ / 超商书友群", thread_id="qq-shangchao", now=NOW,
+    )
+
+    assert [message.body for message in messages] == ["目标群的DDL"]
+
+
 def test_finish_without_messages_keeps_completion_text(tmp_path, monkeypatch):
     agent = _agent(tmp_path, monkeypatch, {
         "observation": "",

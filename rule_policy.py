@@ -63,10 +63,10 @@ class RuleContext:
     search_ascii_only: bool = False
     # 实验开关：目标在可见行时也强制走搜索，用于对比搜索/列表两条路径
     search_force: bool = False
-    # 是否允许走搜索；adb_dump 下实测搜索页 dump 更慢，默认关闭（仍可强制开启）
+    # 是否允许走搜索；搜索优先，只有调用方显式关闭时才直接滚动
     search_allowed: bool = True
-    # QQ 群定位：只滚动列表 + OCR 匹配，禁止打开搜索/输入中文
-    list_only: bool = False
+    # 搜索不可用/未命中时的滚动兜底；滚动过程只滑不点，绝不点非精确群
+    list_fallback: bool = True
     list_max_scrolls: int = 8
 
 
@@ -287,6 +287,69 @@ def find_target_rows(xml_text: str, needle: str) -> list[dict]:
     return rows
 
 
+_ROW_TITLE_SEP_RE = re.compile(r"[,，\u3000]")
+
+
+def row_title(text: str) -> str:
+    """会话行的标题部分。
+
+    QQ 的 adb dump 会把「群名、未读数、最后一条预览、时间」拼进同一个节点文本，
+    标题是第一个分隔符之前的部分；微信等有独立标题节点时原样返回。
+    """
+    return _ROW_TITLE_SEP_RE.split(text or "", maxsplit=1)[0].strip()
+
+
+_UNREAD_SUFFIX_RE = re.compile(
+    r"^(?:[(（\[【]\s*\d+\s*[)）\]】]|\s+\d+\s*条未读.*)$"
+)
+
+
+def _unread_suffix_ok(rest: str) -> bool:
+    """标题后只允许「未读数」这类带括号的后缀，避免把「llm小组2」当同一个群。"""
+    return bool(_UNREAD_SUFFIX_RE.match(rest.strip()))
+
+
+def label_matches_target(label: str, target: str) -> bool:
+    """会话行标题是否逐字符等于目标群名（大小写敏感，只放行未读数后缀）。"""
+    wanted = _compact(target)
+    if not wanted:
+        return False
+    title = row_title(label)
+    if _compact(title) == wanted:
+        return True
+    name = target.strip()
+    if title.startswith(name):
+        return _unread_suffix_ok(title[len(name):])
+    return False
+
+
+def find_exact_target_rows(xml_text: str, needle: str) -> list[dict]:
+    """只返回标题逐字符一致的会话行；近似名、大小写变体一律不返回。
+
+    这是「不得点开非目标群」的执行点：滚动/首屏定位只允许从这里拿坐标。
+    """
+    root = parse_xml(xml_text)
+    if root is None:
+        return []
+    parents = {child: parent for parent in root.iter() for child in parent}
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for node in root.iter("node"):
+        text = (node.get("text") or node.get("content-desc") or "").strip()
+        if not text or not label_matches_target(text, needle):
+            continue
+        clickable = _nearest_clickable(node, parents)
+        if clickable is None:
+            continue
+        bounds = clickable.get("bounds") or ""
+        center = _center(bounds)
+        if not center or bounds in seen:
+            continue
+        seen.add(bounds)
+        rows.append({"text": text, "center": center, "bounds": bounds, "clickable": True})
+    return rows
+
+
 def find_similar_rows(xml_text: str, needle: str, threshold: float = 0.82) -> list[dict]:
     """搜索结果里与目标名高度相似的候选行。
 
@@ -323,22 +386,6 @@ def find_similar_rows(xml_text: str, needle: str, threshold: float = 0.82) -> li
         seen.add(bounds)
         rows.append({"text": text, "center": center, "bounds": bounds, "clickable": True})
     return rows
-
-
-def find_target_row(xml_text: str, needle: str) -> dict | None:
-    root = parse_xml(xml_text)
-    if root is None:
-        return None
-    exact, partial = _collect_matches(root, needle)
-    for bucket in (exact, partial):
-        candidates = [item for item in bucket if item["clickable"]]
-        if len(candidates) == 1:
-            return candidates[0]
-        if len(candidates) > 1:
-            # 同一行可能同时命中 text 与 content-desc，按 bounds 去重后仍是多个才算歧义
-            distinct = {item["bounds"] for item in candidates}
-            return candidates[0] if len(distinct) == 1 else None
-    return None
 
 
 class AmbiguousGroupName(RuntimeError):
@@ -592,95 +639,112 @@ def decide(ctx: RuleContext) -> dict | None:
     targets = extract_quoted_targets(ctx.task)
 
     # 2a) 搜索流程：点搜索入口 → 输入精确名称 → 点唯一结果。
-    #     只在目标不在当前屏可见行时启用；候选多于一个或搜索失败就交回模型。
+    #     首屏没有逐字符一致的群名、或显式强制搜索时才启用。
     stage = state.get("search_stage")
-    if targets and stage and not ctx.list_only:
+    if targets and stage:
         target = targets[0]
         if stage == "entry":
             box = find_search_input(ctx.xml)
             if box is None:
                 state["search_stage"] = None
                 state["search_failed"] = "no_input"
-                return None
-            state["search_stage"] = "result"
-            query = target
-            if ctx.search_ascii_only:
-                token = _ascii_token(target)
-                if not token and not target.isascii():
-                    state["search_stage"] = None
-                    state["search_failed"] = "non_ascii_input"
+                # 搜索入口没打开搜索框：仍在列表时交给下面的滚动兜底
+                if not ctx.list_fallback or find_search_entry(ctx.xml) is None:
                     return None
-                query = token or target
-            return _action(
-                "type", "search_type", f"规则快路：搜索框输入「{query}」",
-                target=target, text=query, search_query=query, search_input=True,
-                resource_id=box["resource_id"],
-            )
-        rows: list[dict] = []
+            else:
+                state["search_stage"] = "result"
+                query = target
+                if ctx.search_ascii_only:
+                    token = _ascii_token(target)
+                    if not token and not target.isascii():
+                        state["search_stage"] = None
+                        state["search_failed"] = "non_ascii_input"
+                        return None
+                    query = token or target
+                return _action(
+                    "type", "search_type", f"规则快路：搜索框输入「{query}」",
+                    target=target, text=query, search_query=query, search_input=True,
+                    resource_id=box["resource_id"],
+                )
+        else:
+            rows: list[dict] = []
+            seen_bounds: set[str] = set()
+            for item in targets:
+                # 搜索结果只接受逐字符一致的候选；大小写不同或近似的名字一律不点，
+                # 否则「LLM小组」的搜索会进到「llm小组」。
+                for row in find_exact_rows(ctx.xml, item):
+                    if row["bounds"] in seen_bounds:
+                        continue
+                    seen_bounds.add(row["bounds"])
+                    rows.append(row)
+            size = root_size(ctx.xml)
+            height = size[1] if size else 0
+            state["search_stage"] = None
+            if len(rows) == 1 and not _in_title_bar(rows[0], height):
+                row = rows[0]
+                x, y = row["center"]
+                label = row["text"]
+                action = _tap_action(
+                    ctx, "search_result", f"规则快路：打开搜索结果「{label}」", x, y, label)
+                if action is None:
+                    return None
+                state["entered_group"] = label
+                state["scrolls"] = 0
+                state["last_scroll_text"] = ""
+                state["stagnant"] = 0
+                return action
+            if not rows:
+                # 没有任何逐字符一致的候选：只有大小写差异/近似名时标记歧义，
+                # 不自动挑一个，也不让整轮失败（由上层汇总后交给人选定）。
+                labels = ambiguous_candidates(ctx.xml, targets[0])
+                if labels:
+                    raise AmbiguousGroupName(targets[0], labels)
+            state["search_failed"] = "ambiguous" if rows else "no_result"
+            if state.get("search_backs", 0) < 1:
+                # 搜索页没有可用结果：退回列表后改走滚动兜底，不在这里点任何行
+                state["search_backs"] = state.get("search_backs", 0) + 1
+                return _action(
+                    "back", "search_back",
+                    "规则快路：搜索没有精确结果，返回列表后滚动兜底")
+            return None
+
+    # 2b) 开群：首屏逐字符一致的群名直接进；没有就搜索；搜索不可用才滚动兜底。
+    #     滚动只滑动、不点任何行，绝不点开名字相似或只有大小写不同的群。
+    #     已经进群（state）、或页面已有输入框（说明已在会话/详情页）时一律不点：
+    #     会话页标题栏文字与群名完全相同且可点击，点它等于原地空转一步。
+    if (targets and not state.get("entered_group")
+            and find_input(ctx.xml) is None):
+        rows: list[tuple[str, dict]] = []
         seen_bounds: set[str] = set()
-        for item in targets:
-            # 搜索结果只接受逐字符一致的候选；大小写不同或近似的名字一律不点，
-            # 否则「LLM小组」的搜索会进到「llm小组」。
-            for row in find_exact_rows(ctx.xml, item):
+        for target in targets:
+            for row in find_exact_target_rows(ctx.xml, target):
                 if row["bounds"] in seen_bounds:
                     continue
                 seen_bounds.add(row["bounds"])
-                rows.append(row)
+                rows.append((target, row))
         size = root_size(ctx.xml)
         height = size[1] if size else 0
-        state["search_stage"] = None
-        if len(rows) == 1 and not _in_title_bar(rows[0], height):
-            row = rows[0]
+        if len(rows) == 1 and not ctx.search_force and not _in_title_bar(rows[0][1], height):
+            target, row = rows[0]
             x, y = row["center"]
-            label = row["text"]
             action = _tap_action(
-                ctx, "search_result", f"规则快路：打开搜索结果「{label}」", x, y, label)
+                ctx, "open_group", f"规则快路：打开「{target}」", x, y, target)
             if action is None:
                 return None
-            state["entered_group"] = label
+            state["entered_group"] = target
             state["scrolls"] = 0
             state["last_scroll_text"] = ""
             state["stagnant"] = 0
             return action
-        if not rows:
-            # 没有任何逐字符一致的候选：只有大小写差异/近似名时标记歧义，
-            # 不自动挑一个，也不让整轮失败（由上层汇总后交给人选定）。
-            labels = ambiguous_candidates(ctx.xml, targets[0])
-            if labels:
-                raise AmbiguousGroupName(targets[0], labels)
-        state["search_failed"] = "ambiguous" if rows else "no_result"
-        return None
-
-    # 2) 开群/打开会话：任务里点名的目标在控件树里有唯一可点击行。
-    #    已经进群（state）、或页面已有输入框（说明已在会话/详情页）时一律不点：
-    #    会话页标题栏文字与群名完全相同且可点击，点它等于原地空转一步。
-    if (targets and not state.get("entered_group")
-            and find_input(ctx.xml) is None):
-        found = []
-        for target in targets:
-            row = find_target_row(ctx.xml, target)
-            if row is not None:
-                found.append((target, row))
-        size = root_size(ctx.xml)
-        height = size[1] if size else 0
-        if len(found) == 1 and not ctx.search_force and not _in_title_bar(found[0][1], height):
-            target, row = found[0]
-            x, y = row["center"]
-            label = row["text"] or target
-            action = _tap_action(
-                ctx, "open_group", f"规则快路：打开「{label}」", x, y, label)
-            if action is None:
-                return None
-            state["entered_group"] = label
-            state["scrolls"] = 0
-            state["last_scroll_text"] = ""
-            state["stagnant"] = 0
-            return action
-        if ctx.list_only:
-            # QQ 明确要求不输入中文、不使用搜索框：列表里没看到目标就滚动，
-            # 由上层 OCR 兜底负责在截图里匹配群名。
-            return _list_scroll_action(ctx, state)
-        if (ctx.search_allowed and (not found or ctx.search_force)
+        if len(rows) > 1:
+            # 首屏同时出现多个同名行：不猜，交给人选定
+            labels: list[str] = []
+            for target, row in rows:
+                label = row_title(row["text"]) or target
+                if label not in labels:
+                    labels.append(label)
+            raise AmbiguousGroupName(rows[0][0], labels)
+        if (ctx.search_allowed and (not rows or ctx.search_force)
                 and not state.get("search_attempted")):
             entry = find_search_entry(ctx.xml)
             if entry is not None:
@@ -688,8 +752,11 @@ def decide(ctx: RuleContext) -> dict | None:
                 state["search_stage"] = "entry"
                 x, y = entry["center"]
                 return _tap_action(
-                    ctx, "search_entry", "规则快路：目标不在可见行，打开搜索",
+                    ctx, "search_entry", "规则快路：首屏没有目标群，打开搜索",
                     x, y, "搜索")
+        if ctx.list_fallback and (find_search_entry(ctx.xml) is not None
+                                  or state.get("search_attempted")):
+            return _list_scroll_action(ctx, state)
 
     # 3) 点已知 resource-id 的输入框（只读模式下不点，避免下一步必然被拒的输入）
     if (not ctx.read_only and "搜索" in (ctx.task or "")
