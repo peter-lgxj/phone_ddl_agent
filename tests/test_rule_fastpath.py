@@ -264,15 +264,18 @@ def test_force_search_skips_visible_row():
     assert action["rule"]["name"] == "search_entry"
 
 
-def test_search_disabled_on_slow_dumps_hands_back_to_model():
+def test_search_disabled_falls_back_to_list_scroll():
     state = {}
     action = rule_policy.decide(rule_policy.RuleContext(
         task="打开「COMP7503 作业通知群」", step=1, read_only=True,
         xml=SEARCH_ENTRY_XML, state=state, search_allowed=False))
 
-    # adb_dump 下搜索页 dump 实测更慢：默认不走搜索，交回模型
-    assert action is None
-    assert state.get("search_stage") is None
+    # 搜索不可用时才退回滚动，并记录原因（首屏→搜索→滚动兜底）
+    assert action["action_type"] == "swipe"
+    assert action["rule"]["name"] == "list_scroll"
+    assert action["strategy"] == "scroll_fallback"
+    assert action["strategy_level"] == 3
+    assert action["search_unavailable_reason"] == "search_disabled"
 
 
 def test_search_result_taps_unique_exact_row():
@@ -282,17 +285,23 @@ def test_search_result_taps_unique_exact_row():
 
     assert action["rule"]["name"] == "search_result"
     assert (action["x"], action["y"]) == (540, 760)
+    assert action["strategy"] == "search"
+    assert action["strategy_level"] == 2
     assert state["entered_group"] == "COMP7503 作业通知群"
 
 
-def test_search_miss_hands_back_to_model():
+def test_search_miss_falls_back_to_list_scroll():
     state = {"search_stage": "result", "search_attempted": True}
-    assert rule_policy.decide(make_ctx(
-        GROUPS_XML, "打开「不存在的群」", state=state)) is None
+    action = rule_policy.decide(make_ctx(
+        GROUPS_XML, "打开「不存在的群」", state=state))
+
+    assert action["action_type"] == "swipe"
+    assert action["rule"]["name"] == "list_scroll"
+    assert action["search_unavailable_reason"] == "no_result"
     assert state["search_failed"] == "no_result"
 
 
-def test_search_ambiguous_hands_back_to_model():
+def test_search_exact_name_wins_over_similar_name():
     xml = (
         '<hierarchy><node bounds="[0,0][1080,2374]">'
         '<node text="2026 计算机班级群" clickable="true" bounds="[0,700][1080,800]" />'
@@ -300,8 +309,49 @@ def test_search_ambiguous_hands_back_to_model():
         '</node></hierarchy>'
     )
     state = {"search_stage": "result", "search_attempted": True}
-    assert rule_policy.decide(make_ctx(xml, "打开「2026 计算机班级群」", state=state)) is None
-    assert state["search_failed"] == "ambiguous"
+    action = rule_policy.decide(make_ctx(xml, "打开「2026 计算机班级群」", state=state))
+
+    assert action["action_type"] == "tap"
+    assert action["rule"]["name"] == "search_result"
+    assert (action["x"], action["y"]) == (540, 750)
+    assert action["target"] == "2026 计算机班级群"
+
+
+def test_search_result_with_only_similar_name_does_not_tap():
+    # 搜索结果只有近似名：不能点，标记 no_exact_match 后退回列表滚动
+    xml = (
+        '<hierarchy><node bounds="[0,0][1080,2374]">'
+        '<node text="搜索" class="android.view.ViewGroup" clickable="true" '
+        'bounds="[0,244][1080,405]" />'
+        '<node text="2026 计算机班级二群" clickable="true" bounds="[0,820][1080,920]" />'
+        '</node></hierarchy>'
+    )
+    state = {"search_stage": "result", "search_attempted": True}
+    action = rule_policy.decide(make_ctx(xml, "打开「2026 计算机班级群」", state=state))
+
+    assert action["action_type"] == "swipe"
+    assert action["rule"]["name"] == "list_scroll"
+    assert action["search_unavailable_reason"] == "no_exact_match"
+    assert state["search_failed"] == "no_exact_match"
+
+
+def test_first_screen_hit_uses_first_screen_strategy():
+    action = rule_policy.decide(make_ctx(
+        GROUPS_XML, "在 QQ 中查找「COMP7503 作业通知群」里实验报告二的截止时间"))
+
+    assert action["rule"]["name"] == "open_group"
+    assert action["strategy"] == "first_screen"
+    assert action["strategy_level"] == 1
+
+
+def test_first_screen_miss_opens_search_as_second_level():
+    state = {}
+    action = rule_policy.decide(make_ctx(
+        SEARCH_ENTRY_XML, "打开「COMP7503 作业通知群」", state=state))
+
+    assert action["rule"]["name"] == "search_entry"
+    assert action["strategy"] == "search"
+    assert action["strategy_level"] == 2
 
 
 def test_rule_action_allows_search_type_but_rejects_message_type(tmp_path, monkeypatch):

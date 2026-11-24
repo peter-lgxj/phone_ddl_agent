@@ -515,3 +515,93 @@ def test_submit_after_search_typing_stops_safely():
         agent._execute(action)
     assert action["blocked"] is True
     assert action["input_policy"] == "search_submit_blocked"
+
+
+# ---------------------------------------------------------------- 搜索结果精确名校验
+def test_search_result_similar_name_is_not_tapped():
+    agent, calls = _snap_agent()
+    agent._search_input_active = True
+    agent._search_target = "2026 计算机班级群"
+    agent._search_name_misses = 0
+    agent.ocr = SimpleNamespace(
+        detect_tree=lambda: [],
+        detect_ocr=lambda path: [{
+            "text": "2026 计算机班级二群", "center": (400, 900),
+            "bbox": (60, 860, 740, 940), "source": "ocr", "type": "text",
+        }],
+    )
+    memory = TaskMemory("打开「2026 计算机班级群」")
+
+    action = agent._snap_mapped_action({
+        "action_type": "tap", "x": 400, "y": 900,
+        "target": "2026 计算机班级二群", "description": "点击搜索结果",
+    }, {}, memory)
+
+    assert action["action_type"] == "wait"
+    assert action["search_result_inexact"] == "2026 计算机班级二群"
+    assert agent._search_name_misses == 1
+    assert calls == []
+
+
+def test_search_result_exact_name_is_tapped():
+    agent, _ = _snap_agent()
+    agent._search_input_active = True
+    agent._search_target = "2026 计算机班级群"
+    agent._search_name_misses = 0
+    agent.ocr = SimpleNamespace(
+        detect_tree=lambda: [],
+        detect_ocr=lambda path: [{
+            "text": "2026 计算机班级群", "center": (400, 900),
+            "bbox": (60, 860, 740, 940), "source": "ocr", "type": "text",
+        }],
+    )
+    memory = TaskMemory("打开「2026 计算机班级群」")
+
+    action = agent._snap_mapped_action({
+        "action_type": "tap", "x": 400, "y": 900,
+        "target": "2026 计算机班级群", "description": "点击搜索结果",
+    }, {}, memory)
+
+    assert action["action_type"] == "tap"
+    assert action["localization_source"] == "ocr"
+
+
+# ---------------------------------------------------------------- 策略分级审计
+def _strategy_agent(search_failed: str = "") -> screen_agent.ScreenAgent:
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent._rule_state = {"search_failed": search_failed} if search_failed else {}
+    agent._search_input_active = False
+    return agent
+
+
+def test_first_screen_tap_is_tagged_first_screen():
+    agent = _strategy_agent()
+    action = agent._tag_strategy(
+        {"action_type": "tap", "target": "课程群"}, TaskMemory("打开微信「课程群」"))
+
+    assert action["strategy"] == "first_screen"
+    assert action["strategy_level"] == 1
+
+
+def test_search_entry_and_input_are_tagged_search():
+    agent = _strategy_agent()
+    entry = agent._tag_strategy(
+        {"action_type": "tap", "target": "搜索", "description": "点击顶部搜索框"},
+        TaskMemory("打开微信搜索「课程群」"))
+    typed = agent._tag_strategy(
+        {"action_type": "type", "text": "课程群", "search_input": True},
+        TaskMemory("打开微信搜索「课程群」"))
+
+    assert entry["strategy"] == "search" and entry["strategy_level"] == 2
+    assert typed["strategy"] == "search" and typed["strategy_level"] == 2
+
+
+def test_dual_failure_swipe_is_tagged_scroll_fallback_with_reason():
+    agent = _strategy_agent(search_failed="no_result")
+    action = agent._tag_strategy(
+        {"action_type": "swipe", "x": 540, "y": 1700, "x2": 540, "y2": 700},
+        TaskMemory("打开微信搜索「课程群」"))
+
+    assert action["strategy"] == "scroll_fallback"
+    assert action["strategy_level"] == 3
+    assert action["search_unavailable_reason"] == "no_result"

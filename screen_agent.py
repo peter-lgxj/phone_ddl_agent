@@ -187,6 +187,7 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _ASCII_TOKEN_RE = re.compile(r"[A-Za-z0-9]{4,}")
 _SEARCH_SUBMIT_RE = re.compile(r"发送|提交|确认搜索|搜索确认|回车|\b(?:send|submit|enter)\b",
                                re.IGNORECASE)
+_SEARCH_ENTRY_TEXT_RE = re.compile(r"搜索|放大镜|search", re.IGNORECASE)
 
 
 def chinese_search_target(task: str) -> str | None:
@@ -794,9 +795,10 @@ class ScreenAgent:
     7. 历史中验证结果包含"输入成功"只表示文字已输入，不表示搜索或发送已完成
     8. tap 时 target 只填目标元素的文字本身（如"昊"），元素类型写在 description（如"点击联系人昊"）
     {duty_rule}
-    10. 查找已知名称的联系人、群或内容时，先检查截图顶部的放大镜图标或搜索框。放大镜就是搜索入口；只要它可见且目标不在当前列表，本步必须 tap 搜索入口（target 填"搜索"），下一步输入目标名称。此时禁止用 swipe 翻列表。只有截图中确实没有搜索入口时才允许 swipe。
-    11. 当前发送图尺寸为 {sent_width}x{sent_height}；tap 必须填写 x、y；swipe 必须填写 x、y、x2、y2。坐标均为当前发送图内的整数像素坐标。不要使用 x1/y1 作为起点字段。
-    12. 向上滚动列表的合法示例：{swipe_example}
+    10. 定位已知名称的联系人/群/内容，固定顺序：① 首屏（当前可视区）已出现目标 → 直接 tap 该行，不进搜索；② 首屏没有 → tap 顶部搜索入口（放大镜或搜索框，target 填"搜索"），下一步在搜索框输入目标全名；监控实时搜索结果，只点名称与目标完全一致的那一项——「2026 计算机班级群」不能点「2026 计算机班级二群」这类近似名；③ 只有搜索不可用（没有搜索入口、搜索框定位失败、无结果）时才退回列表 swipe，并在 thought 里写明退回原因。
+    11. 搜索只输入、不提交：输入后看实时结果，禁止按回车、点发送或任何"确认搜索/提交"控件。若某 App 必须回车才出结果，填 wait 并在 thought 说明该路径不可行，不要试探。
+    12. 当前发送图尺寸为 {sent_width}x{sent_height}；tap 必须填写 x、y；swipe 必须填写 x、y、x2、y2。坐标均为当前发送图内的整数像素坐标。不要使用 x1/y1 作为起点字段。
+    13. 向上滚动列表的合法示例：{swipe_example}
 
     ## 何时调用 finish
     {finish_rules}
@@ -1200,6 +1202,32 @@ class ScreenAgent:
         if found:
             snap_source = found[0].get("source", "unknown")
             mapped, moves = snap_action_coords(mapped, candidates, max_distance)
+
+        # 搜索结果只认完全一致的名称：模型若点到「…二群」这类近似名，拒绝执行，
+        # 连续两次只命中近似名则判定搜索策略不可行并停止，避免换名继续碰运气。
+        if found and getattr(self, "_search_input_active", False):
+            wanted = str(getattr(self, "_search_target", "") or "").strip()
+            element_text = str(found[0].get("text") or "").strip()
+            if (wanted and element_text
+                    and rule_policy.looks_like_target(element_text, wanted)):
+                misses = int(getattr(self, "_search_name_misses", 0)) + 1
+                self._search_name_misses = misses
+                message = (
+                    f"搜索结果「{element_text}」与目标「{wanted}」名称不完全一致，"
+                    "近似名不点击"
+                )
+                timings["search_result_rejected"] = element_text
+                if misses >= 2:
+                    raise NoProgressDetected(
+                        f"{message}；连续 {misses} 次只命中近似名，当前搜索策略不可行")
+                print(f"  ⛔  {message}，保持当前界面重新观察")
+                return {
+                    **mapped,
+                    "action_type": "wait",
+                    "search_result_inexact": element_text,
+                    "thought": message,
+                    "description": f"{message}，未执行点击",
+                }
 
         # 用控件树 bounds 复核 tap 落点：群列表/会话列表禁止按比例换算定位，
         # 越界、目标歧义或落点不在目标元素内一律拒绝执行并记录原因。
@@ -1701,6 +1729,7 @@ class ScreenAgent:
 
         if t == "open_app":
             self._search_input_active = False
+            self._search_target = ""
             self.launcher.launch(action.get("app_name", ""))
         elif t == "tap_input_box":
             if not self.phone.tap_input_box():
@@ -1739,6 +1768,11 @@ class ScreenAgent:
                 failures.pop(text_key, None)
                 if search_type_allowed or action.get("search_input"):
                     self._search_input_active = True
+                    self._search_name_misses = 0
+                    task = getattr(getattr(self, "last_memory", None), "task", "") or ""
+                    targets = rule_policy.extract_quoted_targets(task)
+                    self._search_target = targets[0] if targets else str(
+                        action.get("target") or text)
             except PermissionError:
                 # 只读保护不能被当成普通输入失败吞掉
                 raise
@@ -1760,9 +1794,11 @@ class ScreenAgent:
             print("按下回车")
         elif t == "back":
             self._search_input_active = False
+            self._search_target = ""
             self.phone.press_back()
         elif t == "home":
             self._search_input_active = False
+            self._search_target = ""
             self.phone.press_home()
         elif t == "wait":
             time.sleep(2)
@@ -2247,6 +2283,23 @@ class ScreenAgent:
             "ocr_list_direction": direction,
         }
 
+    def _search_needs_chinese_ime(self, task: str) -> bool:
+        """quoted 目标里是否有必须靠中文输入法才能输入的纯中文名称。"""
+        for target in rule_policy.extract_quoted_targets(task):
+            if _CJK_RE.search(target) and not _ASCII_TOKEN_RE.search(target):
+                return True
+        return False
+
+    def _chinese_ime_available(self) -> bool:
+        """缓存 ADBKeyboard 可用性：同一次运行只探测一次，避免每步 adb 往返。"""
+        cached = getattr(self, "_chinese_ime_available_flag", None)
+        if cached is not None:
+            return bool(cached)
+        probe = getattr(self.phone, "chinese_input_available", None)
+        value = bool(probe()) if callable(probe) else False
+        self._chinese_ime_available_flag = value
+        return value
+
     def _rule_action(self, memory: TaskMemory) -> dict | None:
         """尝试用规则决定本步动作；None 表示需要 VLM 判断。
 
@@ -2280,6 +2333,23 @@ class ScreenAgent:
         self._last_rule_seconds = time.time() - started
 
         last_action = dict(memory.steps[-1].get("action") or {}) if memory.steps else {}
+        base_search_allowed = (
+            self.driver_kind == "uiautomator2"
+            or bool(getattr(config, "RULE_SEARCH_FORCE", False))
+        )
+        # 中文目标且输入法不可用时搜索必然失败：提前禁用搜索并给出原因，
+        # 由规则直接退回列表滚动，而不是先点开搜索框再失败。
+        needs_chinese_ime = (
+            self.driver_kind != "uiautomator2"
+            and self._search_needs_chinese_ime(task)
+        )
+        search_blocked_reason = ""
+        if base_search_allowed and needs_chinese_ime and not self._chinese_ime_available():
+            search_blocked_reason = "adbkeyboard_missing"
+        elif not base_search_allowed:
+            search_blocked_reason = "search_disabled_on_adb_dump"
+        search_allowed = base_search_allowed and not (
+            needs_chinese_ime and search_blocked_reason == "adbkeyboard_missing")
         action = rule_policy.decide(rule_policy.RuleContext(
             task=task,
             step=len(memory.steps) + 1,
@@ -2290,10 +2360,8 @@ class ScreenAgent:
             max_scrolls=int(getattr(config, "RULE_MAX_SCROLLS", 2)),
             search_ascii_only=self.driver_kind != "uiautomator2",
             search_force=bool(getattr(config, "RULE_SEARCH_FORCE", False)),
-            search_allowed=(
-                self.driver_kind == "uiautomator2"
-                or bool(getattr(config, "RULE_SEARCH_FORCE", False))
-            ),
+            search_allowed=search_allowed,
+            search_blocked_reason=search_blocked_reason if not search_allowed else "",
             known_input_resource_ids=(
                 getattr(config, "WECHAT_INPUT_RESOURCE_ID", ""),
             ),
@@ -2324,6 +2392,61 @@ class ScreenAgent:
         print(f"  ⚡ 规则快路命中：{record['name']}"
               f"（跳过视觉决策，省 {record['saved_calls']} 次模型调用）")
         return action
+
+    def _tag_strategy(self, action: dict, memory: TaskMemory) -> dict:
+        """给非规则动作标注定位策略级别，便于日志/step JSON 事后审计。
+
+        固定顺序：``first_screen``（首屏命中）→ ``search``（搜索）→
+        ``scroll_fallback``（搜索不可用才滚动）。规则动作已自带 strategy，不覆盖。
+        """
+        if action.get("strategy"):
+            return action
+        kind = action.get("action_type", "")
+        rule_name = (action.get("rule") or {}).get("name", "")
+        state = getattr(self, "_rule_state", None) or {}
+        strategy = ""
+        level = 0
+        reason = ""
+        if rule_name in ("open_group", "search_result", "search_entry", "search_type",
+                         "list_scroll", "ocr_list"):
+            strategy, level = {
+                "open_group": ("first_screen", 1),
+                "search_entry": ("search", 2),
+                "search_type": ("search", 2),
+                "search_result": ("search", 2),
+                "list_scroll": ("scroll_fallback", 3),
+                "ocr_list": ("scroll_fallback", 3),
+            }[rule_name]
+        elif kind in ("tap_input_box",) or (
+                kind == "tap" and _SEARCH_ENTRY_TEXT_RE.search(
+                    f"{action.get('target') or ''} {action.get('description') or ''}")
+                and not getattr(self, "_search_input_active", False)):
+            strategy, level = "search", 2
+        elif kind == "type" and action.get("search_input"):
+            strategy, level = "search", 2
+        elif kind == "tap" and getattr(self, "_search_input_active", False):
+            strategy, level = "search", 2
+        elif kind == "swipe":
+            if (state.get("search_failed") or state.get("search_unavailable_reason")
+                    or state.get("search_attempted")):
+                strategy, level = "scroll_fallback", 3
+                reason = (state.get("search_failed")
+                          or state.get("search_unavailable_reason")
+                          or "search_unavailable")
+        elif kind == "tap":
+            label = str(action.get("target") or "")
+            for target in rule_policy.extract_quoted_targets(memory.task or ""):
+                if rule_policy.names_match(label, target):
+                    strategy, level = "first_screen", 1
+                    break
+        if not strategy:
+            return action
+        tagged = dict(action)
+        tagged["strategy"] = strategy
+        tagged["strategy_level"] = level
+        if reason:
+            tagged["search_unavailable_reason"] = reason
+        return tagged
 
     def _rule_observe(self, action: dict, memory: TaskMemory) -> str:
         """规则步骤的观察：截图 + 控件树文字，不调用视觉模型。
@@ -2377,6 +2500,9 @@ class ScreenAgent:
         self._progress_signature = None
         self._progress_repeats = 0
         self._search_input_active = False
+        self._search_target = ""
+        self._search_name_misses = 0
+        self._chinese_ime_available_flag = None
         self.last_block_reason = ""
 
         refusal = read_only_task_refusal(task, self.read_only)
@@ -2385,8 +2511,11 @@ class ScreenAgent:
             # 给出安装/重试命令和列表滚动替代路径，不进入点击-失败循环。
             target = chinese_search_target(task)
             available = getattr(self.phone, "chinese_input_available", None)
-            if target and callable(available) and not available():
-                refusal = chinese_search_input_refusal(target)
+            if target and callable(available):
+                # 探测一次并缓存：后续规则快路不再重复 adb 查询
+                self._chinese_ime_available_flag = bool(available())
+                if not self._chinese_ime_available_flag:
+                    refusal = chinese_search_input_refusal(target)
         if refusal:
             print(f"\n  ⛔  {refusal}")
             self.last_status = "refused"
@@ -2522,6 +2651,12 @@ class ScreenAgent:
             timings.update(getattr(self, "_last_decision_timings", {}) or {})
         timings["decide_total"] = round(time.time() - started, 2)
         action = self._guard_window_completion(action, memory)
+        action = self._tag_strategy(action, memory)
+        if action.get("strategy"):
+            timings["strategy"] = action["strategy"]
+            timings["strategy_level"] = action.get("strategy_level")
+            if action.get("search_unavailable_reason"):
+                timings["search_unavailable_reason"] = action["search_unavailable_reason"]
 
         if rule_action is None:
             no_progress = self._detect_no_progress(action)
@@ -2698,6 +2833,9 @@ class ScreenAgent:
                 return action
             except TargetNotLocated:
                 # 定位失败是确定性结论：重试只会再花一次模型调用，直接显式失败
+                raise
+            except NoProgressDetected:
+                # 无进展/近似名连续命中同样是确定性结论，不能重试
                 raise
             except Exception as e:
                 last_error = e

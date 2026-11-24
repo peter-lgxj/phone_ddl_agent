@@ -65,6 +65,8 @@ class RuleContext:
     search_force: bool = False
     # 是否允许走搜索；adb_dump 下实测搜索页 dump 更慢，默认关闭（仍可强制开启）
     search_allowed: bool = True
+    # 搜索被禁用的具体原因（缺少中文输入法/搜索页过慢等），用于日志与滚动兜底审计
+    search_blocked_reason: str = ""
     # QQ 群定位：只滚动列表 + OCR 匹配，禁止打开搜索/输入中文
     list_only: bool = False
     list_max_scrolls: int = 8
@@ -82,6 +84,30 @@ def extract_quoted_targets(task: str) -> list[str]:
 
 def _compact(text: str) -> str:
     return re.sub(r"\s+", "", text or "")
+
+
+def normalize_name(text: str) -> str:
+    """名称归一化：只去掉空白，用于群名/联系人名的精确比对。"""
+    return _compact(text)
+
+
+def names_match(left: str, right: str) -> bool:
+    """两个名称是否完全一致（忽略空白差异）。"""
+    wanted = normalize_name(left)
+    return bool(wanted) and wanted == normalize_name(right)
+
+
+def looks_like_target(candidate: str, wanted: str, threshold: float = 0.6) -> bool:
+    """候选名是否像目标名但不完全一致（用于拒绝近似名误点）。
+
+    只有「包含关系或高相似度」才算近似名；「取消」「返回」这类导航文字不会被判成近似。
+    """
+    left, right = normalize_name(candidate), normalize_name(wanted)
+    if not left or not right or left == right:
+        return False
+    if left in right or right in left:
+        return True
+    return difflib.SequenceMatcher(None, left, right).ratio() >= threshold
 
 
 def _strip_to_xml(xml_text: str) -> str:
@@ -325,6 +351,18 @@ def find_similar_rows(xml_text: str, needle: str, threshold: float = 0.82) -> li
     return rows
 
 
+def find_exact_rows(xml_text: str, needle: str) -> list[dict]:
+    """结果列表里名称与目标完全一致的可点击行（不做相似度匹配）。
+
+    搜索结果里的近似名（如「…班级二群」）不能被当成目标点击。
+    """
+    root = parse_xml(xml_text)
+    if root is None:
+        return []
+    exact, _ = _collect_matches(root, needle)
+    return [row for row in exact if row["clickable"]]
+
+
 def find_target_row(xml_text: str, needle: str) -> dict | None:
     root = parse_xml(xml_text)
     if root is None:
@@ -470,7 +508,7 @@ def _tap_action(ctx: RuleContext, rule: str, description: str,
     return _action("tap", rule, description, x=x, y=y, target=target, **extra)
 
 
-def _list_scroll_action(ctx: RuleContext, state: dict) -> dict | None:
+def _list_scroll_action(ctx: RuleContext, state: dict, reason: str = "") -> dict | None:
     """列表定位兜底：目标不在可见行时向上滚动，直到上限或连续两屏不变。"""
     if state.get("list_disabled"):
         return None
@@ -492,10 +530,31 @@ def _list_scroll_action(ctx: RuleContext, state: dict) -> dict | None:
             state["list_last_text"] = text
     state["list_scrolls"] = scrolls + 1
     width, height = ctx.screen_size or root_size(ctx.xml) or (1080, 2374)
-    return _action(
-        "swipe", "list_scroll", "规则快路：目标不在可见行，向上滚动群/会话列表",
+    detail = f"，原因：{reason}" if reason else ""
+    action = _action(
+        "swipe", "list_scroll",
+        f"规则快路：目标不在可见行，向上滚动群/会话列表（搜索不可用{detail}）",
         x=width // 2, y=int(height * 0.72),
         x2=width // 2, y2=int(height * 0.30),
+        strategy="scroll_fallback", strategy_level=3,
+    )
+    if reason:
+        action["search_unavailable_reason"] = reason
+    return action
+
+
+def _search_failure_action(ctx: RuleContext, state: dict, reason: str) -> dict | None:
+    """搜索无结果/不可用：回到列表后改走滚动兜底，并记录失败原因供审计。"""
+    state["search_stage"] = None
+    state["search_failed"] = reason
+    if find_search_input(ctx.xml) is None and find_search_entry(ctx.xml) is not None:
+        # 已经在群/会话列表页：直接开始滚动，不用多按一次返回
+        return _list_scroll_action(ctx, state, reason=reason)
+    return _action(
+        "back", "search_failed_back",
+        f"规则快路：搜索不可用（{reason}），返回列表后改用滚动查找",
+        strategy="scroll_fallback", strategy_level=3,
+        search_unavailable_reason=reason,
     )
 
 
@@ -514,57 +573,61 @@ def decide(ctx: RuleContext) -> dict | None:
 
     targets = extract_quoted_targets(ctx.task)
 
-    # 2a) 搜索流程：点搜索入口 → 输入精确名称 → 点唯一结果。
-    #     只在目标不在当前屏可见行时启用；候选多于一个或搜索失败就交回模型。
+    # 2a) 搜索流程：点搜索入口 → 输入精确名称 → 点名称完全一致的结果。
+    #     结果只接受精确名；无结果/近似名/搜索不可用时退回列表滚动，并记录原因。
     stage = state.get("search_stage")
     if targets and stage and not ctx.list_only:
         target = targets[0]
         if stage == "entry":
             box = find_search_input(ctx.xml)
             if box is None:
-                state["search_stage"] = None
-                state["search_failed"] = "no_input"
-                return None
+                return _search_failure_action(ctx, state, "no_input")
             state["search_stage"] = "result"
             query = target
             if ctx.search_ascii_only:
                 token = _ascii_token(target)
                 if not token and not target.isascii():
-                    state["search_stage"] = None
-                    state["search_failed"] = "non_ascii_input"
-                    return None
+                    return _search_failure_action(ctx, state, "non_ascii_input")
                 query = token or target
             return _action(
-                "type", "search_type", f"规则快路：搜索框输入「{query}」",
+                "type", "search_type", f"规则快路：搜索框输入「{query}」（只检索不提交）",
                 target=target, text=query, search_query=query, search_input=True,
                 resource_id=box["resource_id"],
+                strategy="search", strategy_level=2,
             )
         rows: list[dict] = []
         seen_bounds: set[str] = set()
         for item in targets:
-            for row in find_similar_rows(ctx.xml, item):
+            for row in find_exact_rows(ctx.xml, item):
                 if row["bounds"] in seen_bounds:
                     continue
                 seen_bounds.add(row["bounds"])
                 rows.append(row)
         size = root_size(ctx.xml)
         height = size[1] if size else 0
-        state["search_stage"] = None
         if len(rows) == 1 and not _in_title_bar(rows[0], height):
             row = rows[0]
             x, y = row["center"]
             label = row["text"]
             action = _tap_action(
-                ctx, "search_result", f"规则快路：打开搜索结果「{label}」", x, y, label)
+                ctx, "search_result",
+                f"规则快路：打开搜索结果「{label}」（名称完全匹配）", x, y, label,
+                strategy="search", strategy_level=2,
+            )
             if action is None:
                 return None
+            state["search_stage"] = None
             state["entered_group"] = label
             state["scrolls"] = 0
             state["last_scroll_text"] = ""
             state["stagnant"] = 0
             return action
-        state["search_failed"] = "ambiguous" if rows else "no_result"
-        return None
+        if rows:
+            reason = "ambiguous" if len(rows) > 1 else "title_only"
+        else:
+            similar = any(find_similar_rows(ctx.xml, item) for item in targets)
+            reason = "no_exact_match" if similar else "no_result"
+        return _search_failure_action(ctx, state, reason)
 
     # 2) 开群/打开会话：任务里点名的目标在控件树里有唯一可点击行。
     #    已经进群（state）、或页面已有输入框（说明已在会话/详情页）时一律不点：
@@ -583,7 +646,8 @@ def decide(ctx: RuleContext) -> dict | None:
             x, y = row["center"]
             label = row["text"] or target
             action = _tap_action(
-                ctx, "open_group", f"规则快路：打开「{label}」", x, y, label)
+                ctx, "open_group", f"规则快路：首屏命中「{label}」，直接打开",
+                x, y, label, strategy="first_screen", strategy_level=1)
             if action is None:
                 return None
             state["entered_group"] = label
@@ -594,17 +658,31 @@ def decide(ctx: RuleContext) -> dict | None:
         if ctx.list_only:
             # QQ 明确要求不输入中文、不使用搜索框：列表里没看到目标就滚动，
             # 由上层 OCR 兜底负责在截图里匹配群名。
-            return _list_scroll_action(ctx, state)
+            return _list_scroll_action(ctx, state, reason="qq_list_only")
+
+        entry = find_search_entry(ctx.xml)
         if (ctx.search_allowed and (not found or ctx.search_force)
-                and not state.get("search_attempted")):
-            entry = find_search_entry(ctx.xml)
+                and not state.get("search_attempted") and entry is not None):
+            state["search_attempted"] = True
+            state["search_stage"] = "entry"
+            x, y = entry["center"]
+            return _tap_action(
+                ctx, "search_entry", "规则快路：首屏未命中，打开搜索（第二级策略）",
+                x, y, "搜索", strategy="search", strategy_level=2)
+
+        # 搜索不可用（被禁用 / 之前搜索无结果）：退回滚动兜底，并写明原因
+        if (not ctx.search_allowed or state.get("search_failed")
+                or state.get("search_unavailable_reason")):
+            reason = (ctx.search_blocked_reason or state.get("search_failed")
+                      or state.get("search_unavailable_reason") or "search_disabled")
             if entry is not None:
-                state["search_attempted"] = True
-                state["search_stage"] = "entry"
-                x, y = entry["center"]
-                return _tap_action(
-                    ctx, "search_entry", "规则快路：目标不在可见行，打开搜索",
-                    x, y, "搜索")
+                return _list_scroll_action(ctx, state, reason=reason)
+            return _action(
+                "back", "search_failed_back",
+                f"规则快路：搜索不可用（{reason}），返回列表后改用滚动查找",
+                strategy="scroll_fallback", strategy_level=3,
+                search_unavailable_reason=reason,
+            )
 
     # 3) 点已知 resource-id 的输入框（只读模式下不点，避免下一步必然被拒的输入）
     if (not ctx.read_only and "搜索" in (ctx.task or "")
