@@ -34,7 +34,7 @@
 - `experiments/run_experiment.py`：重复执行、单/多应用与 baseline 模式、每任务重置、manifest（git SHA/dirty、模型全名、温度、设备信息）
 - `experiments/metrics.py`：TSR、多 App TSR、SE、AT、ST、CS；CS 在判定粒度混合时拒绝计算并给出覆盖率
 - `experiments/baselines/`：stdin/stdout JSON 协议 + 通用子进程适配器 + 三个 wrapper 骨架（**未安装、未联调**）
-- `tests/`：510 passed、2 skipped（跳过的是需要本地 embedding 模型的可选用例）；其余用例不依赖真机/模型；CI 执行 compileall、tasks 校验、dry-run、ruff、pytest
+- `tests/`：540 passed、2 skipped（跳过的是需要本地 embedding 模型的可选用例）；其余用例不依赖真机/模型；CI 执行 compileall、tasks 校验、dry-run、ruff、pytest
 - 依赖：`requirements.txt`（版本下限）+ `requirements-lock.txt`（本机 3.12 解析）+ `requirements-dev.txt`
 - 文档：README 补运行前置、配置表、项目结构、实验用法、权重来源、隐私提示；`test.md` 的 30 步口径与 T19 残留文本已清理
 
@@ -57,7 +57,7 @@
 
 ### 已实跑（本机）
 
-- Python 3.12.14 venv：`pytest` **510 passed、2 skipped**、`ruff` 全绿、`run_experiment.py --dry-run` 通过
+- Python 3.12.14 venv：`pytest` **540 passed、2 skipped**、`ruff` 全绿、`run_experiment.py --dry-run` 通过
 - 真机：OPPO PLJ110 / Android 17 / 1080×2374（因 Android 17 与 uiautomator2 3.7.1 不兼容，真机走 `SCREEN_DRIVER=adb_dump`），微信「文件传输助手」自聊会话，单机、单账号、只读；包括滚动 OCR 观察、timeout 部分结果、端到端抽取，详见 `docs/real-device-test-report.md`
 - GitHub Actions：以本 PR 最新一次 run 为准
 
@@ -110,7 +110,7 @@ git checkout -b <自己的分支>
 3. 运行前确认 `adb devices` 有设备、`.env` 配好对应的 `*_API_KEY`；无 key 会在启动校验阶段直接报错
 4. 同一台手机不要同时跑 Web 界面和实验 runner：设备锁会阻止并发，抢不到锁的任务会直接失败
 5. 实验前先读 `experiments/README`（若有）与 `test.md`：CS 需要**逐次判定**（`{"T01": [true,false,true]}`），任务级布尔会导致 CS 拒绝计算
-6. `runs/` 会持续增长（每步截图 + JSON），跑批前记得清理或归档
+6. `runs/` 每步截图 + JSON 会持续增长；已限制自动运行目录默认保留 20 次（`RUNS_KEEP` 可调），人工证据目录不参与自动清理
 
 ---
 

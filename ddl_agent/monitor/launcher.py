@@ -217,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "\n[提示] 还没有配置检索目标（sources.yaml）。\n"
             "下一步：在项目目录运行\n"
-            '  python -m ddl_agent.monitor.cli add "监控微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次"\n'
+            '  python -m ddl_agent.monitor.cli add "定期读取微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次"\n'
             "也可以把 sources.example.yaml 复制为 sources.yaml 后编辑。"
         )
         return 2

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import os
 import re
 import subprocess
@@ -25,6 +26,8 @@ from PIL import Image
 
 import config
 from adb_utils import ADB
+
+logger = logging.getLogger(__name__)
 
 READ_ONLY_BLOCKED_METHODS = {"type_text", "press_enter", "send", "tap_send_button"}
 
@@ -297,8 +300,12 @@ class AdbDumpController:
         """找出残留的 uiautomator2 服务 pid；找不到就返回空列表。"""
         try:
             result = self._run("shell", "ps", "-A", "-o", "PID,ARGS", timeout=10)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - 诊断失败不影响主流程，但要留下原因
+            logger.debug("探测残留 uiautomator2 失败（ps 无法执行）：%s", exc)
             return []
+        if result.returncode != 0:
+            stderr = (result.stderr or b"").decode("utf-8", "replace").strip()
+            logger.debug("探测残留 uiautomator2 失败（ps rc=%s）：%s", result.returncode, stderr)
         pids: list[str] = []
         for line in (result.stdout or b"").decode("utf-8", "replace").splitlines():
             if _STALE_U2_MARKER not in line:
@@ -342,8 +349,8 @@ class AdbDumpController:
                     "另一个 UiAutomation 客户端占用连接，dump 进程被系统终止",
                     False,
                 )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - 诊断失败不影响主流程，但要留下原因
+            logger.debug("读取 logcat 诊断 dump 失败原因时出错：%s", exc)
         return (
             "进程被系统终止且没有输出；通常是 UiAutomation 被其它服务占用，"
             "可执行 `adb shell pkill -f com.wetest.uia2.Main` 或重启手机",
@@ -383,12 +390,14 @@ class AdbDumpController:
             last_error = (
                 (result.stderr or result.stdout or b"").decode("utf-8", "replace").strip()
             )
+            # 无论有没有错误输出都探测一次残留 u2 服务：
+            # 「already registered」分支不一定伴随空 stderr，清理后下次尝试才有机会成功。
+            diagnosis, cleaned = self._diagnose_dump_failure()
+            if cleaned:
+                print(f"  ⚠️  {diagnosis}")
             if not last_error:
-                # 进程被 SIGKILL 时 stdout/stderr 都是空的，真正原因只在 logcat；
-                # 顺手清理残留的 uiautomator2 服务，让下一次尝试有机会成功。
-                diagnosis, cleaned = self._diagnose_dump_failure()
-                if cleaned:
-                    print(f"  ⚠️  {diagnosis}")
+                # 进程被 SIGKILL 时 stdout/stderr 都是空的，真正原因只在 logcat
+                last_error = diagnosis
             print(
                 f"  ⚠️  uiautomator dump 返回非零（第 {attempt} 次）："
                 f"{last_error or diagnosis}"
@@ -587,16 +596,40 @@ class AdbDumpController:
         time.sleep(0.5)
 
     def tap_input_box(self) -> bool:
-        """从控件树找 EditText，点击其中心。"""
-        elements = self.tree_elements()
+        """从控件树找 EditText，点击其中心；无控件树时退化为 YOLO 输入框检测。"""
+        try:
+            elements = self.tree_elements()
+        except TreeUnavailable as exc:
+            elements = []
+            print(f"  ℹ️  当前 App 无控件树，tap_input_box 改用视觉检测：{exc}")
         for element in elements:
             if element.get("type") == "input":
                 x, y = element["center"]
                 self.tap(x, y)
                 print("点击输入框（adb_dump）")
                 return True
-        print("未在控件树中找到输入框（adb_dump）")
-        return False
+        if elements:
+            print("未在控件树中找到输入框（adb_dump），尝试 YOLO 检测")
+        return self._tap_input_box_by_vision()
+
+    def _tap_input_box_by_vision(self) -> bool:
+        """YOLO 输入框兜底：权重缺失/检测失败只返回 False，不中断任务。"""
+        try:
+            if not hasattr(self, "_input_detector"):
+                from input_detector import InputDetector
+                self._input_detector = InputDetector()
+            self.screenshot("screen_for_detection.png")
+            detected = self._input_detector.find_best("screen_for_detection.png")
+        except Exception as exc:  # noqa: BLE001 - 兜底不可用不能拖垮任务
+            print(f"  ⚠️  YOLO 输入框检测不可用（{exc}）")
+            return False
+        if not detected:
+            print("  ⚠️  未找到输入框：控件树不可用，YOLO 也未检测到")
+            return False
+        cx, cy = detected["center"]
+        print(f"  🎯 YOLO 检测到输入框，置信度:{detected['confidence']} 坐标:({cx},{cy})")
+        self.tap(cx, cy)
+        return True
 
     def open_app(self, package_name: str):
         self.invalidate_dump()
@@ -614,7 +647,11 @@ class AdbDumpController:
 
     def tap_send_button(self):
         self._ensure_writable("tap_send_button")
-        for element in self.tree_elements():
+        try:
+            elements = self.tree_elements()
+        except TreeUnavailable:
+            elements = []
+        for element in elements:
             if element.get("text") in ("Send", "发送"):
                 x, y = element["center"]
                 self.tap(x, y)

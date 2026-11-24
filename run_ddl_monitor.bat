@@ -2,7 +2,7 @@
 chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
-title 手机 DDL 监控
+title 手机 DDL 检索
 
 set "PYTHONUTF8=1"
 set "PYTHON="
@@ -26,11 +26,11 @@ if errorlevel 1 (
 )
 
 if not exist "sources.yaml" (
-    echo [提示] 还没有 sources.yaml，程序会提示如何添加监控目标。
+    echo [提示] 还没有 sources.yaml，程序会提示如何添加检索目标。
     echo.
 )
 
-rem 双击后由启动器询问：1 = 单轮扫描，2 = 持续监控
+rem 双击后由启动器询问：1 = 仅扫描一次，2 = 定期
 rem 也可以在本文件后面跟参数，例如：run_ddl_monitor.bat --mode once
 "%PYTHON%" -m ddl_agent.monitor.launcher %*
 set "CODE=%ERRORLEVEL%"

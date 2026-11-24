@@ -111,26 +111,38 @@ def select_tasks(tasks: list[dict], levels_raw: str = "", ids_raw: str = "") -> 
     ]
 
 
+class AdbError(RuntimeError):
+    """adb 无法执行（缺失、超时或系统错误）。调用方必须显式处理，不能当作“未知但继续”。"""
+
+
 def adb(args: list[str], timeout: int = 15):
-    """返回 (returncode, stdout)。adb 缺失/超时/异常时 returncode 为 None"""
+    """返回 (returncode, stdout)；adb 缺失/超时/异常时抛 ``AdbError``。"""
     serial = os.getenv("ANDROID_SERIAL", "").strip()
     cmd = ["adb"] + (["-s", serial] if serial else []) + args
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return proc.returncode, (proc.stdout or "").strip()
-    except Exception:
-        return None, ""
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise AdbError(f"adb 执行失败（{' '.join(cmd)}）：{exc}") from exc
 
 
 def _prop(name: str) -> str:
-    rc, out = adb(["shell", "getprop", name])
+    try:
+        rc, out = adb(["shell", "getprop", name])
+    except AdbError as exc:
+        print(f"  ⚠️  读取设备属性 {name} 失败：{exc}")
+        return ""
     return out if rc == 0 else ""
 
 
 def _installed(pkg: str):
     """True/False；adb 不可用或设备离线时返回 None（无法判断）"""
-    rc, out = adb(["shell", "pm", "list", "packages", pkg])
-    if rc is None or rc != 0:
+    try:
+        rc, out = adb(["shell", "pm", "list", "packages", pkg])
+    except AdbError as exc:
+        print(f"  ⚠️  查询安装状态失败（{pkg}）：{exc}")
+        return None
+    if rc != 0:
         return None
     # 形如 package:com.foo、package:com.foo:MIUI、package:com.foo uid:1000 都要能识别
     for line in out.splitlines():
@@ -149,13 +161,20 @@ def reset_device(apps: list[str]) -> dict:
     返回真实执行结果；无法自动清除应用内草稿/聊天记录。
     """
     result = {"home": False, "stopped": [], "failed": [], "not_mapped": [], "not_installed": []}
-    state_rc, state = adb(["get-state"])
+    try:
+        state_rc, state = adb(["get-state"])
+    except AdbError as exc:
+        result["failed"].append({"reason": f"adb 不可用：{exc}"})
+        return result
     if state_rc != 0 or state != "device":
         result["failed"].append({"reason": f"device not ready: {state or 'adb unavailable'}"})
         return result
 
-    rc, _ = adb(["shell", "input", "keyevent", "3"])
-    result["home"] = rc == 0
+    try:
+        rc, _ = adb(["shell", "input", "keyevent", "3"])
+        result["home"] = rc == 0
+    except AdbError as exc:
+        result["failed"].append({"reason": f"回桌面失败：{exc}"})
     for app in apps:
         candidates = PACKAGE_BY_APP.get(app)
         if not candidates:
@@ -182,7 +201,11 @@ def reset_device(apps: list[str]) -> dict:
                                      "candidates": candidates})
             continue
         for pkg in installed:
-            rc, _ = adb(["shell", "am", "force-stop", pkg])
+            try:
+                rc, _ = adb(["shell", "am", "force-stop", pkg])
+            except AdbError as exc:
+                result["failed"].append({"app": app, "package": pkg, "reason": str(exc)})
+                continue
             if rc == 0:
                 result["stopped"].append(pkg)
             else:
@@ -191,12 +214,27 @@ def reset_device(apps: list[str]) -> dict:
 
 
 def device_info() -> dict:
-    rc, out = adb(["devices"])
+    try:
+        rc, out = adb(["devices"])
+    except AdbError as exc:
+        return {
+            "model": _prop("ro.product.model"),
+            "android": _prop("ro.build.version.release"),
+            "resolution": "",
+            "adb_available": False,
+            "connected_devices": [],
+            "error": str(exc),
+        }
     connected = [line.split("\t")[0] for line in out.splitlines()[1:] if line.strip()]
+    try:
+        size_rc, size_out = adb(["shell", "wm", "size"])
+        resolution = size_out if size_rc == 0 else ""
+    except AdbError:
+        resolution = ""
     return {
         "model": _prop("ro.product.model"),
         "android": _prop("ro.build.version.release"),
-        "resolution": (lambda rc2, o: o if rc2 == 0 else "")(*adb(["shell", "wm", "size"])),
+        "resolution": resolution,
         "adb_available": rc is not None,
         "connected_devices": connected,
     }

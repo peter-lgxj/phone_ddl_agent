@@ -32,10 +32,10 @@
 
 | 阶段 | 时间 | 运行目录 | 结果 |
 | --- | --- | --- | --- |
-| 首轮（修复前） | 2026-11-18 13:19:36 | `runs/20261118-131938` | 10 步全部为 swipe，`timeout`，**0 条消息**，81.42 s |
-| 修复后第一次 | 约 13:26 | `runs/20261118-132601` | 设备侧读取成功；测试脚本保存 JSON 时因 `datetime` 不可序列化报错，结果未落盘 |
-| 修复后复跑 | 2026-11-18 13:28:27 | `runs/20261118-132829` | 10 条消息，`timeout` + `partial=true`，105.59 s |
-| 端到端抽取 | 2026-11-18 13:47:38 | `runs/20261118-134740` | 3 步，`done`，读到目标消息；LLM 抽取 3 条记录，目标记录时间正确 |
+| 首轮（修复前） | 2026-11-18 13:19:36 | 本地证据已清理 | 10 步全部为 swipe，`timeout`，**0 条消息**，81.42 s |
+| 修复后第一次 | 约 13:26 | 本地证据已清理 | 设备侧读取成功；测试脚本保存 JSON 时因 `datetime` 不可序列化报错，结果未落盘 |
+| 修复后复跑 | 2026-11-18 13:28:27 | 本地证据已清理 | 10 条消息，`timeout` + `partial=true`，105.59 s |
+| 端到端抽取 | 2026-11-18 13:47:38 | 本地证据已清理 | 3 步，`done`，读到目标消息；LLM 抽取 3 条记录，目标记录时间正确 |
 
 首轮的根因是三处缺陷：
 
@@ -177,7 +177,7 @@ OCR 转写（真机实测）：
 - `write_phone_calendar=false`，本轮未写手机日历。
 - 与 4.2/4.3 的关系：4.2/4.3 是 2026-11-18 自聊旧记录（1 confirmed / 2 uncertain）；4.4 是 2026-11-23 三群复跑（2 confirmed / 1 uncertain）。两批消息不同，**不得合并或用一个数覆盖另一个**。
 
-**QQ 向上找回记录订正**：`summary.json` 的 `item3_qq_navigation.scroll_up_recovery_passed` 为 `false`。该轮在步骤 3–6 掉头向上后，步骤 7 误判“向上滚动到顶”并放弃，随后视觉模型改向下滚并点开“展示最近不活跃的群(13)”，最终未回到目标群（`runs/20261123-011553/`，证据 `runs/_verify/live_20261123/qq_scrollup_probe.json`）。该失败发生在 PR #27 之前；PR #27 改为画面哈希/OCR 文本集合连续两次判顶并锁定方向，但其修复后的真机复跑证据不在本次产物目录，不能把本轮记作 #27 已验证。
+**QQ 向上找回记录订正**：`summary.json` 的 `item3_qq_navigation.scroll_up_recovery_passed` 为 `false`。该轮在步骤 3–6 掉头向上后，步骤 7 误判“向上滚动到顶”并放弃，随后视觉模型改向下滚并点开“展示最近不活跃的群(13)”，最终未回到目标群（单轮运行目录已清理，保留探针证据 `runs/_verify/live_20261123/qq_scrollup_probe.json`）。该失败发生在 PR #27 之前；PR #27 改为画面哈希/OCR 文本集合连续两次判顶并锁定方向，但其修复后的真机复跑证据不在本次产物目录，不能把本轮记作 #27 已验证。
 
 ## 5. 发现的问题
 
@@ -196,7 +196,7 @@ OCR 转写（真机实测）：
 | 不输入聊天内容 | `type` 被拦截器禁止；实际未触发 |
 | 不点发送/回车 | `send` / `press_enter` 被拦截器禁止；实际未触发 |
 | 不改联系人 | 未进入联系人编辑页面 |
-| 不写真实日历/正式 xlsx | 只写 `runs/real_device_e2e_20261118/output/` 临时目录 |
+| 不写真实日历/正式 xlsx | 只写本地临时输出目录（不入库） |
 | 设备锁 | 每次通过 `device_lock` 获取；运行结束检查为 `LOCK_RELEASED` |
 | 明文密钥 | 未写入任何报告或产物 |
 | 隐私事件 | 首次启动微信时直接落在用户与某联系人的私聊页；该截图已删除（回收站），未读取、未抽取、未写入报告。后续改为先回到聊天列表再搜索「文件传输助手」 |
@@ -211,7 +211,7 @@ OCR 转写（真机实测）：
 | QQ 手机读屏 | 包名映射与通用读屏路径存在 | 仅一次向上找回 probe，且失败（PR #27 前）；其余未验证 |
 | Outlook 手机读屏 | 包名映射与通用读屏路径存在 | **未验证** |
 | monitor 单进程读屏→抽取 | 代码与单测存在 | launcher 单次跑通（3 群、3 条记录）；monitor 专项未单独验证 |
-| 手机系统日历写入 | 代码存在 | **未验证**（live2 为 `write_phone_calendar=false`） |
+| 手机系统日历写入 | 已按只读约束禁用 | **不提供**（`PhoneCalendarWriter` 始终跳过） |
 
 - **单机单系统**：只测了一台 OPPO PLJ110 / Android 17（`adb_dump` 回退），没有第二台设备或系统版本对照。
 - **单账号、两批场景**：2026-11-18 只测一个微信账号的「文件传输助手」自聊；2026-11-23 测同一账号的 3 个真实群（COMP7503 作业通知群、COMP7415 课程群、2026 计算机班级群），第三方私聊未测。
@@ -230,19 +230,12 @@ OCR 转写（真机实测）：
 
 | 内容 | 路径 |
 | --- | --- |
-| 首轮设备信息与结果 | `runs/real_device_verify_20261118-131459/00_device.txt`、`read_result.json` |
-| 首轮逐步截图 | `runs/20261118-131938/step_001..010_*.png` |
-| 修复后结果 | `runs/real_device_verify_after_20261118/read_result.json` |
-| 修复后逐步截图 | `runs/20261118-132829/step_001..010_*.png` |
-| 端到端读取结果 | `runs/real_device_e2e_20261118/read_messages.json` |
-| 端到端目标原文 | `runs/real_device_e2e_20261118/selected_message.json` |
-| 端到端抽取结果 | `runs/real_device_e2e_20261118/extraction_result.json` |
-| 临时 xlsx / 审计 / JSON | `runs/real_device_e2e_20261118/output/` |
-| 聊天与结束截图 | `runs/real_device_e2e_20261118/06_chat_open.png`、`07_final.png` |
-| 端到端逐步截图 | `runs/20261118-134740/step_001..003_*.png`、`task_log.json` |
 | 2026-11-23 demo 产物 | `runs/_verify/live2_20261123/demo_out/{data.json,deadlines.ics,calendar.html}` |
 | 2026-11-23 launcher 产物 | `runs/_verify/live2_20261123/launcher_out/{data.json,deadlines.ics,calendar.html}` |
-| 2026-11-23 汇总与 QQ 子项 | `runs/_verify/live2_20261123/summary.json`、`runs/_verify/live_20261123/qq_scrollup_probe.json`、`runs/20261123-011553/` |
+| 2026-11-23 汇总与 QQ 子项 | `runs/_verify/live2_20261123/summary.json`、`runs/_verify/live_20261123/qq_scrollup_probe.json` |
+| 2026-11-24 本轮只读复验 | `runs/verify2_20261124/`（截图、OCR、跳过 dump、只读拒绝、未定位失败、清理策略） |
+
+2026-11-18 首轮与端到端运行的逐步截图、`read_result.json`、`extraction_result.json` 等中间产物已在本地清理（`runs/` 不入库）；上表对应的结论仍保留在正文中。
 
 ## 9. 结论
 

@@ -1,8 +1,8 @@
-"""监控配置与定期检索的命令行入口。
+"""检索配置与定期检索的命令行入口。
 
 示例::
 
-    python -m ddl_agent.monitor.cli add "监控微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次"
+    python -m ddl_agent.monitor.cli add "定期读取微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次"
     python -m ddl_agent.monitor.cli list
     python -m ddl_agent.monitor.cli run --once
     python -m ddl_agent.monitor.cli run            # 常驻，按配置周期循环
@@ -42,7 +42,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     add = sub.add_parser("add", help="用一句自然语言新增检索目标")
-    add.add_argument("text", help="例如：监控微信「21级课程群」，每6小时一次")
+    add.add_argument("text", help="例如：定期读取微信「21级课程群」，每6小时一次")
 
     sub.add_parser("list", help="列出当前配置与自然语言来源")
 
@@ -152,7 +152,7 @@ def _print_config(config, config_path: Path) -> None:
     print(f"输出目录：{config.output_dir}；状态目录：{config.state_dir}")
     if not config.sources:
         print("尚未配置任何检索目标。用 `add` 添加，例如：")
-        print('  python -m ddl_agent.monitor.cli add "监控微信「21级课程群」，每6小时一次"')
+        print('  python -m ddl_agent.monitor.cli add "定期读取微信「21级课程群」，每6小时一次"')
         return
     print("检索目标：")
     for source in config.sources:

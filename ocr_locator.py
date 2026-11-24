@@ -211,6 +211,9 @@ class OCRLocator:
             return elements
 
         except Exception as e:
+            if type(e).__name__ == "TreeUnavailable":
+                # 已知无控件树的 App（如微信）：静默降级到 OCR，不当作异常
+                return []
             # 打印错误以便调试，但返回空列表以降级到 OCR
             print(f"XML Detect Error: {e}")
             return []

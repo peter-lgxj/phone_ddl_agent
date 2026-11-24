@@ -8,7 +8,6 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .connectors.base import SourceNotConfigured
 from .models import ResolvedRecord
 from .settings import TZ
 
@@ -130,9 +129,10 @@ def write_calendar_html(records: list[ResolvedRecord], path: str | Path,
 
 
 class PhoneCalendarWriter:
-    """预留：把记录写进手机系统日历。
+    """手机系统日历写入已按只读约束永久禁用。
 
-    默认关闭；需要真机验证后再启用。未配置 agent_factory 时显式报错，不静默假装成功。
+    保留类名与 ``enabled`` 参数仅为兼容旧配置；即使配置打开也不会调用手机，
+    避免任何路径在用户不知情时创建/修改系统日历。
     """
 
     def __init__(self, enabled: bool = False, agent_factory=None):
@@ -140,23 +140,11 @@ class PhoneCalendarWriter:
         self.agent_factory = agent_factory
 
     def write(self, records: list[ResolvedRecord]) -> dict:
-        if not self.enabled:
-            return {"ok": False, "skipped": True,
-                    "reason": "手机系统日历写入默认关闭（需真机验证后再启用）"}
-        if self.agent_factory is None:
-            raise SourceNotConfigured("手机系统日历写入未配置手机 agent；本功能未经真机验证")
-        agent = self.agent_factory()
-        task = (
-            "打开系统日历，按下面条目逐条新建日程（标题、开始时间），已存在同名同时间的不重复创建：\n"
-            + "\n".join(
-                f"- {record.task_name} @ {record.deadline_iso}"
-                for record in records
-                if record.status == "confirmed" and record.deadline_iso
-            )
-        )
-        agent.run(task)
-        ok = getattr(agent, "last_status", None) not in ("failed", "timeout")
-        return {"ok": ok, "skipped": False, "reason": "已调用手机日历（未经真机验证）"}
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "只读约束：手机系统日历写入已禁用，不会创建或修改系统日历",
+        }
 
 
 def _atomic_write(path: Path, content: str) -> None:

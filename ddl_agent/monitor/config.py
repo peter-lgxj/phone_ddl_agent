@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -67,13 +68,46 @@ class MonitorConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> "MonitorConfig":
-        sources = [
-            MonitorSource(**{key: item[key] for key in item if key in MonitorSource.__annotations__})
-            for item in (data.get("sources") or [])
-        ]
+        sources = []
+        for item in (data.get("sources") or []):
+            if not isinstance(item, dict):
+                raise ConfigError(f"检索目标必须是映射，实际是 {type(item).__name__}")
+            try:
+                source = MonitorSource(
+                    **{key: item[key] for key in item if key in MonitorSource.__annotations__}
+                )
+            except TypeError as exc:
+                raise ConfigError(f"检索目标字段不合法：{exc}") from exc
+            if not source.id or not source.app or not source.target:
+                raise ConfigError("检索目标缺少 id / app / target 字段")
+            if source.app not in APP_LABELS:
+                raise ConfigError(
+                    f"检索目标「{source.target}」的 app={source.app!r} 不支持；"
+                    f"可选值：{', '.join(APP_LABELS)}"
+                )
+            try:
+                source.lookback_days = int(source.lookback_days)
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(
+                    f"检索目标「{source.target}」的 lookback_days 必须是整数"
+                ) from exc
+            if not 1 <= source.lookback_days <= 365:
+                raise ConfigError(
+                    f"检索目标「{source.target}」的 lookback_days={source.lookback_days} 非法，"
+                    "应在 1..365 之间"
+                )
+            sources.append(source)
+        raw_interval = data.get("interval_minutes")
+        try:
+            interval = int(360 if raw_interval is None else raw_interval)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError("interval_minutes 必须是整数（分钟）") from exc
+        if not 5 <= interval <= 10080:
+            raise ConfigError(f"interval_minutes={interval} 非法，应在 5..10080 之间")
+        schedule = str(data.get("schedule") or "every 6h").strip()
         return cls(
-            schedule=str(data.get("schedule") or "every 6h"),
-            interval_minutes=int(data.get("interval_minutes") or 360),
+            schedule=schedule,
+            interval_minutes=interval,
             output_dir=str(data.get("output_dir") or "output"),
             state_dir=str(data.get("state_dir") or "state"),
             write_phone_calendar=bool(data.get("write_phone_calendar", False)),
@@ -85,14 +119,24 @@ def load_config(path: str | Path) -> MonitorConfig:
     file = Path(path)
     if not file.exists():
         return MonitorConfig()
-    data = yaml.safe_load(file.read_text(encoding="utf-8")) or {}
-    return MonitorConfig.from_dict(data)
+    try:
+        data = yaml.safe_load(file.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"配置文件无法解析（YAML 语法错误）：{exc}") from exc
+    if not isinstance(data, dict):
+        raise ConfigError(f"配置文件格式不正确（期望映射）：{file}")
+    try:
+        return MonitorConfig.from_dict(data)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"配置文件字段不合法：{exc}") from exc
 
 
 def save_config(config: MonitorConfig, path: str | Path) -> Path:
     file = Path(path)
     file.parent.mkdir(parents=True, exist_ok=True)
-    file.write_text(config.to_yaml(), encoding="utf-8")
+    tmp = file.with_name(f"{file.name}.tmp")
+    tmp.write_text(config.to_yaml(), encoding="utf-8")
+    os.replace(tmp, file)
     return file
 
 

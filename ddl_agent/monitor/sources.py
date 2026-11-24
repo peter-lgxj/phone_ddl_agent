@@ -56,7 +56,10 @@ class MobileAppSource:
                 raise SourceError(f"设备锁不可用：{exc}") from exc
             with device_lock(timeout=30) as acquired:
                 if not acquired:
-                    raise SourceError("设备锁被占用，本轮未读取手机")
+                    raise SourceError(
+                        "设备锁被占用，本轮未读取手机；"
+                        "请关闭其他扫描窗口（Web / 命令行）或等待其结束后重试"
+                    )
                 agent.run(task)
         else:
             agent.run(task)

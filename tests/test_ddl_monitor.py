@@ -429,18 +429,16 @@ def test_data_json_and_ics_content(tmp_path: Path):
     assert "DTSTART;TZID=Asia/Shanghai:20261120T235900" in ics
 
 
-def test_phone_calendar_defaults_to_off_and_requires_agent():
+def test_phone_calendar_is_permanently_disabled_by_read_only_rule():
     writer = output.PhoneCalendarWriter()
     assert writer.write([])["skipped"] is True
 
-    writer = output.PhoneCalendarWriter(enabled=True)
-    with pytest.raises(output.SourceNotConfigured):
-        writer.write([])
-
     agent = FakeAgent([])
     result = output.PhoneCalendarWriter(enabled=True, agent_factory=lambda: agent).write([])
-    assert result["ok"] is True
-    assert agent.tasks
+    assert result["ok"] is False
+    assert result["skipped"] is True
+    assert "只读约束" in result["reason"]
+    assert agent.tasks == []  # 即使配置打开也不触碰手机
 
 
 # --------------------------------------------------------------------------- #
