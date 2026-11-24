@@ -15,7 +15,7 @@ def _make_runs(root, count: int) -> list:
     runs = []
     base = time.time() - count * 60
     for index in range(count):
-        path = root / f"run-{index:02d}"
+        path = root / f"20260101-{index:06d}"
         path.mkdir()
         (path / "step.json").write_text("{}", encoding="utf-8")
         stamp = base + index * 60
@@ -32,8 +32,8 @@ def test_cleanup_old_runs_keeps_latest_window(tmp_path):
     remaining = sorted(p.name for p in tmp_path.iterdir() if p.is_dir())
     assert len(remaining) == 20
     assert len(removed) == 5
-    assert "run-24" in remaining and "run-19" in remaining
-    assert "run-00" not in remaining
+    assert "20260101-000024" in remaining and "20260101-000019" in remaining
+    assert "20260101-000000" not in remaining
 
 
 def test_cleanup_old_runs_protects_marked_dirs(tmp_path):
@@ -41,16 +41,20 @@ def test_cleanup_old_runs_protects_marked_dirs(tmp_path):
     keep_named = tmp_path / "keep-demo"
     keep_named.mkdir()
     os.utime(keep_named, (time.time() - 10_000, time.time() - 10_000))
-    marked = tmp_path / "old-evidence"
+    marked = tmp_path / "20260101-999999"
     marked.mkdir()
     (marked / "KEEP").write_text("", encoding="utf-8")
     os.utime(marked, (time.time() - 9_000, time.time() - 9_000))
+    manual = tmp_path / "verify_manual"
+    manual.mkdir()
+    os.utime(manual, (time.time() - 8_000, time.time() - 8_000))
 
     screen_agent.cleanup_old_runs(tmp_path, keep=20)
 
     assert keep_named.exists()
     assert marked.exists()
-    assert not (tmp_path / "run-00").exists()
+    assert manual.exists(), "非时间戳目录属于人工证据，不参与自动清理"
+    assert not (tmp_path / "20260101-000000").exists()
 
 
 def test_cleanup_old_runs_reads_env_keep(tmp_path, monkeypatch):

@@ -102,7 +102,13 @@ def cleanup_old_runs(base: Path | None = None, keep: int | None = None) -> list[
             except ValueError:
                 print(f"  ⚠️  RUNS_KEEP={raw!r} 不是整数，按 20 处理")
                 keep = 20
-        runs = [path for path in root.iterdir() if path.is_dir() and not path.is_symlink()]
+        # 只把 make_run_dir 生成的时间戳目录视为“一次运行”；
+        # verify_* / wx_* 等人工证据目录不参与计数，也不会被自动删除。
+        run_name = re.compile(r"^\d{8}-\d{6}(?:[-_].*)?$")
+        runs = [
+            path for path in root.iterdir()
+            if path.is_dir() and not path.is_symlink() and run_name.match(path.name)
+        ]
         if len(runs) <= keep:
             return removed
         runs.sort(key=lambda path: path.stat().st_mtime, reverse=True)
@@ -1296,7 +1302,12 @@ class ScreenAgent:
                     if report.get("skipped"):
                         print(f"  ℹ️  本步跳过控件树：{report.get('skipped')}")
                     else:
-                        reason = "；".join(report.get("errors") or []) or "未知原因"
+                        errors = report.get("errors") or {}
+                        if isinstance(errors, dict):
+                            reason = "；".join(f"{key}: {value}" for key, value in errors.items())
+                        else:
+                            reason = "；".join(str(item) for item in errors)
+                        reason = reason or "未知原因"
                         print(f"  ⚠️  本步控件树 dump 失败：{reason}（已退化为截图/OCR）")
             else:
                 self.phone.screenshot("screen_current.png")
