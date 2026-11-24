@@ -225,7 +225,7 @@ RULE_MODEL_DECISION_SECONDS = float(os.getenv("RULE_MODEL_DECISION_SECONDS", "5.
 # 与单任务 MAX_STEPS 对齐，让翻页不再占用模型调用。
 RULE_MAX_SCROLLS = int(os.getenv("RULE_MAX_SCROLLS", "30"))
 
-# QQ 群定位改为列表滚动 + OCR 匹配（不输入中文、不使用搜索框）。
+# QQ 群定位：控件树规则优先（open_group → 搜索 → list_scroll），OCR 只做兜底。
 # 列表页一屏通常 6~8 个群，默认最多滚 8 屏；连续两屏内容不变则提前停止。
 QQ_LIST_MAX_SCROLLS = int(os.getenv("QQ_LIST_MAX_SCROLLS", "8"))
 
