@@ -115,6 +115,8 @@ def _agent(tmp_path, entries):
     agent.phone = _FakePhone(tmp_path / "shot.png")
     agent.ocr = _FakeOCR(entries)
     agent._ocr_nav_state = {}
+    # 单元测试默认不加载 YOLO；需要验证 YOLO 的用例单独打开
+    agent._yolo_unavailable = True
     return agent
 
 
@@ -337,18 +339,89 @@ def test_wechat_search_entry_uses_yolo_when_ocr_has_no_search_text(tmp_path):
 
 
 def test_wechat_search_entry_prefers_ocr_text(tmp_path):
-    """OCR 能读到「搜索」时优先用文字定位，不加载 YOLO。"""
+    """微信列表里的「搜索」文字可能来自聊天预览，不能当搜索入口，直接走 YOLO。"""
     agent = _wechat_agent(tmp_path, WECHAT_TABS + [
         {"text": "搜索", "center": (300, 194)},
     ])
-    agent._yolo_search_entry = lambda image: {"center": (549, 194)}
+    agent._yolo_search_entry = lambda image: {"center": (906, 186)}
 
     action = agent._ocr_list_navigate(
         TaskMemory("打开微信。先看首屏列表里有没有「LLM小组」"))
 
     assert action["action_type"] == "tap"
+    assert (action["x"], action["y"]) == (906, 186)
+    assert action["localization_source"] == "yolo"
+
+
+def test_qq_search_entry_prefers_ocr_text(tmp_path):
+    """只有 QQ 用一级 OCR 文字「搜索」；此时不调用 YOLO。"""
+    agent = _agent(tmp_path, [
+        {"text": "搜索", "center": (300, 194)},
+        {"text": "我创建的群聊 3/12", "center": (100, 400)},
+        {"text": "文件传输助手", "center": (279, 700)},
+    ])
+    agent.launcher = _FakeLauncher("com.tencent.mobileqq")
+
+    action = agent._ocr_list_navigate(
+        TaskMemory("打开QQ。先看首屏消息列表里有没有「LLM小组」"))
+
+    assert action["action_type"] == "tap"
     assert (action["x"], action["y"]) == (300, 194)
     assert action["localization_source"] == "ocr"
+
+
+class _FakeDetector:
+    def __init__(self, boxes):
+        self.boxes = boxes
+
+    def detect(self, image, conf=0.2):
+        return self.boxes
+
+
+def _yolo_agent(tmp_path, boxes):
+    agent = _agent(tmp_path, [])
+    agent._yolo_unavailable = False
+    agent._gui_detector = _FakeDetector(boxes)
+    image = tmp_path / "shot.png"
+    Image.new("RGB", (1080, 2374), "white").save(image)
+    return agent, str(image)
+
+
+def test_yolo_search_entry_prefers_search_icon(tmp_path):
+    """两类别权重：search_icon 优先于置信度更高的标题栏 input_box。"""
+    agent, image = _yolo_agent(tmp_path, [
+        {"class_name": "input_box", "confidence": 0.9, "center": (568, 193),
+         "bbox": (271, 149, 870, 236)},
+        {"class_name": "search_icon", "confidence": 0.4, "center": (906, 186),
+         "bbox": (876, 156, 936, 216)},
+    ])
+
+    box = agent._yolo_search_entry(image)
+
+    assert box is not None
+    assert box["center"] == (906, 186)
+
+
+def test_yolo_search_entry_rejects_narrow_title_box(tmp_path):
+    """标题栏窄框是误检，宁可不点也不要在标题上白点一次。"""
+    agent, image = _yolo_agent(tmp_path, [
+        {"class_name": "input_box", "confidence": 0.9, "center": (568, 193),
+         "bbox": (271, 149, 870, 236)},
+    ])
+
+    assert agent._yolo_search_entry(image) is None
+
+
+def test_yolo_search_entry_accepts_wide_search_bar(tmp_path):
+    agent, image = _yolo_agent(tmp_path, [
+        {"class_name": "input_box", "confidence": 0.6, "center": (540, 324),
+         "bbox": (40, 280, 1040, 368)},
+    ])
+
+    box = agent._yolo_search_entry(image)
+
+    assert box is not None
+    assert box["center"] == (540, 324)
 
 
 def test_wechat_search_entry_timeout_falls_back_to_list_scroll(tmp_path):
