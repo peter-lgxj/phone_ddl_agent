@@ -1,4 +1,4 @@
-"""QQ 群定位：列表滚动 + OCR，不依赖控件树、不输入中文。"""
+"""QQ 群定位兜底：规则无结论时的列表滚动 + OCR 精确匹配。"""
 
 from __future__ import annotations
 

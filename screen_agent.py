@@ -302,7 +302,7 @@ _QQ_TASK_RE = re.compile(r"(?:^|[^a-z])qq(?:[^a-z]|$)", re.IGNORECASE)
 
 
 def _is_qq_task(task: str) -> bool:
-    """QQ 群定位一律走列表滚动 + OCR，不使用搜索框/中文输入。"""
+    """QQ 群定位：控件树规则优先（open_group/搜索/list_scroll），无结论时才用 OCR 兜底。"""
     return bool(_QQ_TASK_RE.search(task or ""))
 
 
