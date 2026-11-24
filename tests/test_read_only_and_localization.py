@@ -56,6 +56,16 @@ def test_read_only_allows_pure_read_task():
     assert screen_agent.read_only_task_refusal(task, True) is None
 
 
+def test_read_only_allows_qq_connector_task():
+    task = (
+        "打开qq，在消息列表或“联系人 > 群聊”里上下滚动查找「COMP7503 作业通知群」并进入聊天窗口；"
+        "不要使用搜索框、不要输入中文，不要点名字相似的群。"
+        "向上翻阅最近消息，逐条读出包含截止时间（deadline / due / 截止 / 提交）的消息原文与发送者"
+    )
+
+    assert screen_agent.read_only_task_refusal(task, True) is None
+
+
 def test_refusal_disabled_when_not_read_only():
     assert screen_agent.read_only_task_refusal("发送日报", False) is None
 
