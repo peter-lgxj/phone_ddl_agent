@@ -2,6 +2,12 @@
 
 使用视觉语言模型理解 Android 手机屏幕，通过 ADB 和 uiautomator2 执行操作；支持任务规划、多应用任务、OCR 定位与网页交互界面。
 
+## 提交信息（打包前必须核对）
+
+- 项目：手机智能体（Phone Agent）
+- 组号 / 成员：**待填**，必须与最终报告一致
+- 提交版本：`main@375700bb`（2026-11-24 审计基线）；最终以打包快照的 `git rev-parse HEAD` 为准
+
 ## 操作模型：电脑驱动手机（先读这一段）
 
 - **操作对象是手机**。微信（群聊/私聊）、QQ（群聊）、Outlook App 收件箱的界面，全部在**手机上**被读取和点击。
@@ -12,9 +18,9 @@
   那是 uiautomator2 的既有机制，不是本项目的部署。
 - 一句话：**电脑上的 agent 通过 ADB 操作手机 GUI**，把手机里的群聊和邮件 DDL 汇总成日历。
 
-> 手机读屏已在单台真机、微信「文件传输助手」自聊会话上做过一次只读验证
-> （见 `docs/real-device-test-report.md`）；真实课程群、QQ / Outlook App、图片型 DDL
-> 与真实实验数据仍未验证。
+> 手机读屏已在单台真机做过只读验证：微信「文件传输助手」自聊（2026-11-18）与
+> QQ「COMP7503 作业通知群」测试群的 once 扫描（2026-11-24，`cycle 20261124T163807`，status=ok）。
+> 微信真实课程群、Outlook、图片型 DDL、定时模式与真实实验数据仍未验证。
 >
 > Outlook **只走手机 App 读屏**，不接 Microsoft Graph；Graph 相关代码只是保留的未启用骨架，
 > 不是可切换的第二条读取路径。
@@ -129,7 +135,7 @@ set DDL_EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
 - Python 3.10 或更高版本（具体兼容性取决于依赖版本）
 - Android 手机，开启开发者选项和 USB 调试
 - Android Platform Tools（`adb` 已加入 PATH；未加入时可用 `ADB_BINARY` 指向 adb 可执行文件，或直接复用 `uiautomator2` 自带的 adb，`adb_utils.py` 会自动兜底）
-- 可用的模型 API 密钥
+- 可用的模型 API 密钥。DeepSeek / DashScope 均为**按量计费**；没有 key 时可用规则引擎与离线 demo，LLM 路径不可用
 
 ```bash
 git clone https://github.com/peter-lgxj/phone_ddl_agent.git
@@ -144,7 +150,15 @@ pip install -r requirements-lock.txt
 
 `requirements.txt` 只维护运行时依赖的最低版本，供需要自行解析环境的场景参考。
 
-用 `adb devices` 确认手机已连接并完成授权。将 `.env.example` 复制为 `.env`，填写所使用服务的密钥。默认执行模型与规划模型都是 `deepseek`（`deepseek-flash`，读 `DEEPSEEK_API_KEY`）；执行模型可切回 `qwen`（`qwen-vl-max`，读 `DASHSCOPE_API_KEY`）。其他模型与接口配置见 `config.py`。
+用 `adb devices` 确认手机已连接并完成授权。默认执行模型与规划模型都是 `deepseek`（`deepseek-flash`，读 `DEEPSEEK_API_KEY`）；执行模型可切回 `qwen`（`qwen-vl-max`，读 `DASHSCOPE_API_KEY`）。其他模型与接口配置见 `config.py`。
+
+### 凭据配置（不要把 key 提交进仓库）
+
+1. 复制模板：PowerShell 用 `copy .env.example .env`，bash 用 `cp .env.example .env`。
+2. 至少填写 `DEEPSEEK_API_KEY`；使用 Qwen 时填写 `DASHSCOPE_API_KEY`。
+3. `.env` 与 `.env.*` 已被 `.gitignore` 忽略；提交前用 `git status` 确认没有 `.env`。
+4. `sources.yaml` 是本地来源配置，同样不入库；从 `sources.example.yaml` 复制修改。
+5. 仓库里只保留 `.env.example` 的占位值，不要写真实 key。
 
 首次运行默认使用 RapidOCR，会下载对应的 ONNX 模型（需要联网，体积较小）；只有显式设置 `OCR_ENGINE=easyocr` 时才会使用 EasyOCR 及其模型。截图定位还依赖 uiautomator2 在手机上安装的自动化组件。
 
@@ -658,9 +672,32 @@ python experiments/run_experiment.py --baseline openautoglm \
 
 CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
 
+### 提交材料索引
+
+| 材料 | 位置 | 说明 |
+|---|---|---|
+| 提示词 | `prompts/ddl-agent-prompts.md` | 由 `python scripts/export_prompts.py` 从代码生成；改提示词后重新生成 |
+| 三类样例输入 | `examples/cases/README.md` | D01 普通 / D08 变更条件 / D18 失败；含无需手机的离线替代 |
+| 评测脚本 | `experiments/run_experiment.py`、`experiments/metrics.py`、`experiments/export_evidence.py` | 任务集、指标聚合、脱敏证据导出 |
+| 评测结果 | `docs/proposal-compliance.md`、`docs/ddl-agent-design.md` | 合成集 baseline / 消融 / 相似度的实际数字与限制 |
+| 脱敏 trace | `docs/evidence/` | 真机只读运行的脱敏步骤记录 |
+
+## Mocks、未启用与不可用依赖
+
+以下内容不是可直接使用的完整能力，使用或写报告时必须按“未启用 / 未验证 / 可选”标注：
+
+| 项 | 当前状态 | 对使用与报告的影响 |
+|---|---|---|
+| Microsoft Graph | 只有保留的骨架，未启用 | Outlook 只走手机 App 读屏，不接 Graph；不能写成第二条读取路径 |
+| 本地视觉模型 Qwen3-VL-8B GGUF | 可选、非默认；权重与 llama.cpp 运行时在仓库外，未进 CI | 默认仍走云端 DeepSeek；没有本地权重时该路径不可用 |
+| QQ 通道 | 无官方 API；走手机 UI + 截图 OCR，群列表滚动有上限（`QQ_LIST_MAX_SCROLLS` 默认 8） | 不是 mock，但受 QQ 界面版本影响；不能写成“官方接口” |
+| 三个 baseline（Open-AutoGLM / Mobile-Agent-v2 / AppAgent） | wrapper 已按上游文档写好，协议用假上游测过；**未安装、未实跑** | 报告只能写“未验证”，不能写对比结果或排名 |
+| embedding 语义匹配 | 可选依赖，默认不装、不联网 | 没有 embedding 时用词法匹配；不能写成默认能力 |
+| YOLO 输入框权重 | 外部权重（`models/input_box.pt`），不入库 | 缺权重时输入框视觉兜底不可用；控件树/OCR 主路径不受影响 |
+
 ## 已知限制（部分真机验证）
 
-- 单机、单账号、微信「文件传输助手」自聊会话做过一次只读读取与端到端抽取验证（`docs/real-device-test-report.md`）；真实课程群、QQ / Outlook App、图片型 DDL、点击与输入、跨 App 信息传递仍未在真实环境跑通。
+- 单机、单账号：微信「文件传输助手」自聊做过一次只读读取与端到端抽取验证（`docs/real-device-test-report.md`）；QQ「COMP7503 作业通知群」测试群做过一次 once 只读扫描（2026-11-24，抓取 204 / 新消息 184 / 新候选 13，最终 11.28）。微信真实课程群、Outlook、图片型 DDL、定时模式、点击与输入、跨 App 信息传递仍未在真实环境跑通。
 - Android 17（API 37）上 uiautomator2 3.7.1 仍不可用（[#1209](https://github.com/openatx/uiautomator2/issues/1209)），程序会回退到 `adb_dump`。回退链路的真机 A/B 已完成一次（235deea，合并观察两组各 1 次，见「验证标签」），但**修复规则成本后尚未复跑**；修复前的回退样本只用于离线解析，不作为提速证据。
 - 依赖版本：`requirements-lock.txt` 是在 Windows + Python 3.12 的虚拟环境里实际解析得到的；换机器（尤其 GPU/系统不同）需重新 `pip freeze` 替换。
 - 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）的命令、输出解析与配置要求已按上游代码写实，协议用假上游测过；但三个真实系统仍未在本机安装、未接真机联调，命令未实跑。

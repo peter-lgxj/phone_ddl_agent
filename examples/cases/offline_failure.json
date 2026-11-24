@@ -1,0 +1,10 @@
+{
+  "now": "2026-11-22T10:00:00+08:00",
+  "sources": [
+    {
+      "name": "QQ-闲聊群",
+      "path": "../demo/qq_chat.json",
+      "source_type": "student_chat"
+    }
+  ]
+}
