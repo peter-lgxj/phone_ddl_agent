@@ -25,8 +25,11 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "sources.yaml"
 blueprint = Blueprint("ddl", __name__)
 _guard = threading.Lock()
+# 「终止扫描」：置位后当前来源在下一个安全点停下，不再开始后续来源
+_cancel = threading.Event()
 _scan = {
     "running": False,
+    "cancelling": False,
     "result": None,
     "error": None,
     "started_at": None,
@@ -53,18 +56,18 @@ def _write_denied():
     return None
 
 
-def _source_without_lock(source) -> MobileAppSource:
+def _source_without_lock(source, should_stop=None) -> MobileAppSource:
     """扫描线程已持有设备锁，数据源不能再次加锁（否则会等满 30s 失败）。"""
-    return MobileAppSource(source, use_device_lock=False)
+    return MobileAppSource(source, use_device_lock=False, should_stop=should_stop)
 
 
-def _source_factory(on_source=None):
+def _source_factory(on_source=None, should_stop=None):
     """构造数据源，并在开始读取某个来源时回报进度给页面。"""
 
     def factory(source) -> MobileAppSource:
         if on_source is not None:
             on_source(source)
-        return _source_without_lock(source)
+        return _source_without_lock(source, should_stop=should_stop)
 
     return factory
 
@@ -210,23 +213,40 @@ def update_source_api(source_id: str):
     payload = request.get_json(silent=True) or {}
     enabled = payload.get("enabled")
     target = payload.get("target")
-    if enabled is None and target is None:
-        return jsonify(error="enabled 或 target 至少要提供一个"), 400
+    lookback = payload.get("lookback_days")
+    if enabled is None and target is None and lookback is None:
+        return jsonify(error="enabled / target / lookback_days 至少要提供一个"), 400
     if enabled is not None and not isinstance(enabled, bool):
         return jsonify(error="enabled 必须是布尔值"), 400
     if target is not None and not str(target).strip():
         return jsonify(error="target 不能为空"), 400
+    if lookback is not None:
+        try:
+            lookback = int(lookback)
+        except (TypeError, ValueError):
+            return jsonify(error="lookback_days 必须是整数"), 400
+        if not 1 <= lookback <= 365:
+            return jsonify(error="lookback_days 应在 1..365 之间"), 400
     with _guard:
         if _scan["running"]:
             return jsonify(error="扫描中不能修改检索目标"), 409
         config = load_config(CONFIG_PATH)
-        if not any(source.id == source_id for source in config.sources):
+        current = next((source for source in config.sources if source.id == source_id), None)
+        if current is None:
             return jsonify(error="检索目标不存在"), 404
+        if target is not None and any(
+            source.id != source_id
+            and source.app == current.app
+            and source.target == str(target).strip()
+            for source in config.sources
+        ):
+            return jsonify(error="已存在同样的检索目标"), 400
         try:
             if enabled is not None:
                 set_enabled(config, source_id, enabled)
-            if target is not None:
-                update_source(config, source_id, target=str(target))
+            if target is not None or lookback is not None:
+                update_source(config, source_id, target=None if target is None else str(target),
+                              lookback_days=lookback)
         except ConfigError as exc:
             return jsonify(error=str(exc)), 400
         save_config(config, CONFIG_PATH)
@@ -258,14 +278,29 @@ def start_scan():
             return jsonify(error="扫描已经在运行"), 409
         if persist:
             save_config(config, CONFIG_PATH)
+        _cancel.clear()
         _scan.update(
-            running=True, result=None, error=None,
+            running=True, cancelling=False, result=None, error=None,
             started_at=datetime.now(TZ).isoformat(timespec="seconds"),
             finished_at=None, current_source=None,
             total_sources=sum(1 for source in config.sources if source.enabled),
         )
     threading.Thread(target=_scan_worker, args=(config,), daemon=True).start()
     return jsonify(running=True, persisted=persist), 202
+
+
+@blueprint.post("/api/ddl/scan/cancel")
+def cancel_scan():
+    """请求终止当前扫描：当前步骤（含模型调用）结束后停止，不开始后续来源。"""
+    denied = _write_denied()
+    if denied:
+        return denied
+    with _guard:
+        if not _scan["running"]:
+            return jsonify(error="当前没有正在运行的扫描"), 409
+        _cancel.set()
+        _scan["cancelling"] = True
+    return jsonify(cancelling=True), 202
 
 
 def _scan_worker(config: MonitorConfig | None = None) -> None:
@@ -288,7 +323,8 @@ def _scan_worker(config: MonitorConfig | None = None) -> None:
                 config, config_path=CONFIG_PATH,
                 out_dir=_project_path(config.output_dir),
                 state_dir=_project_path(config.state_dir),
-                connector_factory=_source_factory(on_source),
+                connector_factory=_source_factory(on_source, _cancel.is_set),
+                should_stop=_cancel.is_set,
             )
         with _guard:
             _scan.update(result=result.to_dict(), error=None)
@@ -298,7 +334,7 @@ def _scan_worker(config: MonitorConfig | None = None) -> None:
     finally:
         with _guard:
             _scan.update(
-                running=False, current_source=None,
+                running=False, cancelling=False, current_source=None,
                 finished_at=datetime.now(TZ).isoformat(timespec="seconds"),
             )
 

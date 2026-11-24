@@ -148,6 +148,10 @@ class TargetNotLocated(RuntimeError):
     """连续两次没有匹配证据，拒绝按坐标猜测点击。"""
 
 
+class ScanCancelled(RuntimeError):
+    """用户请求终止扫描：在下一个安全点（步与步之间、动作执行前）停下。"""
+
+
 class AppMismatchError(RuntimeError):
     """任务指定的 App 与当前前台 App 不一致，拒绝在错误 App 内执行。"""
 
@@ -517,8 +521,10 @@ class ScreenAgent:
         # 规则快路开关由成本核算决定：adb_dump 下规则步要付两次 dump
         self.rule_fastpath_enabled, self._rule_cost = self._resolve_rule_fastpath()
         self.run_dir   = None
-        self.last_status = "idle"   # done / timeout / failed / ambiguous / idle
+        self.last_status = "idle"   # done / timeout / failed / ambiguous / cancelled / idle
         self.last_ambiguous = None  # 群名歧义时的目标与候选，供上层汇总到页面
+        # 外部（Web 终止按钮）注入的停止判断；每步开始与动作执行前检查
+        self.should_stop = None
         self._observe_valid = False  # 当前 screen_observe.png 是否是本步真实截图
         self._last_image_meta = None     # 本步发送图的规格与缩放比例
         self._last_model_action = None   # 缩放时模型返回的原始坐标（未反算）
@@ -1548,17 +1554,29 @@ class ScreenAgent:
             boxes = detector.detect(image, conf=0.2)
             from PIL import Image
             with Image.open(image) as img:
-                height = img.size[1]
+                width, height = img.size
         except Exception as exc:
             self._yolo_unavailable = True
             print(f"  ⚠️  YOLO 搜索入口检测不可用，退回列表滚动：{exc}")
             return None
-        hits = [
+        top = [
             box for box in boxes
-            if box.get("class_name") in ("search_icon", "input_box")
-            and (box.get("center") or (0, 0))[1] < height * 0.25
+            if (box.get("center") or (0, 0))[1] < height * 0.25
         ]
-        return hits[0] if hits else None
+        # 搜索图标优先：图标是搜索入口最直接的证据。
+        icons = [box for box in top if box.get("class_name") == "search_icon"]
+        if icons:
+            return icons[0]
+
+        def _wide(box: dict) -> bool:
+            box_bbox = box.get("bbox") or (0, 0, 0, 0)
+            return box_bbox[2] - box_bbox[0] >= width * 0.6
+
+        # 没有图标时只接受“宽搜索栏”；标题栏的窄框是误检，宁可不点，
+        # 让调用方走列表滚动，也不要在标题上白点一次。
+        bars = [box for box in top
+                if box.get("class_name") == "input_box" and _wide(box)]
+        return bars[0] if bars else None
 
     # ══════════════════════════════════════════════════════════
     #  执行（保持原样，不改动）
@@ -2007,8 +2025,9 @@ class ScreenAgent:
     def _ocr_list_navigate(self, memory: TaskMemory) -> dict | None:
         """列表定位兜底（QQ / 微信）：截图 OCR 匹配群名；找不到就滚动列表。
 
-        不依赖控件树。QQ 只在列表里滚动匹配；微信按三级定位：
-        1) OCR 文字找「搜索」入口；2) OCR 读不到就 YOLO 认搜索图标/搜索框；
+        不依赖控件树。搜索入口按三级定位：
+        1) OCR 文字「搜索」——只有 QQ 列表顶部有这行文字；
+        2) 微信/Outlook 等只有图标的入口直接进 YOLO 认搜索图标/搜索框；
         3) 都认不出才退回列表滚动。命中多个时只接受标题完全相等或
         「标题 + 少量未读数」前缀，避免把「2026 计算机班级二群」当成
         「2026 计算机班级群」。
@@ -2206,15 +2225,27 @@ class ScreenAgent:
                 raise rule_policy.AmbiguousGroupName(target, labels)
             return self._ocr_tap_entry(target, candidates[0])
 
-        if wechat and not state.get("search_tried") and not state.get("search_stage"):
-            # 三级定位：OCR 文字找搜索入口 → YOLO 认搜索图标/搜索框 → 列表滚动。
-            entry = next(
-                (element for text, element in entries
-                 if text == _compact_ocr("搜索")
-                 and (element.get("center") or (0, 0))[1] < height * 0.22),
-                None,
+        if not state.get("search_tried") and not state.get("search_stage"):
+            # 三级定位：搜索入口 → YOLO 视觉 → 列表滚动。
+            # 一级 OCR 文字只有 QQ 有（列表顶部「搜索」）；微信/Outlook 的
+            # 搜索入口只有图标，OCR 永远读不到，直接进 YOLO。
+            probe = getattr(getattr(self, "launcher", None), "current_package", None)
+            current = probe() if callable(probe) else None
+            qq_search_text = (
+                current == "com.tencent.mobileqq"
+                or (current is None and _is_qq_task(memory.task))
             )
-            source = "ocr"
+            entry = None
+            source = None
+            if qq_search_text:
+                entry = next(
+                    (element for text, element in entries
+                     if text == _compact_ocr("搜索")
+                     and (element.get("center") or (0, 0))[1] < height * 0.22),
+                    None,
+                )
+                if entry is not None:
+                    source = "ocr"
             if entry is None:
                 box = self._yolo_search_entry(image)
                 if box is not None:
@@ -2230,12 +2261,12 @@ class ScreenAgent:
                     "action_type": "tap",
                     "x": int(x), "y": int(y),
                     "target": "搜索",
-                    "description": f"微信搜索入口（{source} 定位）",
+                    "description": f"搜索入口（{source} 定位）",
                     "localization_source": source,
                     "rule": {"name": "search_entry"},
                 }
             state["search_tried"] = True
-            print("  ⚠️  微信搜索入口 OCR/YOLO 均未识别，退回列表滚动")
+            print("  ⚠️  搜索入口 OCR/YOLO 均未识别，退回列表滚动")
 
         max_scrolls = int(getattr(config, "QQ_LIST_MAX_SCROLLS", 8))
         group_mode = "群聊" in (memory.task or "")
@@ -2631,6 +2662,18 @@ class ScreenAgent:
         ui_state.set_status("error", reason)
         raise AppMismatchError(reason)
 
+    def _cancelled(self) -> bool:
+        """外部请求终止扫描时返回 True；未注入 should_stop 时永不终止。"""
+        probe = getattr(self, "should_stop", None)
+        return bool(probe()) if callable(probe) else False
+
+    def _stop_for_cancel(self, memory) -> None:
+        print("\n  ⏹  收到终止请求，停止扫描（已读到的消息仍会入库）")
+        self._save_log(memory)
+        self._save_usage_summary(memory)
+        self.last_status = "cancelled"
+        ui_state.set_status("finished", "扫描已终止")
+
     def run(self, task: str):
         memory = TaskMemory(task)
         self.last_memory = memory   # 供实验脚本统计实际步数
@@ -2668,10 +2711,16 @@ class ScreenAgent:
         print(f"{'='*52}")
 
         for step in range(1, self.max_steps + 1):
+            if self._cancelled():
+                self._stop_for_cancel(memory)
+                return
             print(f"\n┌─ 第 {step} 步 {'─'*38}")
 
             try:
                 finished, done, summary = self._execute_step(step, memory)
+            except ScanCancelled:
+                self._stop_for_cancel(memory)
+                return
             except rule_policy.AmbiguousGroupName as exc:
                 # 歧义不中止整轮：记下候选并结束本来源，由 /ddl 页面交给人选定
                 print(f"\n  ⚠️  {exc}")
@@ -2779,6 +2828,9 @@ class ScreenAgent:
             timings.update(getattr(self, "_last_decision_timings", {}) or {})
         timings["decide_total"] = round(time.time() - started, 2)
         action = self._guard_window_completion(action, memory)
+        # 决策期间用户可能已经点了「终止」：动作还没执行，这里是最安全的停下点
+        if self._cancelled():
+            raise ScanCancelled("收到终止请求")
 
         # 动作只执行一次，不随观察/完成检测失败而重放
         # 动作执行后旧截图作废，观察成功才重新有效

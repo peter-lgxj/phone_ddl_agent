@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from types import SimpleNamespace
+import threading
 
 import pytest
 
@@ -13,7 +14,9 @@ def _client(tmp_path, monkeypatch):
     template_dir = web.ROOT / "templates"
     monkeypatch.setattr(web, "ROOT", tmp_path)
     monkeypatch.setattr(web, "CONFIG_PATH", tmp_path / "sources.yaml")
-    monkeypatch.setattr(web, "_scan", {"running": False, "result": None, "error": None})
+    monkeypatch.setattr(web, "_scan", {"running": False, "cancelling": False,
+                                       "result": None, "error": None})
+    monkeypatch.setattr(web, "_cancel", threading.Event())
     monkeypatch.delenv("DDL_WEB_TOKEN", raising=False)
     app = Flask(__name__, template_folder=str(template_dir))
     app.register_blueprint(web.blueprint)
@@ -66,6 +69,8 @@ def test_page_copy_and_mode_choices(tmp_path, monkeypatch):
     assert "定期" in html
     assert "扫描已保存目标" in html
     assert "监控来源" not in html
+    assert 'id="scan-cancel"' in html
+    assert "编辑" in html
 
 
 def test_toggle_source_enabled(tmp_path, monkeypatch):
@@ -205,6 +210,84 @@ def test_scan_once_without_text_is_rejected(tmp_path, monkeypatch):
 
     assert response.status_code == 400
     assert "检索目标" in response.json["error"]
+
+
+def test_patch_source_can_edit_lookback_days(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    response = client.post("/api/ddl/sources", json={"text": "监控微信「LLM小组」，最近14天"})
+    source_id = response.json["added"][0]
+
+    edited = client.patch(f"/api/ddl/sources/{source_id}", json={
+        "target": "LLM小组（新）", "lookback_days": 7,
+    })
+
+    assert edited.status_code == 200
+    source = edited.json["sources"][0]
+    assert source["target"] == "LLM小组（新）"
+    assert source["lookback_days"] == 7
+    assert "lookback_days: 7" in (tmp_path / "sources.yaml").read_text(encoding="utf-8")
+
+    assert client.patch(f"/api/ddl/sources/{source_id}", json={"lookback_days": 0}).status_code == 400
+    assert client.patch(f"/api/ddl/sources/{source_id}", json={"lookback_days": "x"}).status_code == 400
+
+
+def test_patch_source_rejects_duplicate_target(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    client.post("/api/ddl/sources", json={"text": "监控微信「群A」"})
+    second = client.post("/api/ddl/sources", json={"text": "监控微信「群B」"}).json["added"][0]
+
+    response = client.patch(f"/api/ddl/sources/{second}", json={"target": "群A"})
+
+    assert response.status_code == 400
+    assert "已存在同样的检索目标" in response.json["error"]
+
+
+def test_cancel_scan_requires_running_scan(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    assert client.post("/api/ddl/scan/cancel").status_code == 409
+
+
+def test_cancel_scan_sets_stop_flag(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    client.post("/api/ddl/sources", json={"text": "监控微信「课程群」"})
+    web._scan.update(running=True)
+
+    response = client.post("/api/ddl/scan/cancel")
+
+    assert response.status_code == 202
+    assert response.json["cancelling"] is True
+    assert web._cancel.is_set()
+    assert web._scan["cancelling"] is True
+    assert client.get("/api/ddl").json["cancelling"] is True
+
+
+def test_scan_worker_passes_cancel_check_to_cycle(tmp_path, monkeypatch):
+    captured = {}
+
+    @contextmanager
+    def fake_lock(timeout=30):
+        yield True
+
+    def fake_cycle(config, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(to_dict=lambda: {"inserted": 0})
+
+    monkeypatch.setattr(web, "device_lock", fake_lock)
+    monkeypatch.setattr(web, "run_cycle", fake_cycle)
+    monkeypatch.setattr(web, "load_config", lambda _path: SimpleNamespace(output_dir="output",
+                                                                         state_dir="state"))
+    monkeypatch.setattr(web, "_scan", {"running": True, "cancelling": False,
+                                       "result": None, "error": None})
+
+    web._scan_worker()
+
+    assert callable(captured["should_stop"])
+    source = SimpleNamespace(id="wx-群", app="wechat", target="群", source_type="student_chat",
+                             kind="group", lookback_days=14, enabled=True)
+    connector = captured["connector_factory"](source)
+    assert connector.should_stop == captured["should_stop"]
+    assert web._scan["cancelling"] is False
 
 
 def test_scan_worker_holds_device_lock_and_disables_nested_lock(tmp_path, monkeypatch):
