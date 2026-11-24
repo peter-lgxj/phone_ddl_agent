@@ -177,6 +177,77 @@ def test_llm_extractor_falls_back_on_broken_json():
     assert candidates[0].deadline_iso == ISO_A
 
 
+# ---------------------------------------------------------------- 批量抽取
+def _msg(mid: str, body: str, *, source: str = "outlook",
+         source_type: str = "official_email") -> RawMessage:
+    return RawMessage(
+        message_id=mid, source_name=source, source_type=source_type,
+        sender="ta@cs.hku.hk", published_at=NOW,
+        subject="[COMP7608] Assignment", body=body,
+    )
+
+
+def test_llm_extractor_batches_same_source_into_one_call():
+    client = FakeClient([[
+        {"message_index": 2, "task_name": "Assignment 2", "course": "COMP7608",
+         "deadline_text": "Dec 8 23:59", "deadline_iso": ISO_A, "confidence": 0.9},
+    ]])
+    messages = [
+        _msg("m1", "今天讨论课调教室"),
+        _msg("m2", "Assignment 2 is due Dec 8 23:59"),
+    ]
+
+    candidates = LLMDeadlineExtractor(client).extract(messages, now=NOW)
+
+    assert client.calls == ["extract"]
+    assert [candidate.message_id for candidate in candidates] == ["m2"]
+    assert candidates[0].candidate_id == "m2:llm1"
+    assert candidates[0].source_order == 2
+
+
+def test_llm_extractor_batch_invalid_index_falls_back_to_single_calls():
+    client = FakeClient([
+        {"missing": "message_index"},
+        [],
+        [{"task_name": "Assignment 2", "deadline_text": "Dec 8 23:59",
+          "deadline_iso": ISO_A, "confidence": 0.9}],
+    ])
+    messages = [_msg("m1", "闲聊"), _msg("m2", "Assignment 2 is due Dec 8 23:59")]
+
+    candidates = LLMDeadlineExtractor(client).extract(messages, now=NOW)
+
+    # 批量响应不可映射时整批退回逐条，避免静默丢 DDL
+    assert client.calls == ["extract", "extract", "extract"]
+    assert [candidate.message_id for candidate in candidates] == ["m2"]
+
+
+def test_llm_extractor_batch_chunks_long_source():
+    client = FakeClient([[], []])
+    messages = [_msg(f"m{index}", f"message {index}") for index in range(1, 4)]
+
+    LLMDeadlineExtractor(client, batch_size=2).extract(messages, now=NOW)
+
+    # 3 条同来源消息按 2 条一批：一次批量 + 一次单条
+    assert client.calls == ["extract", "extract"]
+
+
+def test_llm_extractor_batch_keeps_original_order_across_sources():
+    client = FakeClient([
+        [{"message_index": 1, "task_name": "A", "deadline_iso": ISO_A, "confidence": 0.9}],
+        [{"message_index": 1, "task_name": "B", "deadline_iso": ISO_A, "confidence": 0.9}],
+    ])
+    messages = [
+        _msg("w1", "微信作业 A 12月8日截止", source="LLM小组", source_type="student_chat"),
+        _msg("q1", "QQ作业 B 12月8日截止", source="超商书友群", source_type="student_chat"),
+    ]
+
+    candidates = LLMDeadlineExtractor(client).extract(messages, now=NOW)
+
+    assert client.calls == ["extract", "extract"]
+    assert [candidate.message_id for candidate in candidates] == ["w1", "q1"]
+    assert [candidate.task_name_raw for candidate in candidates] == ["A", "B"]
+
+
 # ---------------------------------------------------------------- 裁决
 def test_llm_arbiter_selects_candidate():
     cluster = TaskCluster("c1", "Assignment 2", "COMP7608", [
