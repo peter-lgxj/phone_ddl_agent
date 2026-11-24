@@ -39,6 +39,13 @@ SPECS = [
         llm_extractor._PROMPT,
     ),
     (
+        "截止时间抽取器（批量） llm_extractor._BATCH_PROMPT",
+        "ddl_agent/extract/llm_extractor.py",
+        "同一来源的多条消息合并成一次请求，按 message_index 回填到各条消息。",
+        llm_extractor._SYSTEM,
+        llm_extractor._BATCH_PROMPT,
+    ),
+    (
         "同源冲突裁决器 arbiter",
         "ddl_agent/llm/arbiter.py",
         "同一任务出现多个截止时间时，判断哪一条是最终值以及原因。",
