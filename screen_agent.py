@@ -290,7 +290,7 @@ READ_ONLY_BLOCKED_ACTIONS = {"send", "press_enter", "type"}
 
 # 这些规则步骤只改变导航位置，观察用一次控件树 dump 即可，不必截图+settle
 _LIGHT_RULE_OBSERVE = {
-    "open_group", "search_entry", "search_type", "search_result",
+    "open_group", "search_entry", "search_type", "ocr_search_type", "search_result",
     "tap_input", "back_after_miss", "list_scroll", "ocr_list",
 }
 
@@ -338,6 +338,30 @@ def _is_chat_page(entries: list[tuple[str, dict]]) -> bool:
     if not hits:
         return False
     return len(hits) >= 2 or any("按住说话" in text for text, _ in entries)
+
+
+# 微信（无控件树）聊天列表顶部只有「微信」标题和搜索栏；会话页顶部是会话名。
+# 列表行的预览文本里也可能出现「表情/相册」，不能据此判定会话页。
+_WECHAT_HOME_TITLES = {"微信", "搜索"}
+_STATUS_TEXT_RE = re.compile(r"^[\d:.\s%]+$")
+
+
+def _wechat_chat_page(entries: list[tuple[str, dict]], height: int) -> bool:
+    """微信是否停在会话页：顶部标题既不是「微信」也不是搜索栏。
+
+    OCR 会把列表页搜索栏里的放大镜/加号读成单字符（如「Q」「+」），
+    这类噪声不能当成会话标题，否则会把聊天列表误判成会话页。
+    """
+    for text, element in entries:
+        y = (element.get("center") or (0, 0))[1]
+        if y >= height * 0.12:
+            continue
+        if not text or len(text) < 2 or _STATUS_TEXT_RE.match(text):
+            continue
+        if text in _WECHAT_HOME_TITLES:
+            continue
+        return True
+    return False
 
 
 def _fresh_file(path: str, since: float) -> bool:
@@ -1471,6 +1495,71 @@ class ScreenAgent:
                 print(f"│  ⚠️  滚动 OCR 失败，保留模型描述：{e}")
         return observation
 
+    def _ocr_search_page_active(self) -> bool:
+        """无控件树的 App：用 OCR 证明当前是搜索页，而不是聊天输入框。
+
+        搜索页顶部有「取消」和「搜索」，底部没有「按住说话/发送」。
+        只有同时满足才允许在只读模式下输入搜索词。
+        """
+        try:
+            run_dir = getattr(self, "run_dir", None)
+            image = str(Path(run_dir) / "screen_search_check.png") if run_dir else (
+                "screen_search_check.png")
+            self.phone.screenshot(image)
+            elements = self.ocr.detect_ocr(image)
+            from PIL import Image
+            with Image.open(image) as img:
+                height = img.size[1]
+        except Exception as exc:
+            print(f"  ⚠️  搜索页 OCR 校验失败：{exc}")
+            return False
+        texts = []
+        for element in elements:
+            text = str(element.get("text") or "").strip()
+            if text:
+                texts.append((text, int((element.get("center") or (0, 0))[1])))
+        if not texts:
+            return False
+        if any(y > height * 0.85 and marker in text
+               for text, y in texts for marker in ("按住说话", "发送")):
+            return False
+        top = [text for text, y in texts if y < height * 0.18]
+        # 微信搜索页顶部有「取消」或正文有「搜索指定内容/最近搜索」；
+        # 会话页没有这些文案。
+        if any("取消" in text for text in top):
+            return True
+        joined = "".join(text for text, _ in texts)
+        return "搜索指定内容" in joined or "最近搜索" in joined
+
+    def _yolo_search_entry(self, image: str) -> dict | None:
+        """YOLO 视觉兜底：在列表页顶部找搜索入口（搜索图标/搜索框）。
+
+        OCR 读不到图标时使用；权重或依赖缺失只告警一次并返回 None，
+        让调用方继续走列表滚动兜底。
+        """
+        if getattr(self, "_yolo_unavailable", False):
+            return None
+        try:
+            detector = getattr(self, "_gui_detector", None)
+            if detector is None:
+                from input_detector import InputDetector
+                detector = InputDetector()
+                self._gui_detector = detector
+            boxes = detector.detect(image, conf=0.2)
+            from PIL import Image
+            with Image.open(image) as img:
+                height = img.size[1]
+        except Exception as exc:
+            self._yolo_unavailable = True
+            print(f"  ⚠️  YOLO 搜索入口检测不可用，退回列表滚动：{exc}")
+            return None
+        hits = [
+            box for box in boxes
+            if box.get("class_name") in ("search_icon", "input_box")
+            and (box.get("center") or (0, 0))[1] < height * 0.25
+        ]
+        return hits[0] if hits else None
+
     # ══════════════════════════════════════════════════════════
     #  执行（保持原样，不改动）
     # ══════════════════════════════════════════════════════════
@@ -1486,7 +1575,7 @@ class ScreenAgent:
             allowed_search = (
                 t == "type"
                 and action.get("search_input") is True
-                and rule_name == "search_type"
+                and rule_name in ("search_type", "ocr_search_type")
             )
             if t == "type" and not allowed_search:
                 # 模型自己选的搜索输入：按当前控件树判断，不看坐标
@@ -1495,6 +1584,10 @@ class ScreenAgent:
                 except Exception:
                     current_xml = ""
                 allowed_search = rule_policy.is_search_input(current_xml)
+            if t == "type" and not allowed_search:
+                # 微信等无控件树的 App：用截图 OCR 证明当前是搜索页
+                # （顶部有「取消/搜索」且底部不是聊天输入栏），才放行输入。
+                allowed_search = self._ocr_search_page_active()
             if allowed_search:
                 search_type_allowed = True
                 assert not action.get("send") and "发送" not in str(
@@ -1834,11 +1927,90 @@ class ScreenAgent:
     #  规则快路：控件树能证明的动作不调用视觉模型
     # ══════════════════════════════════════════════════════════
 
+    def _ocr_tap_entry(self, target: str, element: dict) -> dict:
+        """列表行/搜索结果命中目标：记录已进入并返回点击动作。"""
+        x, y = element.get("center") or (0, 0)
+        state = self._ocr_nav_state
+        state["entered"] = target
+        rule_state = getattr(self, "_rule_state", None) or {}
+        rule_state.update({
+            "entered_group": target,
+            "scrolls": 0,
+            "last_scroll_text": "",
+            "stagnant": 0,
+            "list_scrolls": 0,
+            "list_last_text": "",
+        })
+        self._rule_state = rule_state
+        return {
+            "action_type": "tap",
+            "x": int(x), "y": int(y),
+            "target": target,
+            "description": f"OCR 命中「{target}」",
+            "ocr_list_hit": True,
+            "localization_source": "ocr",
+        }
+
+    def _wechat_search_step(self, state: dict, targets: list[str],
+                            entries: list[tuple[str, dict]], height: int) -> dict | None:
+        """微信搜索页：先认结果行，未输入就输入目标，多次无结果则回列表。
+
+        搜索框里的关键词本身也落在顶部（y < 18%H），结果行匹配必须排除它，
+        否则会把输入框里的文字当成群行点一次。
+        """
+        state["search_stage"] = None
+        for target in targets:
+            key = _compact_ocr(target)
+            if not key:
+                continue
+            candidates = [
+                element for text, element in entries
+                if text == key and _is_list_text(text)
+                and (element.get("center") or (0, 0))[1] > height * 0.18
+            ]
+            if candidates:
+                return self._ocr_tap_entry(target, candidates[0])
+        if not state.get("search_typed"):
+            state["search_typed"] = True
+            state["search_result_waits"] = 0
+            target = targets[0]
+            return {
+                "action_type": "type",
+                "text": target,
+                "target": target,
+                "search_input": True,
+                "rule": {"name": "ocr_search_type"},
+                "description": f"OCR 搜索：在微信搜索框输入「{target}」",
+                "localization_source": "ocr",
+            }
+        if state.get("search_result_waits", 0) < 2:
+            state["search_result_waits"] = state.get("search_result_waits", 0) + 1
+            return {
+                "action_type": "wait",
+                "description": "OCR 搜索：等待微信返回搜索结果",
+                "ocr_search_wait": state["search_result_waits"],
+            }
+        if state.get("search_backs", 0) >= 2:
+            state["exhausted"] = True
+            print("  ⚠️  微信搜索页连续返回仍未回到列表，放弃本轮 OCR 定位")
+            return None
+        state["search_backs"] = state.get("search_backs", 0) + 1
+        state["search_tried"] = True
+        state["search_result_waits"] = 0
+        state["evidence"] = None
+        return {
+            "action_type": "back",
+            "description": "OCR 搜索：精确匹配无结果，返回聊天列表改用滚动兜底",
+            "ocr_search_back": state["search_backs"],
+        }
+
     def _ocr_list_navigate(self, memory: TaskMemory) -> dict | None:
         """列表定位兜底（QQ / 微信）：截图 OCR 匹配群名；找不到就滚动列表。
 
-        不依赖控件树，也不打开搜索框/输入中文。命中多个时只接受标题完全相等
-        或「标题 + 少量未读数」前缀，避免把「2026 计算机班级二群」当成
+        不依赖控件树。QQ 只在列表里滚动匹配；微信按三级定位：
+        1) OCR 文字找「搜索」入口；2) OCR 读不到就 YOLO 认搜索图标/搜索框；
+        3) 都认不出才退回列表滚动。命中多个时只接受标题完全相等或
+        「标题 + 少量未读数」前缀，避免把「2026 计算机班级二群」当成
         「2026 计算机班级群」。
         """
         targets = rule_policy.extract_quoted_targets(memory.task or "")
@@ -1869,7 +2041,48 @@ class ScreenAgent:
             if str(element.get("text") or "").strip()
         ]
         joined = "".join(text for text, _ in entries)
-        if "搜索指定内容" in joined or "最近搜索" in joined:
+        wechat = bool(getattr(self, "tree_unsupported", False))
+        try:
+            from PIL import Image
+            with Image.open(image) as img:
+                width, height = img.size
+        except Exception:
+            width, height = 1080, 2374
+
+        # 微信不暴露控件树：会话页底部没有「通讯录/发现」这两个 Tab，
+        # 用它判定“当前不在聊天列表”。冷启动后微信会恢复上次的会话页，
+        # 模型会把当前会话当成目标群直接读（item1 因此读成了 llm小组）。
+        on_wechat_tabs = any(
+            text == _compact_ocr("通讯录") for text, _ in entries
+        ) and any(text == _compact_ocr("发现") for text, _ in entries)
+        # 微信搜索页顶部有「取消」，正文常见「搜索指定内容/最近搜索」；
+        # 列表页和会话页都没有这些文案。
+        on_search_page = wechat and (
+            any(
+                text == _compact_ocr("取消")
+                and (element.get("center") or (0, 0))[1] < height * 0.18
+                for text, element in entries
+            )
+            or "搜索指定内容" in joined or "最近搜索" in joined
+        )
+        if on_search_page:
+            return self._wechat_search_step(state, targets, entries, height)
+        if wechat and state.get("search_stage") == "entry":
+            # 刚点了搜索入口：等搜索页出现；两次仍没出现就放弃搜索改滚动。
+            if state.get("entry_waits", 0) >= 2:
+                state["search_stage"] = None
+                state["search_tried"] = True
+                state["entry_waits"] = 0
+                print("  ⚠️  微信搜索页未打开，改为列表滚动兜底")
+            else:
+                state["entry_waits"] = state.get("entry_waits", 0) + 1
+                return {
+                    "action_type": "wait",
+                    "description": "OCR：等待微信搜索页打开",
+                    "ocr_search_entry_wait": state["entry_waits"],
+                }
+
+        if not wechat and ("搜索指定内容" in joined or "最近搜索" in joined):
             # 被模型带到搜索页：直接返回列表，不输入任何文字
             return {
                 "action_type": "back",
@@ -1887,18 +2100,24 @@ class ScreenAgent:
             ):
                 return None
 
-        # 微信不暴露控件树：会话页底部没有「通讯录/发现」这两个 Tab，
-        # 用它判定“当前不在聊天列表”。冷启动后微信会恢复上次的会话页，
-        # 模型会把当前会话当成目标群直接读（item1 因此读成了 llm小组）。
-        on_wechat_tabs = any(
-            text == _compact_ocr("通讯录") for text, _ in entries
-        ) and any(text == _compact_ocr("发现") for text, _ in entries)
-        if getattr(self, "tree_unsupported", False) and not on_wechat_tabs:
+        if wechat and not on_wechat_tabs:
             probe = getattr(self.launcher, "current_package", None)
             current = probe() if callable(probe) else None
             if current != "com.tencent.mm":
                 # 桌面/其它界面上不盲按返回，避免把 App 退掉
                 return None
+            if not _wechat_chat_page(entries, height):
+                # 既没有列表 Tab 也没有会话页标题：先等一帧确认，绝不盲按返回，
+                # 否则从聊天列表连按返回会直接退到桌面。
+                if state.get("wechat_unknown_wait"):
+                    state["exhausted"] = True
+                    print("  ⚠️  微信界面无法确认（无列表 Tab 也无会话页标题），停止自动操作")
+                    return None
+                state["wechat_unknown_wait"] = 1
+                return {
+                    "action_type": "wait",
+                    "description": "OCR 兜底：等待微信界面稳定后重新确认（不按返回）",
+                }
             if state.get("chat_backs", 0) >= 2:
                 state["exhausted"] = True
                 print("  ⚠️  微信会话页连续返回仍未回到列表，放弃本轮 OCR 定位")
@@ -1910,7 +2129,7 @@ class ScreenAgent:
                 "ocr_chat_back": state["chat_backs"],
             }
 
-        if _is_chat_page(entries):
+        if _is_chat_page(entries) and not on_wechat_tabs:
             # 已经在聊天页：绝不能把聊天内容当列表继续下滑。
             # 未进入目标会话时先退回列表；连续退回两次仍不在列表则放弃。
             if state.get("chat_backs", 0) >= 2:
@@ -1985,26 +2204,38 @@ class ScreenAgent:
                     if label and label not in labels:
                         labels.append(label)
                 raise rule_policy.AmbiguousGroupName(target, labels)
-            x, y = candidates[0].get("center") or (0, 0)
-            state["entered"] = target
-            rule_state = getattr(self, "_rule_state", None) or {}
-            rule_state.update({
-                "entered_group": target,
-                "scrolls": 0,
-                "last_scroll_text": "",
-                "stagnant": 0,
-                "list_scrolls": 0,
-                "list_last_text": "",
-            })
-            self._rule_state = rule_state
-            return {
-                "action_type": "tap",
-                "x": int(x), "y": int(y),
-                "target": target,
-                "description": f"OCR 列表命中「{target}」",
-                "ocr_list_hit": True,
-                "localization_source": "ocr",
-            }
+            return self._ocr_tap_entry(target, candidates[0])
+
+        if wechat and not state.get("search_tried") and not state.get("search_stage"):
+            # 三级定位：OCR 文字找搜索入口 → YOLO 认搜索图标/搜索框 → 列表滚动。
+            entry = next(
+                (element for text, element in entries
+                 if text == _compact_ocr("搜索")
+                 and (element.get("center") or (0, 0))[1] < height * 0.22),
+                None,
+            )
+            source = "ocr"
+            if entry is None:
+                box = self._yolo_search_entry(image)
+                if box is not None:
+                    entry = {"center": box.get("center") or (0, 0)}
+                    source = "yolo"
+            if entry is not None:
+                x, y = entry.get("center") or (0, 0)
+                state["search_stage"] = "entry"
+                state["entry_waits"] = 0
+                state["search_typed"] = False
+                state["search_result_waits"] = 0
+                return {
+                    "action_type": "tap",
+                    "x": int(x), "y": int(y),
+                    "target": "搜索",
+                    "description": f"微信搜索入口（{source} 定位）",
+                    "localization_source": source,
+                    "rule": {"name": "search_entry"},
+                }
+            state["search_tried"] = True
+            print("  ⚠️  微信搜索入口 OCR/YOLO 均未识别，退回列表滚动")
 
         max_scrolls = int(getattr(config, "QQ_LIST_MAX_SCROLLS", 8))
         group_mode = "群聊" in (memory.task or "")
@@ -2099,11 +2330,6 @@ class ScreenAgent:
             state["up_scrolls"] = state.get("up_scrolls", 0) + 1
         state["scrolls"] = state.get("down_scrolls", 0) + state.get("up_scrolls", 0)
 
-        try:
-            from PIL import Image
-            width, height = Image.open(image).size
-        except Exception:
-            width, height = 1080, 2374
         if direction == "down":
             y, y2 = int(height * 0.72), int(height * 0.30)
         else:
