@@ -453,7 +453,7 @@ A/B 时保持同一任务文本、同一设备、同一网络与同一 provider�
 | 真机实测（规则开关） | 同上 | 强制规则 11.44s / 1 请求 vs 默认关闭 17.81s / 3 请求；规则步 5.5s ≈ 模型步 5.3s，但少一次请求，故默认开启 |
 | 真机实测（搜索 vs 列表） | 同上 | 同群各 3 次：搜索 39.01s / 7 dumps / 4 步；列表 11.48s / 3 dumps / 2 步。`adb_dump` 下搜索页 dump 明显更慢，搜索不作为默认（`RULE_SEARCH_FORCE=1` 可强制） |
 | 真机实测（monitor） | 单进程 `run_cycle`（QQ 单群） | 7 步 / 51.2s / 19,591 tokens；`fetch→extract→dedupe→resolve→write` 全链路，输出 `data.json`、`deadlines.ics`、`calendar.html`；手机日历测试事件写入后已删除，.ics 生成 VEVENT+VALARM |
-| 离线回放 | 冻结真机抽取候选，用当前裁决/聚焦重算；不联网、不碰手机 | 判分复跑 20/21 = 95.24%（D02/D03 未采集，已剔除分母）；证据 `runs/_verify/judge_replay_result.json`（`runs/` 不入库） |
+| 离线回放 | 冻结真机抽取候选，用当前裁决/聚焦重算；不联网、不碰手机 | 判分复跑 **21/21 = 100%**（hit 21、partial 0、fail 0、violation 0；D02/D03 未采集已剔除分母；D06 在置顶过滤修复后由 partial 变 hit，旧值 20/21 已废弃）；2026-11-24 在 `main@411c48e` 复跑与 2026-11-22 产物逐字节一致（SHA256 `F4894F17…`）；证据 `runs/_verify/judge_replay_result.json`（`runs/` 不入库） |
 | 离线回放 | 规则停止条件 | 真机实时控件树：聊天页已显示「操作系统作业一」时规则 0 次滚动；群列表 `open_group`；发送区域坐标/文案均拒绝 |
 
 同屏复用与连接预热不列为收益项：6 次归档 A/B 中 `reused_frame` 均为 0；复用只在静态页命中，聊天页因光标/动画哈希变化；复用最多省 `preprocess` 0.11–0.15s/步（monitor 中出现过 1 次同屏复用，但不足以改变任务耗时结论）；连接预热 0.22–0.43s 仅启动一次，每步收益 0.00s。
