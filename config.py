@@ -118,6 +118,13 @@ MAX_STEPS = int(os.getenv("MAX_STEPS", "30"))
 # 一次响应最多接受几个连续动作；超出部分截断，避免单个请求里塞入不可控的动作序列
 MAX_ACTIONS_PER_STEP = int(os.getenv("MAX_ACTIONS_PER_STEP", "3"))
 STEP_RETRIES = 2            # 单步失败后的重试次数，避免一次 API 抖动直接判任务失败
+# 无进展刹车：同一动作+同一目标连续执行，且结构化屏幕签名连续 N 次不变，
+# 就判定当前策略不可行并结束，不撞到 MAX_STEPS。
+# 签名来自 OCR 文本与粗粒度坐标，并排除状态栏区域/纯时间文本，时钟不参与比较。
+NO_PROGRESS_GUARD = os.getenv("NO_PROGRESS_GUARD", "1").strip().lower() not in (
+    "0", "false", "off", ""
+)
+NO_PROGRESS_LIMIT = int(os.getenv("NO_PROGRESS_LIMIT", "3"))
 # 生产读屏默认只读：拒绝 send / press_enter / type 等会在群内发言或改动内容的动作。
 # 单独跑任务脚本（run.py / multi_agent.py）时可设 READ_ONLY_MODE=0 关闭。
 READ_ONLY_MODE = os.getenv("READ_ONLY_MODE", "1").strip().lower() not in (

@@ -207,3 +207,311 @@ def test_matched_tap_keeps_source_for_logging():
 
     assert action["action_type"] == "tap"
     assert action["localization_source"] == "ocr"
+
+
+# ---------------------------------------------------------------- 无进展刹车
+def _progress_agent(elements):
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent.ocr = SimpleNamespace(detect_ocr=lambda path: list(elements))
+    agent._last_image_meta = {"orig_size": (1080, 2374)}
+    agent._progress_key = None
+    agent._progress_signature = None
+    agent._progress_repeats = 0
+    return agent
+
+
+def _search_screen(placeholder: str = "搜索"):
+    return [
+        {"text": placeholder, "center": (540, 180), "bbox": (100, 150, 980, 210)},
+        {"text": "通讯录", "center": (540, 2200), "bbox": (0, 2150, 1080, 2250)},
+    ]
+
+
+def test_no_progress_brakes_after_same_action_and_screen(monkeypatch):
+    monkeypatch.setattr(screen_agent.config, "NO_PROGRESS_GUARD", True)
+    monkeypatch.setattr(screen_agent.config, "NO_PROGRESS_LIMIT", 3)
+    agent = _progress_agent(_search_screen())
+    action = {"action_type": "tap_input_box", "description": "点击顶部搜索框"}
+
+    results = [agent._detect_no_progress(action) for _ in range(5)]
+
+    assert results[:4] == [None, None, None, None]
+    assert results[4] is not None
+    assert "同一动作" in results[4]
+    assert "当前策略不可行" in results[4]
+    assert "列表滚动" in results[4]
+
+
+def test_no_progress_resets_when_screen_changes(monkeypatch):
+    monkeypatch.setattr(screen_agent.config, "NO_PROGRESS_GUARD", True)
+    monkeypatch.setattr(screen_agent.config, "NO_PROGRESS_LIMIT", 2)
+    elements = _search_screen()
+    agent = _progress_agent(elements)
+    action = {"action_type": "tap_input_box"}
+
+    agent._detect_no_progress(action)
+    agent._detect_no_progress(action)      # 基线
+    assert agent._detect_no_progress(action) is None
+    assert agent._detect_no_progress(action) is not None  # 连续不变触发
+
+    # 屏幕内容一变，计数立刻清零
+    agent._progress_repeats = 0
+    elements[0]["text"] = "课程群"
+    agent._progress_signature = None
+    agent._detect_no_progress(action)
+    assert agent._detect_no_progress(action) is None
+
+
+def test_screen_signature_ignores_status_bar_clock():
+    from ocr_locator import structured_screen_signature
+
+    morning = [
+        {"text": "10:24", "center": (540, 30), "bbox": (0, 0, 1080, 60)},
+        *_search_screen(),
+    ]
+    later = [
+        {"text": "10:25", "center": (540, 30), "bbox": (0, 0, 1080, 60)},
+        *_search_screen(),
+    ]
+    changed = [
+        {"text": "10:25", "center": (540, 30), "bbox": (0, 0, 1080, 60)},
+        *_search_screen("课程群"),
+    ]
+
+    assert (structured_screen_signature(morning, (1080, 2374))
+            == structured_screen_signature(later, (1080, 2374)))
+    assert (structured_screen_signature(morning, (1080, 2374))
+            != structured_screen_signature(changed, (1080, 2374)))
+
+
+def test_run_stops_with_readable_reason_on_no_progress(monkeypatch):
+    monkeypatch.setattr(screen_agent.ui_state, "init_state", lambda task: None)
+    monkeypatch.setattr(screen_agent.ui_state, "set_status", lambda *args: None)
+    monkeypatch.setattr(screen_agent, "cleanup_old_runs", lambda *args, **kwargs: [])
+    monkeypatch.setattr(screen_agent, "make_run_dir", lambda name: "runs/fake")
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent.read_only = False
+    agent.driver_kind = "u2"
+    agent.max_steps = 5
+    agent.last_status = None
+    agent.phone = SimpleNamespace()
+    agent._save_log = lambda memory: None
+    agent._save_usage_summary = lambda memory: None
+
+    def fake_step(step, memory):
+        raise screen_agent.NoProgressDetected("屏幕内容没有实质变化，当前策略不可行")
+
+    agent._execute_step = fake_step
+
+    with pytest.raises(screen_agent.NoProgressDetected, match="当前策略不可行"):
+        agent.run("读取当前屏幕")
+    assert agent.last_status == "failed"
+    assert "当前策略不可行" in agent.last_block_reason
+
+
+# ---------------------------------------------------------------- OCR 输入框兜底
+def test_tap_input_box_falls_back_to_ocr_when_yolo_misses(monkeypatch):
+    controller = _Controller()
+    controller.tree_unsupported = True
+    controller.screenshot = lambda path: SimpleNamespace(size=(1080, 2374))
+    controller.locator = SimpleNamespace(detect_ocr=lambda path: _search_screen())
+
+    class FakeDetector:
+        def find_best(self, path):
+            return None
+
+    monkeypatch.setattr(input_detector, "InputDetector", FakeDetector)
+
+    assert controller.tap_input_box() is True
+    assert controller.taps == [(540, 180)]
+
+
+def test_tap_input_box_fails_only_after_tree_yolo_and_ocr(monkeypatch):
+    controller = _Controller()
+    controller.tree_unsupported = True
+    controller.screenshot = lambda path: SimpleNamespace(size=(1080, 2374))
+    controller.locator = SimpleNamespace(detect_ocr=lambda path: [
+        {"text": "搜索", "center": (540, 2200), "bbox": (0, 2150, 1080, 2250)},
+    ])
+
+    class FakeDetector:
+        def find_best(self, path):
+            return None
+
+    monkeypatch.setattr(input_detector, "InputDetector", FakeDetector)
+
+    assert controller.tap_input_box() is False
+    assert controller.taps == []
+
+
+# ---------------------------------------------------------------- 任务级中文输入拒绝
+def test_chinese_search_target_detects_wechat_search():
+    task = "打开微信，通过搜索框输入「课程群」找到并进入该群聊"
+
+    assert screen_agent.chinese_search_target(task) == "课程群"
+
+
+def test_chinese_search_target_skips_scroll_and_ascii():
+    assert screen_agent.chinese_search_target(
+        "打开微信，在聊天列表里滚动查找「课程群」并进入"
+    ) is None
+    assert screen_agent.chinese_search_target(
+        "打开微信，搜索「COMP7503 作业通知群」并进入"
+    ) is None
+
+
+def test_chinese_search_refusal_gives_install_and_retry_steps():
+    reason = screen_agent.chinese_search_input_refusal("课程群")
+
+    assert "ADBKeyboard" in reason
+    assert "ime set com.android.adbkeyboard/.AdbIME" in reason
+    assert "列表滚动" in reason
+
+
+def test_run_refuses_chinese_search_before_opening_input_box(monkeypatch):
+    monkeypatch.setattr(screen_agent.ui_state, "init_state", lambda task: None)
+    monkeypatch.setattr(screen_agent.ui_state, "set_status", lambda *args: None)
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent.read_only = True
+    agent.driver_kind = "adb_dump"
+    agent.last_status = None
+    agent.phone = SimpleNamespace(chinese_input_available=lambda: False)
+
+    with pytest.raises(screen_agent.ReadOnlyTaskRefused, match="ADBKeyboard"):
+        agent.run("打开微信，通过搜索框输入「课程群」找到并进入该群聊")
+    assert agent.last_status == "refused"
+
+
+# ---------------------------------------------------------------- 搜索框放行 / 聊天框拒绝
+_SEARCH_XML = (
+    '<hierarchy rotation="0">'
+    '<node class="android.widget.FrameLayout" bounds="[0,0][1080,2374]" />'
+    '<node class="android.widget.EditText" text="搜索" '
+    'resource-id="com.tencent.mm:id/search_input" focused="true" '
+    'bounds="[100,150][980,210]" />'
+    "</hierarchy>"
+)
+_SEARCH_XML_UNFOCUSED = (
+    '<hierarchy rotation="0">'
+    '<node class="android.widget.FrameLayout" bounds="[0,0][1080,2374]" />'
+    '<node class="android.widget.EditText" text="搜索" '
+    'resource-id="com.tencent.mm:id/search_input" focused="false" '
+    'bounds="[100,150][980,210]" />'
+    '<node class="android.widget.EditText" text="" '
+    'resource-id="com.tencent.mm:id/chat_input" focused="true" '
+    'bounds="[100,2100][980,2250]" />'
+    "</hierarchy>"
+)
+
+
+def _input_policy_agent(xml: str = "", ocr_elements=None,
+                        task: str = "打开微信搜索「课程群」"):
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent.phone = SimpleNamespace(
+        tree_unsupported=not xml,
+        dump_hierarchy=lambda: xml,
+        screenshot=lambda path: SimpleNamespace(size=(1080, 2374)),
+    )
+    agent.ocr = SimpleNamespace(detect_ocr=lambda path: list(ocr_elements or []))
+    agent.last_memory = SimpleNamespace(task=task)
+    return agent
+
+
+def test_search_box_with_focus_is_allowed():
+    agent = _input_policy_agent(_SEARCH_XML)
+
+    allowed, reason, source = agent._search_input_permission({"action_type": "type"})
+
+    assert allowed is True
+    assert reason == ""
+    assert source == "tree_search_focus"
+
+
+def test_chat_input_focus_is_refused():
+    agent = _input_policy_agent(_SEARCH_XML_UNFOCUSED)
+
+    allowed, reason, source = agent._search_input_permission({"action_type": "type"})
+
+    assert allowed is False
+    assert "焦点不在搜索框" in reason
+    assert source == "tree_chat_focus"
+
+
+def test_unknown_focus_is_refused():
+    agent = _input_policy_agent(_SEARCH_XML_UNFOCUSED.replace('focused="true"', 'focused="false"'),
+                                task="打开微信读取消息")
+
+    allowed, reason, source = agent._search_input_permission({"action_type": "type"})
+
+    assert allowed is False
+    assert "无法确认焦点" in reason
+    assert source == "tree_unfocused"
+
+
+def test_ocr_search_box_allows_typing_without_tree():
+    agent = _input_policy_agent("", ocr_elements=_search_screen())
+
+    allowed, reason, source = agent._search_input_permission({"action_type": "type"})
+
+    assert allowed is True
+    assert source == "ocr_search_box"
+
+
+def test_ocr_without_search_box_is_refused():
+    agent = _input_policy_agent("", ocr_elements=[
+        {"text": "发送", "center": (900, 2200), "bbox": (800, 2150, 1000, 2250)},
+    ])
+
+    allowed, reason, source = agent._search_input_permission({"action_type": "type"})
+
+    assert allowed is False
+    assert "无法确认焦点归属" in reason
+    assert source == "ocr_unknown"
+
+
+def test_allowed_search_typing_is_logged_in_action():
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent.read_only = True
+    agent._search_input_active = False
+    agent._input_failures = {}
+    calls = []
+    agent.phone = SimpleNamespace(
+        type_text=lambda text, allow_search=False: calls.append((text, allow_search)),
+    )
+    agent._search_input_permission = lambda action: (True, "", "ocr_search_box")
+    action = {"action_type": "type", "text": "课程群"}
+
+    assert agent._execute(action) is False
+    assert calls == [("课程群", True)]
+    assert action["search_input"] is True
+    assert action["input_policy"] == "search_box_only"
+    assert action["input_policy_source"] == "ocr_search_box"
+    assert agent._search_input_active is True
+
+
+def test_type_into_chat_box_is_rejected_and_not_executed():
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent.read_only = True
+    agent._search_input_active = False
+    agent._input_failures = {}
+    agent.phone = _input_policy_agent(_SEARCH_XML_UNFOCUSED).phone
+    agent.ocr = SimpleNamespace(detect_ocr=lambda path: [])
+    agent.last_memory = SimpleNamespace(task="打开微信搜索「课程群」")
+    action = {"action_type": "type", "text": "课程群"}
+
+    assert agent._execute(action) is False
+    assert action["blocked"] is True
+    assert action["input_policy"] == "rejected"
+    assert "焦点不在搜索框" in action["blocked_reason"]
+
+
+def test_submit_after_search_typing_stops_safely():
+    agent = object.__new__(screen_agent.ScreenAgent)
+    agent.read_only = True
+    agent._search_input_active = True
+    action = {"action_type": "press_enter"}
+
+    with pytest.raises(screen_agent.NoProgressDetected, match="只检索不提交"):
+        agent._execute(action)
+    assert action["blocked"] is True
+    assert action["input_policy"] == "search_submit_blocked"

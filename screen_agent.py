@@ -15,7 +15,8 @@ from app_launcher import AppLauncher
 from memory import TaskMemory, format_steps_compact
 from ocr_locator import (OCRLocator, mark_text_in_input_boxes, resolve_action_element,
                          canonical_action_target, should_trigger_ocr, snap_action_coords,
-                         enforce_tap_bounds)
+                         enforce_tap_bounds, structured_screen_signature,
+                         find_search_box_ocr)
 import config
 import image_preprocess
 import rule_policy
@@ -148,6 +149,10 @@ class TargetNotLocated(RuntimeError):
     """连续两次没有匹配证据，拒绝按坐标猜测点击。"""
 
 
+class NoProgressDetected(RuntimeError):
+    """同一动作+目标连续多次没有改变屏幕，判定当前策略不可行。"""
+
+
 _READ_ONLY_NEGATED = re.compile(
     r"(?:不要|不得|禁止|勿|无需|别|不)\s*(?:输入|发送|发消息|打字|回复|使用搜索框)[^，。；\n]*"
 )
@@ -173,6 +178,51 @@ def read_only_task_refusal(task: str, read_only: bool) -> str | None:
         "本程序只读取手机屏幕，不会在聊天框输入或发送任何内容。"
         "可做的替代：扫描群聊/邮箱里的 DDL，例如「QQ「COMP7503 作业通知群」，最近14天」，"
         "或在网页里选择「仅扫描一次」。"
+    )
+
+
+_SEARCH_INTENT_RE = re.compile(r"搜索|搜一下|查找|输入")
+_SCROLL_HINT_RE = re.compile(r"滚动|列表|翻页|上下滑")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_ASCII_TOKEN_RE = re.compile(r"[A-Za-z0-9]{4,}")
+_SEARCH_SUBMIT_RE = re.compile(r"发送|提交|确认搜索|搜索确认|回车|\b(?:send|submit|enter)\b",
+                               re.IGNORECASE)
+
+
+def chinese_search_target(task: str) -> str | None:
+    """判断任务是否必须靠「搜索框输入中文」推进；是则返回需要输入的名称。
+
+    只在任务明确要「搜索/查找/输入」、目标含中文、又没有要求滚动列表时成立。
+    目标里有 4 位以上 ASCII（如 COMP7503）时不判定为必须中文输入：
+    adb 的 ``input text`` 可直接输入 ASCII。
+    """
+    cleaned = _READ_ONLY_NEGATED.sub(" ", str(task or ""))
+    if not cleaned.strip() or _SCROLL_HINT_RE.search(cleaned):
+        return None
+    if not _SEARCH_INTENT_RE.search(cleaned):
+        return None
+    targets = rule_policy.extract_quoted_targets(cleaned)
+    for target in targets:
+        if _ASCII_TOKEN_RE.search(target):
+            return None
+        if _CJK_RE.search(target):
+            return target
+    match = re.search(
+        r"(?:搜索|搜一下|查找|输入)[^，。；\n]{0,16}([\u4e00-\u9fff][^，。；\n]{0,20})",
+        cleaned,
+    )
+    return match.group(1).strip() if match else None
+
+
+def chinese_search_input_refusal(target: str) -> str:
+    """只读 + 无中文输入法时，在打开输入框之前说明做不到并给出重试方式。"""
+    return (
+        f"只读模式需要通过搜索框输入中文名称「{target}」，但当前没有启用 "
+        "ADBKeyboard 中文输入法，输入中文会失败。"
+        "替代路径：改用聊天/群列表滚动查找；"
+        "或安装 ADBKeyboard（com.android.adbkeyboard）并设为当前输入法后重试："
+        "`adb shell ime enable com.android.adbkeyboard/.AdbIME`、"
+        "`adb shell ime set com.android.adbkeyboard/.AdbIME`。"
     )
 
 
@@ -501,6 +551,12 @@ class ScreenAgent:
         self._last_frame_meta = None      # 上一帧图片元数据
         self._pending_settle_frame = None # settle 保留的稳定帧，供下一步复用
         self._last_reused_frame = False   # 本步是否复用了上一帧（写进 step JSON）
+        # 无进展刹车：上一次的动作键、结构化屏幕签名与连续未变化次数
+        self._progress_key = None
+        self._progress_signature = None
+        self._progress_repeats = 0
+        self.last_block_reason = ""       # 无进展/策略不可行时的停止原因
+        self._search_input_active = False  # 搜索框已输入：后续禁止发送/回车
 
         print(f"视觉模型：{provider_name} / {self.model}")
         print(f"语义模型：{planner_name} / {self.text_model}")
@@ -1437,6 +1493,138 @@ class ScreenAgent:
     #  执行（保持原样，不改动）
     # ══════════════════════════════════════════════════════════
 
+    @staticmethod
+    def _focused_input_bounds(xml_text: str) -> set[str]:
+        """控件树里当前获得焦点的 EditText 的 bounds 集合。"""
+        root = rule_policy.parse_xml(xml_text)
+        if root is None:
+            return set()
+        bounds: set[str] = set()
+        for node in root.iter("node"):
+            if node.get("focused") != "true":
+                continue
+            if "EditText" not in (node.get("class") or ""):
+                continue
+            value = node.get("bounds") or ""
+            if value:
+                bounds.add(value)
+        return bounds
+
+    def _search_input_permission(self, action: dict) -> tuple[bool, str, str]:
+        """确认 ``type`` 的目标是不是搜索框；焦点不明一律按不可输入处理。
+
+        返回 ``(是否放行, 拒绝原因, 判定来源)``。来源写进 step JSON 便于审计。
+        控件树可用时看搜索框与焦点；微信等无控件树的 App 用 OCR 找顶部搜索框。
+        聊天/评论等底部输入框不会被 OCR 搜索框判据命中，因此仍会拒绝。
+        """
+        xml = ""
+        if not getattr(self.phone, "tree_unsupported", False):
+            try:
+                xml = self.phone.dump_hierarchy() or ""
+            except TreeUnavailable:
+                xml = ""
+            except Exception as exc:
+                print(f"  ⚠️  读取控件树确认搜索框失败：{exc}")
+                xml = ""
+        if xml:
+            box = rule_policy.find_search_input(xml)
+            if box is not None:
+                focused = self._focused_input_bounds(xml)
+                if not focused:
+                    task = str(getattr(getattr(self, "last_memory", None), "task", "") or "")
+                    if _SEARCH_INTENT_RE.search(task):
+                        return True, "", "tree_search_context"
+                    return False, (
+                        "控件树里有搜索框，但无法确认焦点在它上面；"
+                        "按不可输入处理，避免打进聊天框"
+                    ), "tree_unfocused"
+                if box.get("bounds") in focused:
+                    return True, "", "tree_search_focus"
+                return False, (
+                    "当前焦点不在搜索框（可能是聊天/评论输入框），只读模式拒绝输入"
+                ), "tree_chat_focus"
+            if rule_policy.find_input(xml) is not None or self._focused_input_bounds(xml):
+                return False, (
+                    "当前焦点在非搜索输入框（聊天/评论等），只读模式拒绝输入"
+                ), "tree_non_search_input"
+        # 无控件树（如微信）：用 OCR 找屏幕上半部的搜索框
+        try:
+            image = self.phone.screenshot("screen_for_input_policy.png")
+            elements = self.ocr.detect_ocr("screen_for_input_policy.png")
+        except Exception as exc:
+            return False, f"无法截图/OCR 确认搜索框（{exc}），按不可输入处理", "ocr_error"
+        found = find_search_box_ocr(elements, getattr(image, "size", None))
+        if found is not None:
+            return True, "", "ocr_search_box"
+        return False, (
+            "OCR 未找到顶部搜索框，无法确认焦点归属（可能是聊天输入框）；"
+            "按不可输入处理"
+        ), "ocr_unknown"
+
+    def _progress_action_key(self, action: dict) -> str:
+        """无进展检测的动作键：动作类型 + 规范化目标（type 另带输入文本）。"""
+        action_type = effective_action_type(action)
+        if action_type in ("", "finish", "wait"):
+            return ""
+        target = canonical_action_target(action).strip()
+        text = str(action.get("text") or "").strip() if action_type == "type" else ""
+        return f"{action_type}|{target}|{text}"
+
+    def _screen_signature(self) -> str:
+        """当前屏幕的结构化签名；OCR 不可用时返回空串，调用方跳过比较。"""
+        try:
+            elements = self.ocr.detect_ocr("screen_current.png")
+        except Exception as exc:
+            print(f"  ⚠️  无进展检查 OCR 失败，跳过本步比较：{exc}")
+            return ""
+        size = (getattr(self, "_last_image_meta", None) or {}).get("orig_size")
+        return structured_screen_signature(elements, size)
+
+    def _detect_no_progress(self, action: dict) -> str | None:
+        """同一动作+目标、结构化屏幕签名连续不变时，返回可读的停止原因。
+
+        只在动作键重复时才做一次 OCR，避免每步都付全屏 OCR 成本；签名排除
+        状态栏区域与纯时间文本，时钟变化不会重置计数。
+        """
+        if not getattr(config, "NO_PROGRESS_GUARD", True):
+            return None
+        if not hasattr(self, "_progress_key"):
+            self._progress_key = None
+            self._progress_signature = None
+            self._progress_repeats = 0
+        key = self._progress_action_key(action)
+        if not key:
+            self._progress_key = None
+            self._progress_signature = None
+            self._progress_repeats = 0
+            return None
+        if key != self._progress_key:
+            self._progress_key = key
+            self._progress_signature = None
+            self._progress_repeats = 0
+            return None
+        signature = self._screen_signature()
+        if not signature:
+            return None
+        previous = self._progress_signature
+        self._progress_signature = signature
+        if previous is None:
+            self._progress_repeats = 0
+            return None
+        if signature == previous:
+            self._progress_repeats += 1
+        else:
+            self._progress_repeats = 0
+        limit = max(2, int(getattr(config, "NO_PROGRESS_LIMIT", 3)))
+        if self._progress_repeats < limit:
+            return None
+        label = canonical_action_target(action) or action.get("description") or key
+        return (
+            f"同一动作「{label}」连续执行，屏幕内容已连续 {self._progress_repeats} 次"
+            "没有实质变化，判定当前策略不可行并结束任务；"
+            "可改用列表滚动定位；中文搜索需先安装并启用 ADBKeyboard 后重试。"
+        )
+
     def _execute(self, action: dict) -> bool:
         t = action.get("action_type", "wait")
         search_type_allowed = False
@@ -1454,39 +1642,73 @@ class ScreenAgent:
             print(f"  ⛔  {reason}")
             return False
 
+        # 搜索只输入、不提交：需要回车/发送才出结果时，判定该路径不可行并安全停止。
+        if t in ("send", "press_enter") and getattr(self, "_search_input_active", False):
+            reason = (
+                "搜索框已输入，但需要按回车/发送才出结果；本任务只检索不提交，"
+                "判定该路径不可行并停止，不做试探"
+            )
+            action["blocked"] = True
+            action["blocked_reason"] = reason
+            action["input_policy"] = "search_submit_blocked"
+            print(f"  ⛔  {reason}")
+            raise NoProgressDetected(reason)
+        if t == "tap" and getattr(self, "_search_input_active", False):
+            label = f"{action.get('target') or ''} {action.get('description') or ''}"
+            if _SEARCH_SUBMIT_RE.search(label):
+                reason = (
+                    "搜索只输入不提交：点击发送/提交类控件会发出内容，"
+                    "判定该路径不可行并停止"
+                )
+                action["blocked"] = True
+                action["blocked_reason"] = reason
+                action["input_policy"] = "search_submit_blocked"
+                print(f"  ⛔  {reason}")
+                raise NoProgressDetected(reason)
+
         if self.read_only and t in READ_ONLY_BLOCKED_ACTIONS:
             rule_name = (action.get("rule") or {}).get("name")
-            # 只放行「搜索框输入」：它只改搜索框，不产生外发；
-            # 消息输入框的 type、send、press_enter 仍一律拒绝。
-            allowed_search = (
-                t == "type"
-                and action.get("search_input") is True
-                and rule_name == "search_type"
-            )
-            if t == "type" and not allowed_search:
-                # 模型自己选的搜索输入：按当前控件树判断，不看坐标
-                try:
-                    current_xml = self.phone.dump_hierarchy()
-                except Exception:
-                    current_xml = ""
-                allowed_search = rule_policy.is_search_input(current_xml)
+            # 只放行可确认焦点的「搜索框输入」；聊天/评论输入框与发送仍一律拒绝。
+            allowed_search = False
+            search_source = ""
+            reason = ""
+            if t == "type":
+                if action.get("search_input") is True and rule_name == "search_type":
+                    allowed_search, search_source = True, "rule_search_type"
+                else:
+                    allowed_search, reason, search_source = self._search_input_permission(action)
             if allowed_search:
                 search_type_allowed = True
                 assert not action.get("send") and "发送" not in str(
                     action.get("target") or ""), "搜索输入不得携带发送语义"
-                print("  🔎  只读模式放行搜索框输入（不产生外发）")
+                action["search_input"] = True
+                action["input_policy"] = "search_box_only"
+                action["input_policy_source"] = search_source
+                print(f"  🔎  只读策略允许搜索框输入「{action.get('text', '')}」"
+                      f"（只检索不提交，来源 {search_source}）")
             else:
-                reason = f"只读模式拒绝动作「{t}」：读屏任务不允许发言或改动输入内容"
+                if t == "type":
+                    detail = reason or "无法确认焦点在搜索框"
+                    reason = f"只读模式拒绝动作「type」：{detail}"
+                    action["input_policy"] = "rejected"
+                    action["input_policy_source"] = search_source or "unknown"
+                else:
+                    reason = f"只读模式拒绝动作「{t}」：读屏任务不允许发言或改动输入内容"
                 action["blocked"] = True
                 action["blocked_reason"] = reason
                 print(f"  ⛔  {reason}")
                 return False
 
         if t == "open_app":
+            self._search_input_active = False
             self.launcher.launch(action.get("app_name", ""))
         elif t == "tap_input_box":
             if not self.phone.tap_input_box():
-                print("  ⚠️  未找到输入框（控件树/YOLO 都不可用），保持当前界面")
+                reason = "输入框定位失败：控件树、YOLO、OCR 都未找到可点击的输入框"
+                action["blocked"] = True
+                action["blocked_reason"] = reason
+                action["localization_failed"] = True
+                print(f"  ⛔  {reason}，保持当前界面")
         elif t == "type":
             text = action.get("text")
             if not text:
@@ -1515,6 +1737,8 @@ class ScreenAgent:
                     allow_search=search_type_allowed or bool(action.get("search_input")),
                 )
                 failures.pop(text_key, None)
+                if search_type_allowed or action.get("search_input"):
+                    self._search_input_active = True
             except PermissionError:
                 # 只读保护不能被当成普通输入失败吞掉
                 raise
@@ -1535,8 +1759,10 @@ class ScreenAgent:
             self.phone.press_enter()
             print("按下回车")
         elif t == "back":
+            self._search_input_active = False
             self.phone.press_back()
         elif t == "home":
+            self._search_input_active = False
             self.phone.press_home()
         elif t == "wait":
             time.sleep(2)
@@ -2147,8 +2373,20 @@ class ScreenAgent:
         memory = TaskMemory(task)
         self.last_memory = memory   # 供实验脚本统计实际步数
         ui_state.init_state(task)
+        self._progress_key = None
+        self._progress_signature = None
+        self._progress_repeats = 0
+        self._search_input_active = False
+        self.last_block_reason = ""
 
         refusal = read_only_task_refusal(task, self.read_only)
+        if refusal is None and self.read_only and self.driver_kind == "adb_dump":
+            # 中文搜索依赖 ADBKeyboard：缺失时在打开输入框之前拒绝，
+            # 给出安装/重试命令和列表滚动替代路径，不进入点击-失败循环。
+            target = chinese_search_target(task)
+            available = getattr(self.phone, "chinese_input_available", None)
+            if target and callable(available) and not available():
+                refusal = chinese_search_input_refusal(target)
         if refusal:
             print(f"\n  ⛔  {refusal}")
             self.last_status = "refused"
@@ -2179,6 +2417,20 @@ class ScreenAgent:
 
             try:
                 finished, done, summary = self._execute_step(step, memory)
+            except NoProgressDetected as e:
+                # 同一动作+目标连续执行且屏幕不变：带可读原因安全停止，
+                # 不继续消耗模型调用，也不冒充“任务完成”或“步数超限”。
+                reason = str(e)
+                print(f"\n{'='*52}")
+                print(f"  ⛔  {reason}")
+                print(f"{'='*52}")
+                print(memory.summary())
+                self._save_log(memory)
+                self._save_usage_summary(memory)
+                self.last_status = "failed"
+                self.last_block_reason = reason
+                ui_state.set_status("error", reason)
+                raise
             except Exception as e:
                 # 单步重试次数用尽：落状态后交给上层（Web 端会推 error 事件）
                 self.last_status = "failed"
@@ -2270,6 +2522,28 @@ class ScreenAgent:
             timings.update(getattr(self, "_last_decision_timings", {}) or {})
         timings["decide_total"] = round(time.time() - started, 2)
         action = self._guard_window_completion(action, memory)
+
+        if rule_action is None:
+            no_progress = self._detect_no_progress(action)
+            if no_progress:
+                # 动作还没执行就判定不可行：记录证据步，然后带可读原因结束任务。
+                blocked = dict(action)
+                blocked.update({
+                    "action_type": "wait",
+                    "blocked": True,
+                    "blocked_reason": no_progress,
+                    "thought": no_progress,
+                    "description": "未执行：同一动作连续多次没有改变屏幕",
+                })
+                observation = "（未执行：检测到原地循环，已停止任务）"
+                print(f"│  ⛔  {no_progress}")
+                timings["no_progress"] = no_progress
+                self._finalize_step_metrics(timings)
+                self._last_step_timings = timings
+                memory.add_step(thought=no_progress, action=blocked,
+                                observation=observation)
+                self._archive_step(step, blocked, observation)
+                raise NoProgressDetected(no_progress)
 
         # 动作只执行一次，不随观察/完成检测失败而重放
         # 动作执行后旧截图作废，观察成功才重新有效

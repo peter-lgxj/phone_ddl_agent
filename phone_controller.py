@@ -3,6 +3,7 @@ import time
 from PIL import Image
 import io
 import config
+from ocr_locator import find_search_box_ocr
 
 # 实测基线：3.7.1 是当前最新版，但仍未修复 Android 17 的 ApplicationSharedMemory 问题
 MIN_UIAUTOMATOR2_VERSION = (3, 7, 1)
@@ -236,8 +237,30 @@ class PhoneController:
             time.sleep(0.8)
             return True
 
-        print("未找到输入框控件，YOLO 也未检测到输入框")
+        if self._tap_input_box_by_ocr():
+            return True
+        print("未找到输入框控件，YOLO 与 OCR 也未检测到输入框")
         return False
+
+    def _tap_input_box_by_ocr(self) -> bool:
+        """YOLO 未检出时用 OCR 找顶部搜索框；失败返回 False，不中断任务。"""
+        locator = getattr(self, "locator", None)
+        if locator is None:
+            return False
+        try:
+            image = self.screenshot("screen_for_ocr.png")
+            elements = locator.detect_ocr("screen_for_ocr.png")
+        except Exception as e:  # noqa: BLE001 - OCR 兜底不可用不能拖垮任务
+            print(f"OCR 输入框定位不可用（{e}）")
+            return False
+        found = find_search_box_ocr(elements, getattr(image, "size", None))
+        if not found:
+            return False
+        x, y = found["center"]
+        print(f"OCR 定位到搜索框「{found.get('text', '')}」，坐标:({x},{y})")
+        self.device.click(x, y)
+        time.sleep(0.8)
+        return True
 
     def press_back(self):
         """返回键"""

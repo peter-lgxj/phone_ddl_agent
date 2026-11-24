@@ -1,3 +1,4 @@
+import hashlib
 import os
 import subprocess
 import xml.etree.ElementTree as ET
@@ -334,6 +335,76 @@ class OCRLocator:
                 f"{src}{typ}「{el['text']}」坐标:({el['center'][0]}, {el['center'][1]})"
             )
         return "\n".join(lines)
+
+
+_SEARCH_BOX_TEXT_RE = re.compile(r"搜索|search", re.IGNORECASE)
+_TIME_NOISE_RE = re.compile(r"^\s*(?:\d{1,2}:\d{2}|\d{1,3}%)\s*$")
+
+
+def _known_screen_height(elements: list[dict], screen_size=None) -> int:
+    height = int((screen_size or (0, 0))[1] or 0)
+    if height > 0:
+        return height
+    return max(
+        (int((el.get("bbox") or (0, 0, 0, 0))[3]) for el in elements),
+        default=0,
+    )
+
+
+def find_search_box_ocr(elements: list[dict], screen_size=None,
+                        max_y_ratio: float = 0.3) -> dict | None:
+    """控件树与 YOLO 都不可用时，用 OCR 找屏幕上半部的搜索框。
+
+    只认文字含「搜索/search」且位于屏幕上部 ``max_y_ratio`` 内的元素；
+    优先完全等于「搜索」的占位文字，其次取最靠上的候选。
+    底部消息输入框即使带「搜索」也不会命中。
+    """
+    if not elements:
+        return None
+    height = _known_screen_height(elements, screen_size)
+    best = None
+    best_key = None
+    for element in elements:
+        center = element.get("center")
+        text = str(element.get("text") or "").strip()
+        if not center or not _SEARCH_BOX_TEXT_RE.search(text):
+            continue
+        if height and center[1] > height * max_y_ratio:
+            continue
+        # 精确命中「搜索」优先，其次越靠上越好
+        key = (0 if text == "搜索" else 1, center[1])
+        if best_key is None or key < best_key:
+            best, best_key = element, key
+    return best
+
+
+def structured_screen_signature(elements: list[dict], screen_size=None,
+                                status_ratio: float = 0.04) -> str:
+    """把 OCR/控件树元素压成屏幕签名，用于判断界面有没有实质变化。
+
+    - 排除顶部状态栏区域与纯时间/电量文本，避免时钟每分钟变化造成假差异；
+    - 文本与粗粒度坐标一起参与哈希，换行或错位也能被发现；
+    - 没有可用元素时返回空串，调用方应跳过比较而不是误判为“没变化”。
+    """
+    if not elements:
+        return ""
+    height = _known_screen_height(elements, screen_size)
+    status_limit = max(int(height * status_ratio), 60) if height else 0
+    items = []
+    for element in elements:
+        text = re.sub(r"\s+", " ", str(element.get("text") or "").strip())
+        center = element.get("center")
+        if not text or not center:
+            continue
+        if status_limit and center[1] < status_limit:
+            continue
+        if _TIME_NOISE_RE.match(text):
+            continue
+        items.append((text, int(center[0]) // 20, int(center[1]) // 20))
+    if not items:
+        return ""
+    payload = "\n".join(f"{text}@{x},{y}" for text, x, y in sorted(items))
+    return hashlib.md5(payload.encode("utf-8")).hexdigest()
 
 
 # ── 按需 OCR：点击坐标吸附 ─────────────────────────────────────

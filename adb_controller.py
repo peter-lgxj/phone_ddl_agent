@@ -26,6 +26,7 @@ from PIL import Image
 
 import config
 from adb_utils import ADB
+from ocr_locator import find_search_box_ocr
 
 logger = logging.getLogger(__name__)
 
@@ -528,6 +529,17 @@ class AdbDumpController:
             "未安装时请改用列表滚动定位，不要重复输入中文"
         )
 
+    def chinese_input_available(self) -> bool:
+        """当前设备是否已启用 ADBKeyboard（中文输入的前提）；查询失败按不可用处理。"""
+        try:
+            self._ensure_adb_keyboard()
+            return True
+        except InputMethodUnavailable:
+            return False
+        except Exception as exc:  # noqa: BLE001 - 输入法探测失败不能拖垮任务启动
+            print(f"  ⚠️  中文输入法探测失败，按不可用处理：{exc}")
+            return False
+
     def _input_texts(self) -> list[str]:
         """读取当前控件树里所有输入框的实际文字。"""
         xml_text = self.dump_hierarchy(use_cache=False)
@@ -596,7 +608,7 @@ class AdbDumpController:
         time.sleep(0.5)
 
     def tap_input_box(self) -> bool:
-        """从控件树找 EditText，点击其中心；无控件树时退化为 YOLO 输入框检测。"""
+        """从控件树找 EditText，点击其中心；无控件树时依次退化为 YOLO / OCR。"""
         try:
             elements = self.tree_elements()
         except TreeUnavailable as exc:
@@ -610,7 +622,30 @@ class AdbDumpController:
                 return True
         if elements:
             print("未在控件树中找到输入框（adb_dump），尝试 YOLO 检测")
-        return self._tap_input_box_by_vision()
+        if self._tap_input_box_by_vision():
+            return True
+        return self._tap_input_box_by_ocr()
+
+    def _tap_input_box_by_ocr(self) -> bool:
+        """YOLO 也未检出时，用 OCR 找顶部搜索框；三条路都失败才返回 False。"""
+        locator = getattr(self, "locator", None)
+        if locator is None:
+            print("  ⚠️  未找到输入框：无控件树、YOLO 未检出，且没有可用的 OCR 定位器")
+            return False
+        try:
+            image = self.screenshot("screen_for_ocr.png")
+            elements = locator.detect_ocr("screen_for_ocr.png")
+        except Exception as exc:  # noqa: BLE001 - OCR 兜底不可用不能拖垮任务
+            print(f"  ⚠️  OCR 输入框定位不可用（{exc}）")
+            return False
+        found = find_search_box_ocr(elements, getattr(image, "size", None))
+        if not found:
+            print("  ⚠️  未找到输入框：控件树、YOLO、OCR 都未定位到可点击输入框")
+            return False
+        x, y = found["center"]
+        print(f"  🔎 OCR 定位到搜索框「{found.get('text', '')}」，坐标:({x},{y})")
+        self.tap(x, y)
+        return True
 
     def _tap_input_box_by_vision(self) -> bool:
         """YOLO 输入框兜底：权重缺失/检测失败只返回 False，不中断任务。"""
