@@ -6,7 +6,7 @@
 
 - 项目：手机智能体（Phone Agent）
 - 组号 / 成员：**待填**，必须与最终报告一致
-- 提交版本：`main@375700bb`（2026-11-24 审计基线）；最终以打包快照的 `git rev-parse HEAD` 为准
+- 提交版本：本文件不固定最终版本号；`main@375700bb` 只是 2026-11-24 的审计基线，不是当前版本。最终版本以打包快照的 `git rev-parse HEAD` 为准。
 
 ## 操作模型：电脑驱动手机（先读这一段）
 
@@ -565,7 +565,7 @@ python run.py
 - 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
 - 配置：`config.py`、`.env.example`
 - 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（548 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
+- 测试与工程化：`tests/`（550 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
 - 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
 - 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
 
