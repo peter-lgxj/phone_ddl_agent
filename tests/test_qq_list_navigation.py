@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PIL import Image
+import pytest
 
 import rule_policy
 import screen_agent
@@ -320,6 +321,22 @@ def test_ocr_list_navigation_fails_at_real_top_without_structural_taps(tmp_path)
     # 找回期间只滑动，不点任何入口（包括“展示最近不活跃的群”）
     assert phone.taps == []
     assert agent._ocr_nav_state.get("direction") == "up"
+
+
+def test_ocr_list_navigation_reports_ambiguity_for_case_variant_only(tmp_path):
+    pages = [
+        _list_page(["llm小组", "群B"]),
+        _list_page(["群C", "llm小组"]),
+    ]
+    agent, phone = _paged_agent(tmp_path, pages, start_page=0)
+    memory = TaskMemory("打开QQ，滚动列表找到「LLM小组」")
+
+    with pytest.raises(rule_policy.AmbiguousGroupName) as excinfo:
+        _drive_until_done(agent, phone, memory)
+
+    # 翻遍列表只有大小写不同的群：列出候选、不点任何行
+    assert "llm小组" in excinfo.value.candidates
+    assert phone.taps == []
 
 
 def test_ocr_list_navigation_never_taps_structural_expander(tmp_path):

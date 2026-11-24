@@ -418,6 +418,19 @@ def target_match_score(element, target: str) -> float:
 STRONG_MATCH_THRESHOLD = 0.8
 
 
+def approximate_target_labels(elements, target: str) -> list[str]:
+    """列出仅大小写不同/近似的候选文字，供歧义提示展示给人选择。"""
+    labels: list[str] = []
+    for element in elements:
+        score = target_match_score(element, target)
+        if not 0 < score < STRONG_MATCH_THRESHOLD:
+            continue
+        label = str(element.get("text") or element.get("content_desc") or "").strip()
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
 def element_matches_target(element, target: str) -> bool:
     return target_match_score(element, target) > 0
 
@@ -539,6 +552,15 @@ def enforce_tap_bounds(action, elements, screen_size):
             matches = [element for score, element in strong if score == best]
         else:
             matches, best = [], 0.0
+            approximate = approximate_target_labels(eligible, target)
+            if approximate and is_list:
+                # 只有大小写不同/近似候选：不点，交给上层记为歧义
+                return None, {
+                    "allowed": False,
+                    "reason": "approximate_list_target",
+                    "target": target,
+                    "candidates": approximate[:6],
+                }
         boxed = [element for element in matches if element.get("bbox")]
         boxes = {tuple(element["bbox"]) for element in boxed}
         if len(boxes) == 1:

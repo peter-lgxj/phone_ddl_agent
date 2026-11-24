@@ -168,9 +168,10 @@ def test_list_guard_rejects_case_variant_target():
               "target": "LLM小组", "description": "点击群聊 LLM小组"}
     guarded, decision = enforce_tap_bounds(action, elements, (1080, 2374))
 
-    # 只有大小写不同：不能吸附到「llm小组」上
+    # 只有大小写不同：不吸附，作为歧义候选交给上层
     assert guarded is None
-    assert decision["reason"] == "list_target_unresolved"
+    assert decision["reason"] == "approximate_list_target"
+    assert decision["candidates"] == ["llm小组"]
 
 
 def test_list_guard_snaps_to_exact_case_not_variant():

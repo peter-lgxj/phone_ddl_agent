@@ -179,7 +179,9 @@ def run_cycle(config: MonitorConfig, config_path: str | Path | None = None,
 
     result.finished_at = datetime.now(TZ).isoformat(timespec="seconds")
     result.llm = tracker.since(usage_before)
-    result.status = "partial" if result.errors else "ok"
+    # 歧义来源没有报错，但本轮结果不完整；与来源异常一样标成 partial
+    has_ambiguous = any(entry.get("ambiguous") for entry in result.sources)
+    result.status = "partial" if (result.errors or has_ambiguous) else "ok"
     _write_cycle(out, cycle_id, result)
     return result
 
@@ -234,6 +236,7 @@ def _failed_entry(source: MonitorSource, message: str) -> dict:
         "error": message,
         "partial": False,
         "last_status": "error",
+        "ambiguous": None,
     }
 
 
@@ -261,6 +264,7 @@ def _sync_source(source: MonitorSource, connector_factory, extractor,
         "error": None,
         "partial": False,
         "last_status": None,
+        "ambiguous": None,
     }
 
     connector = connector_factory(source) if connector_factory is not None else MobileAppSource(
@@ -271,6 +275,14 @@ def _sync_source(source: MonitorSource, connector_factory, extractor,
     except SourceError as exc:
         entry["error"] = str(exc)
         errors.append(f"{source.id}: {exc}")
+        return entry
+
+    ambiguous = getattr(connector, "ambiguous", None)
+    if ambiguous:
+        # 群名没有逐字符一致的候选：不读消息、不当失败，候选交给页面让人选定
+        entry["ambiguous"] = ambiguous
+        entry["partial"] = True
+        entry["last_status"] = "ambiguous"
         return entry
 
     # 用户配置的时间范围：只保留最近 N 天内的消息；

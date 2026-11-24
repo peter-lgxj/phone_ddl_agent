@@ -341,6 +341,19 @@ def find_target_row(xml_text: str, needle: str) -> dict | None:
     return None
 
 
+class AmbiguousGroupName(RuntimeError):
+    """搜索/列表里没有逐字符一致的群名，只剩大小写差异或近似名。"""
+
+    def __init__(self, target: str, candidates: list[str]):
+        self.target = target
+        self.candidates = candidates
+        listing = "、".join(candidates[:6]) or "（无可展示名称）"
+        super().__init__(
+            f"群名「{target}」没有逐字符一致的匹配，只有近似候选：{listing}。"
+            "已跳过该来源，请选定正确群名后重扫。"
+        )
+
+
 def find_exact_rows(xml_text: str, needle: str) -> list[dict]:
     """只返回逐字符一致（忽略空白/标点、区分大小写）的可点击行。"""
     root = parse_xml(xml_text)
@@ -364,6 +377,45 @@ def find_exact_rows(xml_text: str, needle: str) -> list[dict]:
         seen.add(bounds)
         rows.append({"text": text, "center": center, "bounds": bounds, "clickable": True})
     return rows
+
+
+def find_case_variant_rows(xml_text: str, needle: str) -> list[dict]:
+    """仅大小写不同的候选行；用于没有完全一致候选时列出歧义候选。"""
+    root = parse_xml(xml_text)
+    if root is None:
+        return []
+    parents = {child: parent for parent in root.iter() for child in parent}
+    wanted = _compact(needle).casefold()
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for node in root.iter("node"):
+        text = (node.get("text") or node.get("content-desc") or "").strip()
+        if not text:
+            continue
+        compacted = _compact(text)
+        if compacted == _compact(needle) or compacted.casefold() != wanted:
+            continue
+        clickable = _nearest_clickable(node, parents)
+        if clickable is None:
+            continue
+        bounds = clickable.get("bounds") or ""
+        center = _center(bounds)
+        if not center or bounds in seen:
+            continue
+        seen.add(bounds)
+        rows.append({"text": text, "center": center, "bounds": bounds, "clickable": True})
+    return rows
+
+
+def ambiguous_candidates(xml_text: str, needle: str) -> list[str]:
+    """没有逐字符一致候选时，列出大小写不同/近似的候选群名。"""
+    labels: list[str] = []
+    rows = find_case_variant_rows(xml_text, needle) + find_similar_rows(xml_text, needle)
+    for row in rows:
+        text = str(row.get("text") or "").strip()
+        if text and text not in labels:
+            labels.append(text)
+    return labels[:6]
 
 
 def find_input(xml_text: str, known_resource_ids: tuple[str, ...] = ()) -> dict | None:
@@ -590,6 +642,12 @@ def decide(ctx: RuleContext) -> dict | None:
             state["last_scroll_text"] = ""
             state["stagnant"] = 0
             return action
+        if not rows:
+            # 没有任何逐字符一致的候选：只有大小写差异/近似名时标记歧义，
+            # 不自动挑一个，也不让整轮失败（由上层汇总后交给人选定）。
+            labels = ambiguous_candidates(ctx.xml, targets[0])
+            if labels:
+                raise AmbiguousGroupName(targets[0], labels)
         state["search_failed"] = "ambiguous" if rows else "no_result"
         return None
 

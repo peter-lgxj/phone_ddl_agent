@@ -134,7 +134,11 @@
     .chip.ok{background:var(--ok-soft);color:var(--ok)}
     .chip.partial{background:var(--warn-soft);color:var(--warn)}
     .chip.failed{background:var(--bad-soft);color:var(--bad)}
+    .chip.ambiguous{background:var(--warn-soft);color:var(--warn)}
     .result-row .err{flex-basis:100%;color:var(--bad);font-size:12.5px}
+    .result-row .ambig{flex-basis:100%;display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:12.5px}
+    .result-row .cand{font:inherit;padding:2px 9px;border:1px solid var(--line);border-radius:999px;background:#fff;color:var(--text);cursor:pointer}
+    .result-row .cand:hover{border-color:var(--accent);color:var(--accent)}
     .errors{margin:14px 0 0;padding:12px 14px;border-radius:11px;background:var(--bad-soft);color:var(--bad);font-size:13px;white-space:pre-wrap}
     .errors b{display:block;margin-bottom:4px}
 
@@ -672,9 +676,10 @@
 
       const chip = document.createElement('span');
       const failed = !!entry.error;
-      const partial = !failed && (entry.partial || entry.last_status === 'timeout');
-      chip.className = 'chip ' + (failed ? 'failed' : (partial ? 'partial' : 'ok'));
-      chip.textContent = failed ? '失败' : (partial ? '部分' : '正常');
+      const ambiguous = !failed && !!entry.ambiguous;
+      const partial = !failed && !ambiguous && (entry.partial || entry.last_status === 'timeout');
+      chip.className = 'chip ' + (failed ? 'failed' : (ambiguous ? 'ambiguous' : (partial ? 'partial' : 'ok')));
+      chip.textContent = failed ? '失败' : (ambiguous ? '歧义' : (partial ? '部分' : '正常'));
 
       const counts = document.createElement('span');
       counts.className = 'counts';
@@ -687,6 +692,26 @@
       row.appendChild(chip);
       row.appendChild(counts);
 
+      if (entry.ambiguous) {
+        const wrap = document.createElement('span');
+        wrap.className = 'ambig';
+        const hint = document.createElement('span');
+        const candidates = entry.ambiguous.candidates || [];
+        hint.textContent = candidates.length
+          ? '群名没有逐字符一致的匹配，请选定正确的群后再扫这一条：'
+          : '群名没有逐字符一致的匹配，也未取到候选名，请直接改成完整群名后重扫。';
+        wrap.appendChild(hint);
+        candidates.forEach((name) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'cand';
+          btn.textContent = name;
+          btn.addEventListener('click', () => resolveAmbiguous(entry, name));
+          wrap.appendChild(btn);
+        });
+        row.appendChild(wrap);
+      }
+
       if (entry.error) {
         const err = document.createElement('span');
         err.className = 'err';
@@ -695,6 +720,33 @@
       }
       box.appendChild(row);
     });
+  }
+
+  async function resolveAmbiguous(entry, name) {
+    if (!entry || !entry.source_id) return;
+    try {
+      await api('/api/ddl/sources/' + encodeURIComponent(entry.source_id), {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({target: name}),
+      });
+    } catch (error) {
+      toast('改成「' + name + '」失败：' + error.message, 'error');
+      return;
+    }
+    try {
+      await api('/api/ddl/scan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mode: 'recurring', source_ids: [entry.source_id]}),
+      });
+      toast('已按「' + name + '」重扫该来源…');
+    } catch (error) {
+      toast('重扫失败：' + error.message, 'error');
+      return;
+    }
+    state.resultSig = '';
+    await refreshNow();
   }
 
   /* ---------------- 日历 ---------------- */

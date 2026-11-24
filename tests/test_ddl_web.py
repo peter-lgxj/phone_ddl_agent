@@ -86,6 +86,38 @@ def test_toggle_source_enabled(tmp_path, monkeypatch):
     assert client.patch("/api/ddl/sources/missing", json={"enabled": True}).status_code == 404
 
 
+def test_patch_source_can_rename_target(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    response = client.post("/api/ddl/sources", json={"text": "监控微信「LLM小组」，最近14天"})
+    source_id = response.json["added"][0]
+
+    renamed = client.patch(f"/api/ddl/sources/{source_id}", json={"target": "llm小组"})
+
+    assert renamed.status_code == 200
+    assert renamed.json["sources"][0]["target"] == "llm小组"
+    assert "llm小组" in (tmp_path / "sources.yaml").read_text(encoding="utf-8")
+    assert client.patch(f"/api/ddl/sources/{source_id}", json={"target": "   "}).status_code == 400
+
+
+def test_scan_with_source_ids_runs_only_selected_source(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    started = []
+    _stub_phone_and_thread(monkeypatch, started)
+    first = client.post("/api/ddl/sources", json={"text": "监控微信「LLM小组」"}).json["added"][0]
+    client.post("/api/ddl/sources", json={"text": "监控 QQ「作业群」"})
+
+    missing = client.post("/api/ddl/scan", json={
+        "mode": "recurring", "source_ids": ["not-exist"],
+    })
+    assert missing.status_code == 400
+
+    response = client.post("/api/ddl/scan", json={
+        "mode": "recurring", "source_ids": [first],
+    })
+    assert response.status_code == 202
+    assert [source.id for source in started[0].sources] == [first]
+
+
 def test_payload_reports_source_meta_and_calendar_time(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     client.post("/api/ddl/sources", json={"text": "监控 QQ「作业群」，最近7天"})
