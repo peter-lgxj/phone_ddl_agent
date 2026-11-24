@@ -33,8 +33,12 @@ _END_MARKERS = ("没有更多", "已加载全部", "查看更多消息", "没有
 SCROLL_START_RATIO = 0.82
 SCROLL_TRAVEL_RATIO = 0.62
 
-# 会话页标题栏区域：屏幕高度 12% 以内；标题左侧通常是返回键，右侧是群设置
+# 会话页标题栏区域：屏幕高度 5.5%~12%。下界用来排除状态栏（运营商/WiFi/时间），
+# 上界排除聊天内容与「你修改了群名称」这类横幅。
 _CHAT_TITLE_ZONE_RATIO = 0.12
+_CHAT_TITLE_TOP_RATIO = 0.055
+# 判定「这一页是会话页」的输入栏特征；桌面/列表页不会有这些控件
+_CHAT_INPUT_MARKERS = ("按住说话", "发送", "表情", "语音输入", "更多功能")
 _CHAT_CHROME = {
     "返回", "返回消息", "返回上一级", "消息", "消息列表", "QQ", "关闭", "更多",
     "聊天设置", "听筒模式", "发送", "语音", "相册", "拍照", "表情", "更多功能",
@@ -376,6 +380,9 @@ def chat_title(xml_text: str) -> str:
         center = _center(node.get("bounds") or "")
         if not center or center[1] >= height * _CHAT_TITLE_ZONE_RATIO:
             continue
+        if center[1] < height * _CHAT_TITLE_TOP_RATIO:
+            # 状态栏（在线 - WiFi、运营商、时间）不是会话标题
+            continue
         # 顶部系统提示（改名/邀请/入群横幅）不是标题：带引号且很长的句子排除
         if len(text) > 20:
             continue
@@ -698,6 +705,9 @@ def _stale_page_action(ctx: RuleContext, targets: list[str]) -> dict | None:
                        "规则快路：当前停在搜索页，先返回消息列表")
     title = chat_title(ctx.xml)
     if not title:
+        return None
+    # 只有带聊天输入栏的页面才算会话页；桌面、系统设置等页面不能按返回键
+    if not any(marker in text for marker in _CHAT_INPUT_MARKERS):
         return None
     if any(label_matches_target(title, target) for target in targets):
         ctx.state["entered_group"] = title
