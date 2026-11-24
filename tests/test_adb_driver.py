@@ -26,7 +26,12 @@ from adb_controller import (
     parse_bounds,
     screen_text,
 )
-from ocr_locator import OCRLocator, enforce_tap_bounds
+from ocr_locator import (
+    OCRLocator,
+    STRONG_MATCH_THRESHOLD,
+    enforce_tap_bounds,
+    target_match_score,
+)
 from memory import TaskMemory, format_steps_compact
 from phone_controller import Uiautomator2CompatibilityError, _compatibility_message
 
@@ -144,6 +149,45 @@ def test_non_list_tap_keeps_model_coords_when_target_unresolved():
     assert decision["allowed"] is True
     assert decision["source"] == "model_coords"
     assert (guarded["x"], guarded["y"]) == (20, 30)
+
+
+def test_target_match_score_requires_identical_case():
+    exact = {"text": "LLM小组", "center": (540, 900)}
+    variant = {"text": "llm小组", "center": (540, 900)}
+
+    assert target_match_score(exact, "LLM小组") == 1.0
+    assert target_match_score(variant, "LLM小组") < STRONG_MATCH_THRESHOLD
+
+
+def test_list_guard_rejects_case_variant_target():
+    elements = [
+        {"text": "llm小组", "center": (540, 900), "bbox": (100, 800, 980, 1000),
+         "source": "xml", "type": "control"},
+    ]
+    action = {"action_type": "tap", "x": 540, "y": 900,
+              "target": "LLM小组", "description": "点击群聊 LLM小组"}
+    guarded, decision = enforce_tap_bounds(action, elements, (1080, 2374))
+
+    # 只有大小写不同：不吸附，作为歧义候选交给上层
+    assert guarded is None
+    assert decision["reason"] == "approximate_list_target"
+    assert decision["candidates"] == ["llm小组"]
+
+
+def test_list_guard_snaps_to_exact_case_not_variant():
+    elements = [
+        {"text": "llm小组", "center": (540, 900), "bbox": (100, 800, 980, 1000),
+         "source": "xml", "type": "control"},
+        {"text": "LLM小组", "center": (540, 1400), "bbox": (100, 1300, 980, 1500),
+         "source": "xml", "type": "control"},
+    ]
+    action = {"action_type": "tap", "x": 540, "y": 900,
+              "target": "LLM小组", "description": "点击群聊 LLM小组"}
+    guarded, decision = enforce_tap_bounds(action, elements, (1080, 2374))
+
+    assert decision["allowed"] is True
+    assert decision["source"] == "bounds"
+    assert (guarded["x"], guarded["y"]) == (540, 1400)
 
 
 # ---------------------------------------------------------------- 截图

@@ -37,11 +37,13 @@ class MobileAppSource:
         self.partial = False
         self.last_status: str | None = None
         self.last_fetch_meta: dict[str, Any] = {}
+        self.ambiguous: dict[str, Any] | None = None
 
     def fetch(self, plan: RetrievalPlan | None = None) -> list[RawMessage]:
         self.partial = False
         self.last_status = None
         self.last_fetch_meta = {}
+        self.ambiguous = None
         agent = self._get_agent()
         # 生产读屏路径强制只读：即使模型给出 send/type/press_enter 也不会执行
         agent.read_only = True
@@ -66,6 +68,19 @@ class MobileAppSource:
 
         status = str(getattr(agent, "last_status", "") or "").lower()
         self.last_status = status
+        ambiguous = getattr(agent, "last_ambiguous", None)
+        if status == "ambiguous" or ambiguous:
+            # 群名歧义：不猜、不读消息、也不当失败；由上层把候选汇总到 /ddl 页面
+            self.partial = True
+            self.ambiguous = dict(ambiguous or {})
+            self.ambiguous.setdefault("target", self.source.target)
+            self.last_fetch_meta = {
+                "partial": True,
+                "last_status": "ambiguous",
+                "ambiguous": self.ambiguous,
+                "message_count": 0,
+            }
+            return []
         if status == "failed":
             raise SourceError(f"手机读取失败（status={status}）")
         if status in _NOT_FOUND_STATUS or self._mentions_not_found(agent):

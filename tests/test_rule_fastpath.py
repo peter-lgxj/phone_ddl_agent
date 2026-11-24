@@ -292,7 +292,7 @@ def test_search_miss_hands_back_to_model():
     assert state["search_failed"] == "no_result"
 
 
-def test_search_ambiguous_hands_back_to_model():
+def test_search_result_prefers_exact_name_over_similar_group():
     xml = (
         '<hierarchy><node bounds="[0,0][1080,2374]">'
         '<node text="2026 计算机班级群" clickable="true" bounds="[0,700][1080,800]" />'
@@ -300,8 +300,57 @@ def test_search_ambiguous_hands_back_to_model():
         '</node></hierarchy>'
     )
     state = {"search_stage": "result", "search_attempted": True}
-    assert rule_policy.decide(make_ctx(xml, "打开「2026 计算机班级群」", state=state)) is None
-    assert state["search_failed"] == "ambiguous"
+    action = rule_policy.decide(make_ctx(xml, "打开「2026 计算机班级群」", state=state))
+
+    # 逐字符一致的候选优先，近似名「二群」不能被选中
+    assert action["rule"]["name"] == "search_result"
+    assert (action["x"], action["y"]) == (540, 750)
+    assert state["entered_group"] == "2026 计算机班级群"
+
+
+def test_search_result_taps_exact_name_not_case_variant():
+    xml = (
+        '<hierarchy><node bounds="[0,0][1080,2374]">'
+        '<node text="llm小组" clickable="true" bounds="[0,700][1080,800]" />'
+        '<node text="LLM小组" clickable="true" bounds="[0,820][1080,920]" />'
+        '</node></hierarchy>'
+    )
+    state = {"search_stage": "result", "search_attempted": True}
+    action = rule_policy.decide(make_ctx(xml, "打开「LLM小组」", state=state))
+
+    assert action["rule"]["name"] == "search_result"
+    assert (action["x"], action["y"]) == (540, 870)
+    assert state["entered_group"] == "LLM小组"
+
+
+def test_search_result_reports_ambiguity_for_case_variant_only():
+    xml = (
+        '<hierarchy><node bounds="[0,0][1080,2374]">'
+        '<node text="llm小组" clickable="true" bounds="[0,700][1080,800]" />'
+        '</node></hierarchy>'
+    )
+    state = {"search_stage": "result", "search_attempted": True}
+    with pytest.raises(rule_policy.AmbiguousGroupName) as excinfo:
+        rule_policy.decide(make_ctx(xml, "打开「LLM小组」", state=state))
+
+    # 只有大小写不同的结果时列出候选，绝不自动点
+    assert excinfo.value.target == "LLM小组"
+    assert excinfo.value.candidates == ["llm小组"]
+    assert state.get("entered_group") is None
+
+
+def test_search_result_reports_ambiguity_for_similar_name_only():
+    xml = (
+        '<hierarchy><node bounds="[0,0][1080,2374]">'
+        '<node text="2026 计算机班级二群" clickable="true" bounds="[0,700][1080,800]" />'
+        '</node></hierarchy>'
+    )
+    state = {"search_stage": "result", "search_attempted": True}
+    with pytest.raises(rule_policy.AmbiguousGroupName) as excinfo:
+        rule_policy.decide(make_ctx(xml, "打开「2026 计算机班级群」", state=state))
+
+    assert "2026 计算机班级二群" in excinfo.value.candidates
+    assert state.get("entered_group") is None
 
 
 def test_rule_action_allows_search_type_but_rejects_message_type(tmp_path, monkeypatch):

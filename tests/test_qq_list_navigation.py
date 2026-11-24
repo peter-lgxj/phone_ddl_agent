@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PIL import Image
+import pytest
 
 import rule_policy
 import screen_agent
@@ -116,6 +117,34 @@ def test_ocr_list_navigation_ignores_similar_group_name(tmp_path):
     assert action is not None
     assert action["action_type"] == "tap"
     assert action["ocr_list_hit"] is True
+    assert (action["x"], action["y"]) == (400, 1200)
+
+
+def test_ocr_list_navigation_ignores_case_variant_group(tmp_path):
+    agent = _agent(tmp_path, [
+        {"text": "我创建的群聊 10/12", "center": (100, 200)},
+        {"text": "llm小组", "center": (400, 900)},
+    ])
+    memory = TaskMemory("打开QQ，滚动列表找到「LLM小组」")
+
+    action = agent._ocr_list_navigate(memory)
+
+    # 只有大小写不同的群名不算命中，继续滚动找完全一致的
+    assert action is not None
+    assert action["action_type"] == "swipe"
+
+
+def test_ocr_list_navigation_prefers_exact_case_group(tmp_path):
+    agent = _agent(tmp_path, [
+        {"text": "我创建的群聊 10/12", "center": (100, 200)},
+        {"text": "llm小组", "center": (400, 900)},
+        {"text": "LLM小组", "center": (400, 1200)},
+    ])
+    memory = TaskMemory("打开QQ，滚动列表找到「LLM小组」")
+
+    action = agent._ocr_list_navigate(memory)
+
+    assert action["action_type"] == "tap"
     assert (action["x"], action["y"]) == (400, 1200)
 
 
@@ -292,6 +321,22 @@ def test_ocr_list_navigation_fails_at_real_top_without_structural_taps(tmp_path)
     # 找回期间只滑动，不点任何入口（包括“展示最近不活跃的群”）
     assert phone.taps == []
     assert agent._ocr_nav_state.get("direction") == "up"
+
+
+def test_ocr_list_navigation_reports_ambiguity_for_case_variant_only(tmp_path):
+    pages = [
+        _list_page(["llm小组", "群B"]),
+        _list_page(["群C", "llm小组"]),
+    ]
+    agent, phone = _paged_agent(tmp_path, pages, start_page=0)
+    memory = TaskMemory("打开QQ，滚动列表找到「LLM小组」")
+
+    with pytest.raises(rule_policy.AmbiguousGroupName) as excinfo:
+        _drive_until_done(agent, phone, memory)
+
+    # 翻遍列表只有大小写不同的群：列出候选、不点任何行
+    assert "llm小组" in excinfo.value.candidates
+    assert phone.taps == []
 
 
 def test_ocr_list_navigation_never_taps_structural_expander(tmp_path):

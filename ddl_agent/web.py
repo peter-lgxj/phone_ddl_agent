@@ -14,7 +14,7 @@ from device_lock import device_lock
 
 from .monitor.config import (
     ConfigError, MonitorConfig, add_from_text, load_config, parse_monitor_text,
-    remove_source, save_config, set_enabled,
+    remove_source, save_config, set_enabled, update_source,
 )
 from .monitor.launcher import check_device, resolve_adb
 from .monitor.runner import run_cycle
@@ -109,22 +109,51 @@ def _build_scan_config(payload: dict) -> tuple[MonitorConfig, bool]:
     text = str(payload.get("text") or "").strip()
     mode = str(payload.get("mode") or "once").strip().lower()
     schedule_text = str(payload.get("schedule") or "").strip()
+    wanted = _selected_source_ids(payload)
     if not text:
-        if mode == "once":
+        if mode == "once" and wanted is None:
             raise ConfigError("请先填写检索目标；仅扫描一次不会保存为定期任务")
+        _restrict_sources(config, wanted)
         return config, False
     if mode == "recurring":
         add_from_text(config, text, schedule_text=schedule_text or None)
-        return config, True
-    once = MonitorConfig(
-        schedule=config.schedule,
-        interval_minutes=config.interval_minutes,
-        output_dir=config.output_dir,
-        state_dir=config.state_dir,
-        write_phone_calendar=config.write_phone_calendar,
-        sources=parse_monitor_text(text),
-    )
-    return once, False
+        persist = True
+    else:
+        once = MonitorConfig(
+            schedule=config.schedule,
+            interval_minutes=config.interval_minutes,
+            output_dir=config.output_dir,
+            state_dir=config.state_dir,
+            write_phone_calendar=config.write_phone_calendar,
+            sources=parse_monitor_text(text),
+        )
+        config, persist = once, False
+    if wanted is not None:
+        # 只重扫指定来源（歧义选定后使用）；过滤后的临时配置不回写 sources.yaml
+        _restrict_sources(config, wanted)
+        persist = False
+    return config, persist
+
+
+def _selected_source_ids(payload: dict) -> set[str] | None:
+    """扫描请求里的 source_ids；未提供时返回 None（表示全部启用来源）。"""
+    raw = payload.get("source_ids")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ConfigError("source_ids 必须是数组")
+    ids = {str(item).strip() for item in raw if str(item).strip()}
+    if not ids:
+        raise ConfigError("source_ids 不能为空")
+    return ids
+
+
+def _restrict_sources(config: MonitorConfig, wanted: set[str] | None) -> None:
+    if wanted is None:
+        return
+    config.sources = [source for source in config.sources if source.id in wanted]
+    if not config.sources:
+        raise ConfigError("没有匹配的检索目标；请刷新页面后重试")
 
 
 @blueprint.get("/ddl")
@@ -174,20 +203,32 @@ def delete_source(source_id: str):
 
 
 @blueprint.patch("/api/ddl/sources/<source_id>")
-def toggle_source(source_id: str):
+def update_source_api(source_id: str):
     denied = _write_denied()
     if denied:
         return denied
     payload = request.get_json(silent=True) or {}
     enabled = payload.get("enabled")
-    if not isinstance(enabled, bool):
+    target = payload.get("target")
+    if enabled is None and target is None:
+        return jsonify(error="enabled 或 target 至少要提供一个"), 400
+    if enabled is not None and not isinstance(enabled, bool):
         return jsonify(error="enabled 必须是布尔值"), 400
+    if target is not None and not str(target).strip():
+        return jsonify(error="target 不能为空"), 400
     with _guard:
         if _scan["running"]:
             return jsonify(error="扫描中不能修改检索目标"), 409
         config = load_config(CONFIG_PATH)
-        if not set_enabled(config, source_id, enabled):
+        if not any(source.id == source_id for source in config.sources):
             return jsonify(error="检索目标不存在"), 404
+        try:
+            if enabled is not None:
+                set_enabled(config, source_id, enabled)
+            if target is not None:
+                update_source(config, source_id, target=str(target))
+        except ConfigError as exc:
+            return jsonify(error=str(exc)), 400
         save_config(config, CONFIG_PATH)
     return jsonify(**_config_payload())
 

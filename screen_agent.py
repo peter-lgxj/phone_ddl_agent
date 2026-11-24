@@ -303,7 +303,13 @@ def _is_qq_task(task: str) -> bool:
 
 
 def _compact_ocr(text: str) -> str:
-    return re.sub(r"[\s\u3000]+", "", text or "").lower()
+    """OCR 文字比对键：只去空白，保留大小写（群名必须逐字符一致）。"""
+    return re.sub(r"[\s\u3000]+", "", text or "")
+
+
+def _unread_suffix_ok(rest: str) -> bool:
+    """群名后只允许「未读数」这类纯数字后缀，避免把「llm小组A」当同一个群。"""
+    return len(rest) <= 4 and all(ch.isdigit() or ch in "()（）[]【】+·. " for ch in rest)
 
 
 # 任务里的时间窗（如“最近14天”）；完成条件必须绑定到窗口下界，而不是看到一条 DDL
@@ -482,7 +488,8 @@ class ScreenAgent:
         # 规则快路开关由成本核算决定：adb_dump 下规则步要付两次 dump
         self.rule_fastpath_enabled, self._rule_cost = self._resolve_rule_fastpath()
         self.run_dir   = None
-        self.last_status = "idle"   # done / timeout / failed / idle
+        self.last_status = "idle"   # done / timeout / failed / ambiguous / idle
+        self.last_ambiguous = None  # 群名歧义时的目标与候选，供上层汇总到页面
         self._observe_valid = False  # 当前 screen_observe.png 是否是本步真实截图
         self._last_image_meta = None     # 本步发送图的规格与缩放比例
         self._last_model_action = None   # 缩放时模型返回的原始坐标（未反算）
@@ -1157,6 +1164,15 @@ class ScreenAgent:
         timings["coordinate_guard"] = guard
         if guarded is None:
             reason = guard.get("reason", "rejected")
+            # 只有大小写差异/近似名的列表目标：不点、也不反复重试，记为歧义
+            if reason == "approximate_list_target":
+                labels = list(dict.fromkeys(
+                    str(item) for item in guard.get("candidates") or []
+                    if isinstance(item, str)
+                ))
+                if labels:
+                    raise rule_policy.AmbiguousGroupName(
+                        str(guard.get("target") or target), labels)
             print(f"  ⛔ 坐标校验拒绝点击：{reason}（{guard.get('target', '')}）")
             return {
                 **mapped,
@@ -1912,14 +1928,37 @@ class ScreenAgent:
             key = _compact_ocr(target)
             if not key:
                 continue
+            # 两级规则：先找逐字符完全一致的群名；大小写不同的只记录为歧义候选，
+            # 绝不自动点进去。列表里的「未读数」后缀允许（llm小组(3)）。
             exact = [element for text, element in entries if text == key and _is_list_text(text)]
             prefixed = [
                 element for text, element in entries
-                if text.startswith(key) and len(text) <= len(key) + 4 and _is_list_text(text)
+                if text.startswith(key) and _unread_suffix_ok(text[len(key):])
+                and _is_list_text(text)
             ]
+            variants = [
+                text for text, _element in entries
+                if text and text.casefold() == key.casefold() and text != key
+            ]
+            if variants:
+                state.setdefault("variant_names", [])
+                for name in variants:
+                    if name not in state["variant_names"]:
+                        state["variant_names"].append(name)
             candidates = exact or prefixed
             if not candidates:
                 continue
+            centers = {
+                tuple(element.get("center") or (0, 0))
+                for element in candidates
+            }
+            if len(centers) > 1:
+                labels = []
+                for element in candidates:
+                    label = str(element.get("text") or "").strip()
+                    if label and label not in labels:
+                        labels.append(label)
+                raise rule_policy.AmbiguousGroupName(target, labels)
             x, y = candidates[0].get("center") or (0, 0)
             state["entered"] = target
             rule_state = getattr(self, "_rule_state", None) or {}
@@ -2004,6 +2043,9 @@ class ScreenAgent:
             )
             if state["up_stable"] >= 2:
                 # 连续两次向上滑动画面哈希/OCR 文本集合/顶部三行都不变：确认到顶
+                variants = state.get("variant_names") or []
+                if variants:
+                    raise rule_policy.AmbiguousGroupName(targets[0], variants)
                 raise QQListNavigationError(
                     f"QQ 列表向上找回失败：已向下 {state.get('down_scrolls', 0)} 次、"
                     f"向上 {state.get('up_scrolls', 0)} 次，到达顶部仍未找到「{targets[0]}」"
@@ -2011,6 +2053,9 @@ class ScreenAgent:
 
         if direction == "down":
             if state.get("down_scrolls", 0) >= max_scrolls * 2:
+                variants = state.get("variant_names") or []
+                if variants:
+                    raise rule_policy.AmbiguousGroupName(targets[0], variants)
                 raise QQListNavigationError(
                     f"QQ 列表向下扫描失败：已向下 {state['down_scrolls']} 次仍未到底，"
                     f"未找到「{targets[0]}」"
@@ -2018,6 +2063,9 @@ class ScreenAgent:
             state["down_scrolls"] = state.get("down_scrolls", 0) + 1
         else:
             if state.get("up_scrolls", 0) >= max_scrolls * 2:
+                variants = state.get("variant_names") or []
+                if variants:
+                    raise rule_policy.AmbiguousGroupName(targets[0], variants)
                 raise QQListNavigationError(
                     f"QQ 列表向上找回失败：已向下 {state.get('down_scrolls', 0)} 次、"
                     f"向上 {state['up_scrolls']} 次达到上限，仍未找到「{targets[0]}」"
@@ -2178,6 +2226,7 @@ class ScreenAgent:
         self._chinese_ime_available_flag = None
         self.tree_unsupported = False
         self.last_block_reason = ""
+        self.last_ambiguous = None
 
     def _bind_task_app(self, task: str, app_label: str = "") -> None:
         """把任务声明的 App 绑定到前台：不是目标 App 就切过去，切不过去就停止。
@@ -2258,6 +2307,18 @@ class ScreenAgent:
 
             try:
                 finished, done, summary = self._execute_step(step, memory)
+            except rule_policy.AmbiguousGroupName as exc:
+                # 歧义不中止整轮：记下候选并结束本来源，由 /ddl 页面交给人选定
+                print(f"\n  ⚠️  {exc}")
+                self.last_status = "ambiguous"
+                self.last_ambiguous = {
+                    "target": exc.target,
+                    "candidates": list(exc.candidates),
+                    "reason": str(exc),
+                }
+                self._save_log(memory)
+                ui_state.set_status("error", str(exc))
+                return str(exc)
             except Exception as e:
                 # 单步重试次数用尽：落状态后交给上层（Web 端会推 error 事件）
                 self.last_status = "failed"

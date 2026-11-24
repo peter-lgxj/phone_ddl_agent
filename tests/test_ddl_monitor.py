@@ -528,6 +528,59 @@ def test_mobile_source_raises_when_target_missing():
         mobile.fetch()
 
 
+def test_mobile_source_marks_ambiguous_without_raising():
+    source = MonitorSource(id="wechat-llm", app="wechat", kind="group", target="LLM小组",
+                           source_type="student_chat")
+    agent = FakeAgent(["当前界面：聊天列表"], status="ambiguous")
+    agent.last_ambiguous = {
+        "target": "LLM小组",
+        "candidates": ["llm小组"],
+        "reason": "没有逐字符一致的匹配",
+    }
+    mobile = MobileAppSource(source, agent=agent, use_device_lock=False, now=NOW)
+
+    assert mobile.fetch() == []
+    assert mobile.ambiguous["candidates"] == ["llm小组"]
+    assert mobile.last_status == "ambiguous"
+    assert mobile.partial is True
+
+
+def test_cycle_marks_ambiguous_source_partial_and_keeps_others(tmp_path: Path):
+    config = _monitor_config(tmp_path)
+    config.sources.append(MonitorSource(
+        id="qq-LLM小组", app="qq", kind="group", target="LLM小组",
+        source_type="student_chat", lookback_days=7,
+    ))
+
+    class AmbiguousConnector:
+        partial = True
+        last_status = "ambiguous"
+        ambiguous = {
+            "target": "LLM小组",
+            "candidates": ["llm小组"],
+            "reason": "没有逐字符一致的匹配",
+        }
+
+        def fetch(self, plan=None):
+            return []
+
+    def factory(source):
+        if source.id.startswith("qq"):
+            return AmbiguousConnector()
+        return FakeConnector([_message("m1", "COMP7608 HW1 deadline 2026-11-20 23:59")])
+
+    result = run_cycle(config, engine="rules", now=NOW, connector_factory=factory)
+
+    assert result.status == "partial"
+    assert result.sources_ok == 2
+    assert result.inserted == 1
+    ambiguous_entry = next(entry for entry in result.sources
+                           if entry["source_id"].startswith("qq"))
+    assert ambiguous_entry["error"] is None
+    assert ambiguous_entry["ambiguous"]["candidates"] == ["llm小组"]
+    assert ambiguous_entry["last_status"] == "ambiguous"
+
+
 # --------------------------------------------------------------------------- #
 # 输出
 # --------------------------------------------------------------------------- #
