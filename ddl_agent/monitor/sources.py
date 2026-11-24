@@ -26,7 +26,7 @@ class MobileAppSource:
 
     def __init__(self, source: MonitorSource, agent: Any | None = None,
                  agent_factory: Any | None = None, use_device_lock: bool = True,
-                 now: datetime | None = None):
+                 now: datetime | None = None, should_stop: Any | None = None):
         self.source = source
         self.name = source.id
         self.source_type = source.source_type
@@ -34,6 +34,8 @@ class MobileAppSource:
         self.agent_factory = agent_factory
         self.use_device_lock = use_device_lock
         self.now = now
+        # 外部终止判断（Web「终止」按钮）；真实读屏时透传给 ScreenAgent 逐步检查
+        self.should_stop = should_stop
         self.partial = False
         self.last_status: str | None = None
         self.last_fetch_meta: dict[str, Any] = {}
@@ -44,11 +46,14 @@ class MobileAppSource:
         self.last_status = None
         self.last_fetch_meta = {}
         self.ambiguous = None
+        if self._stopped():
+            return self._cancelled_result()
         agent = self._get_agent()
         # 生产读屏路径强制只读：即使模型给出 send/type/press_enter 也不会执行
         agent.read_only = True
         # 微信真机不暴露控件树：直接跳过 dump，省掉失败重试与清理开销
         agent.tree_unsupported = self.source.app == "wechat"
+        agent.should_stop = self.should_stop
         task = self._build_task()
 
         if self.use_device_lock:
@@ -65,6 +70,9 @@ class MobileAppSource:
                 agent.run(task)
         else:
             agent.run(task)
+
+        if self._stopped():
+            return self._cancelled_result()
 
         status = str(getattr(agent, "last_status", "") or "").lower()
         self.last_status = status
@@ -100,6 +108,21 @@ class MobileAppSource:
         return messages
 
     # ------------------------------------------------------------------ #
+    def _stopped(self) -> bool:
+        probe = self.should_stop
+        return bool(probe()) if callable(probe) else False
+
+    def _cancelled_result(self) -> list[RawMessage]:
+        """终止时不再解析半截消息；已抓到的内容留在状态库里供下一轮去重。"""
+        self.partial = True
+        self.last_status = "cancelled"
+        self.last_fetch_meta = {
+            "partial": True,
+            "last_status": "cancelled",
+            "message_count": 0,
+        }
+        return []
+
     def _build_task(self) -> str:
         app = APP_LABELS.get(self.source.app, self.source.app)
         kind = {"group": "群聊", "private": "联系人", "inbox": "收件箱"}.get(

@@ -71,6 +71,8 @@
     .btn:hover:not(:disabled){background:#1d4ed8}
     .btn.ghost{background:#f6f8fc;color:var(--text);border:1px solid var(--line);box-shadow:none;font-weight:550}
     .btn.ghost:hover:not(:disabled){background:#eef2f9;border-color:#cbd5e1}
+    .btn.danger{background:var(--bad);box-shadow:0 6px 16px -8px rgba(185,28,28,.8)}
+    .btn.danger:hover:not(:disabled){background:#991b1b}
     .btn .spin{width:15px;height:15px;border-radius:50%;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;display:none;animation:spin .7s linear infinite}
     .btn.ghost .spin{border-color:rgba(22,35,58,.22);border-top-color:var(--text)}
     .btn[aria-busy="true"] .spin{display:block}
@@ -95,6 +97,10 @@
     .icon-btn.danger:hover:not(:disabled){background:var(--bad-soft);color:var(--bad);border-color:#fecaca}
     .icon-btn.confirm{background:var(--bad);color:#fff}
     .icon-btn.confirm:hover:not(:disabled){background:#991b1b;color:#fff}
+    .row-edit{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:1;min-width:0}
+    .row-edit input[type="text"]{flex:1 1 180px;min-width:0;border:1px solid #cfd9e8;border-radius:9px;padding:8px 10px;font:inherit;background:#fff}
+    .row-edit input[type="number"]{width:84px;border:1px solid #cfd9e8;border-radius:9px;padding:8px 10px;font:inherit;background:#fff}
+    .row-edit input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
 
     .switch{position:relative;display:inline-flex;flex:none;width:42px;height:24px;cursor:pointer}
     .switch input{position:absolute;opacity:0;width:0;height:0}
@@ -117,11 +123,13 @@
     .status[data-kind="ok"]{border-color:#bbf7d0;background:var(--ok-soft)}
     .status[data-kind="partial"]{border-color:#fed7aa;background:var(--warn-soft)}
     .status[data-kind="failed"]{border-color:#fecaca;background:var(--bad-soft)}
+    .status[data-kind="cancelled"]{border-color:#e2e8f0;background:#f8fafc}
     .status .title{font-weight:650;display:flex;align-items:center;gap:8px}
     .status .sub{color:var(--muted);font-size:13px;margin-top:4px}
     .status[data-kind="failed"] .title{color:var(--bad)}
     .status[data-kind="partial"] .title{color:var(--warn)}
     .status[data-kind="ok"] .title{color:var(--ok)}
+    .status[data-kind="cancelled"] .title{color:var(--muted)}
     .status[data-kind="running"] .title{color:var(--accent)}
     .bar{height:6px;border-radius:99px;background:#e2e8f0;overflow:hidden;margin-top:12px}
     .bar>i{display:block;height:100%;width:38%;border-radius:99px;background:linear-gradient(90deg,#60a5fa,#2563eb);animation:slide 1.25s ease-in-out infinite}
@@ -222,7 +230,10 @@
         <h2 id="t-scan"><span class="step" aria-hidden="true">2</span>扫描已保存目标</h2>
         <p class="hint">扫描时请保持手机解锁、USB 调试已授权。单次扫描只读取本次填写的目标。</p>
       </div>
-      <button class="btn" id="scan" type="button"><span class="spin" aria-hidden="true"></span><span class="label">开始扫描</span></button>
+      <div class="row-actions">
+        <button class="btn" id="scan" type="button"><span class="spin" aria-hidden="true"></span><span class="label">开始扫描</span></button>
+        <button class="btn danger" id="scan-cancel" type="button" hidden><span class="spin" aria-hidden="true"></span><span class="label">终止</span></button>
+      </div>
     </div>
     <div class="status" id="scan-status" data-kind="idle" aria-live="polite"></div>
     <div class="results" id="scan-results"></div>
@@ -264,6 +275,7 @@
     sourcesSig: '',
     confirmId: null,
     confirmTimer: null,
+    editingId: null,
     busy: false,
     scanStarting: false,
     scanTimer: null,
@@ -329,12 +341,18 @@
 
   function syncControls() {
     const running = !!(state.data && state.data.running);
+    const cancelling = !!(state.data && state.data.cancelling);
     const locked = running || state.busy || state.scanStarting;
     const scan = $('scan');
     const scanLabel = scan.querySelector('.label');
     scan.disabled = locked || enabledSources().length === 0;
     scan.setAttribute('aria-busy', (running || state.scanStarting) ? 'true' : 'false');
     scanLabel.textContent = running ? '扫描中…' : (state.scanStarting ? '启动中…' : '开始扫描');
+    const cancel = $('scan-cancel');
+    cancel.hidden = !running && !cancelling;
+    cancel.disabled = cancelling || state.busy || state.scanStarting;
+    cancel.querySelector('.label').textContent = cancelling ? '终止中…' : '终止';
+    cancel.setAttribute('aria-busy', cancelling ? 'true' : 'false');
     $('add-source').disabled = state.busy || state.scanStarting;
     document.querySelectorAll('.icon-btn, .switch input').forEach((el) => {
       el.disabled = locked;
@@ -346,7 +364,7 @@
     const sources = state.data ? state.data.sources : [];
     const running = !!(state.data && state.data.running);
     const sig = JSON.stringify(sources.map((s) => [s.id, s.app, s.target, s.lookback_days, s.enabled]))
-      + '|' + running + '|' + state.confirmId + '|' + state.busy;
+      + '|' + running + '|' + state.confirmId + '|' + state.editingId + '|' + state.busy;
     $('saved-count').textContent = sources.length + ' 个已保存';
 
     if (sig === state.sourcesSig) return;
@@ -390,6 +408,48 @@
 
       const grow = document.createElement('div');
       grow.className = 'grow';
+
+      if (state.editingId === source.id) {
+        const form = document.createElement('form');
+        form.className = 'row-edit';
+        const nameInput = document.createElement('input');
+        nameInput.type = 'text';
+        nameInput.value = source.target;
+        nameInput.setAttribute('aria-label', '目标名称');
+        const daysInput = document.createElement('input');
+        daysInput.type = 'number';
+        daysInput.min = '1';
+        daysInput.max = '365';
+        daysInput.value = String(source.lookback_days);
+        daysInput.title = '最近天数';
+        daysInput.setAttribute('aria-label', '最近天数');
+        const save = document.createElement('button');
+        save.className = 'icon-btn';
+        save.type = 'submit';
+        save.textContent = '保存';
+        const cancel = document.createElement('button');
+        cancel.className = 'icon-btn';
+        cancel.type = 'button';
+        cancel.textContent = '取消';
+        cancel.addEventListener('click', () => {
+          state.editingId = null;
+          state.sourcesSig = '';
+          renderSources();
+        });
+        form.addEventListener('submit', (event) => {
+          event.preventDefault();
+          saveEdit(source, nameInput.value, daysInput.value);
+        });
+        form.appendChild(nameInput);
+        form.appendChild(daysInput);
+        form.appendChild(save);
+        form.appendChild(cancel);
+        li.appendChild(badge);
+        li.appendChild(form);
+        list.appendChild(li);
+        return;
+      }
+
       const name = document.createElement('div');
       name.className = 'name';
       name.textContent = source.target;
@@ -423,7 +483,19 @@
       remove.textContent = state.confirmId === source.id ? '确认删除' : '删除';
       remove.addEventListener('click', () => askDelete(source));
 
+      const edit = document.createElement('button');
+      edit.className = 'icon-btn';
+      edit.type = 'button';
+      edit.textContent = '编辑';
+      edit.disabled = running || state.busy;
+      edit.addEventListener('click', () => {
+        state.editingId = source.id;
+        state.sourcesSig = '';
+        renderSources();
+      });
+
       actions.appendChild(toggle);
+      actions.appendChild(edit);
       actions.appendChild(remove);
       li.appendChild(badge);
       li.appendChild(grow);
@@ -447,6 +519,40 @@
       toast(checkbox.checked ? '已启用「' + source.target + '」' : '已暂停「' + source.target + '」');
     } catch (error) {
       checkbox.checked = !checkbox.checked;
+      toast(error.message, 'error');
+    } finally {
+      state.busy = false;
+      state.sourcesSig = '';
+      renderSources();
+      syncControls();
+    }
+  }
+
+  async function saveEdit(source, target, days) {
+    const name = String(target || '').trim();
+    const lookback = parseInt(days, 10);
+    if (!name) {
+      toast('目标名称不能为空', 'warn');
+      return;
+    }
+    if (!isFinite(lookback) || lookback < 1 || lookback > 365) {
+      toast('最近天数需在 1–365 之间', 'warn');
+      return;
+    }
+    if (state.busy) return;
+    state.busy = true;
+    syncControls();
+    try {
+      const data = await api('/api/ddl/sources/' + encodeURIComponent(source.id), {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({target: name, lookback_days: lookback}),
+      });
+      state.editingId = null;
+      state.sourcesSig = '';
+      apply(data);
+      toast('已更新「' + name + '」');
+    } catch (error) {
       toast(error.message, 'error');
     } finally {
       state.busy = false;
@@ -516,10 +622,13 @@
     const connText = $('conn-text');
 
     if (data && data.running) {
+      const cancelling = !!data.cancelling;
       conn.dataset.state = 'running';
-      connText.textContent = '扫描中';
+      connText.textContent = cancelling ? '终止中' : '扫描中';
       if (el.dataset.kind === 'running' && $('scan-live')) {
         // 已在运行态：只刷新计时与当前来源，避免每次轮询重建 DOM 造成闪烁
+        const heading = $('scan-title');
+        if (heading) heading.textContent = cancelling ? '正在终止扫描…' : '正在扫描手机';
         updateLive();
         return;
       }
@@ -543,8 +652,11 @@
       const spin = document.createElement('span');
       spin.className = 'ring';
       spin.style.cssText = 'width:14px;height:14px;border-radius:50%;border:2px solid #bfdbfe;border-top-color:#2563eb;display:inline-block;animation:spin .8s linear infinite';
+      const heading = document.createElement('span');
+      heading.id = 'scan-title';
+      heading.textContent = data.cancelling ? '正在终止扫描…' : '正在扫描手机';
       title.appendChild(spin);
-      title.appendChild(document.createTextNode('正在扫描手机'));
+      title.appendChild(heading);
       el.appendChild(title);
 
       const sub = document.createElement('div');
@@ -588,14 +700,18 @@
     }
 
     const status = result.status || 'ok';
-    const kind = status === 'failed' ? 'failed' : (status === 'partial' ? 'partial' : 'ok');
+    const kind = status === 'cancelled' ? 'cancelled'
+      : (status === 'failed' ? 'failed' : (status === 'partial' ? 'partial' : 'ok'));
     el.dataset.kind = kind;
-    conn.dataset.state = kind === 'ok' ? 'done' : 'error';
-    connText.textContent = kind === 'ok' ? '上次成功' : (kind === 'partial' ? '部分完成' : '上次失败');
+    conn.dataset.state = kind === 'ok' ? 'done' : (kind === 'cancelled' ? 'idle' : 'error');
+    connText.textContent = kind === 'ok' ? '上次成功'
+      : (kind === 'cancelled' ? '已终止' : (kind === 'partial' ? '部分完成' : '上次失败'));
 
     const title = document.createElement('div');
     title.className = 'title';
-    title.textContent = kind === 'ok' ? '扫描完成' : (kind === 'partial' ? '部分完成，有来源需要检查' : '扫描失败');
+    title.textContent = kind === 'ok' ? '扫描完成'
+      : (kind === 'partial' ? '部分完成，有来源需要检查'
+        : (kind === 'cancelled' ? '扫描已终止，本轮未写入结果' : '扫描失败'));
     el.appendChild(title);
 
     const started = Date.parse(result.started_at || '');
@@ -637,6 +753,7 @@
     } else {
       parts.push('正在准备设备…');
     }
+    if (state.data.cancelling) parts.push('正在终止，当前步骤结束后停止');
     live.textContent = parts.join(' · ');
   }
 
@@ -794,6 +911,9 @@
     if (!data || !data.sources.some((s) => s.id === state.confirmId)) {
       state.confirmId = null;
     }
+    if (!data || data.running || !data.sources.some((s) => s.id === state.editingId)) {
+      state.editingId = null;
+    }
     renderSources();
     renderStatus();
     renderResults();
@@ -901,6 +1021,22 @@
       toast(error.message, 'error');
     } finally {
       state.scanStarting = false;
+      syncControls();
+    }
+  });
+
+  $('scan-cancel').addEventListener('click', async () => {
+    if (state.busy || !(state.data && state.data.running)) return;
+    state.busy = true;
+    syncControls();
+    try {
+      await api('/api/ddl/scan/cancel', {method: 'POST'});
+      toast('已发送终止请求，当前步骤结束后停止');
+      await refreshNow();
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      state.busy = false;
       syncControls();
     }
   });

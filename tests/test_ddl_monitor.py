@@ -473,6 +473,32 @@ def test_cycle_continues_when_one_source_fails(tmp_path: Path):
     assert any("设备锁被占用" in error for error in result.errors)
 
 
+def test_cycle_should_stop_skips_remaining_sources_and_outputs(tmp_path: Path):
+    """Web「终止」：读完当前来源后停下，不再开新来源，也不写半轮结果。"""
+    config = _monitor_config(tmp_path)
+    config.sources.append(MonitorSource(
+        id="qq-第二群", app="qq", kind="group", target="第二群",
+        source_type="student_chat", lookback_days=14,
+    ))
+    started = []
+
+    def factory(source):
+        started.append(source.id)
+        return FakeConnector([_message("m1", "COMP7608 HW1 deadline 2026-11-20 23:59")])
+
+    result = run_cycle(config, engine="rules", now=NOW, connector_factory=factory,
+                       should_stop=lambda: len(started) >= 1)
+
+    assert result.status == "cancelled"
+    assert started == ["wechat-21级课程群"]
+    assert result.outputs == []
+    assert not (tmp_path / "out" / "data.json").exists()
+    cycle_log = json.loads(
+        (tmp_path / "out" / "cycles" / f"{result.cycle_id}.json").read_text(encoding="utf-8")
+    )
+    assert cycle_log["status"] == "cancelled"
+
+
 def test_cycle_all_sources_failed_writes_no_success_artifacts(tmp_path: Path):
     config = _monitor_config(tmp_path)
 

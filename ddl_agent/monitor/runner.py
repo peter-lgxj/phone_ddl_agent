@@ -79,7 +79,8 @@ def run_cycle(config: MonitorConfig, config_path: str | Path | None = None,
               now: datetime | None = None,
               out_dir: str | Path | None = None,
               state_dir: str | Path | None = None,
-              tracker: UsageTracker | None = None) -> CycleResult:
+              tracker: UsageTracker | None = None,
+              should_stop=None) -> CycleResult:
     started = now or datetime.now(TZ)
     cycle_id = started.strftime("%Y%m%dT%H%M%S")
     out = Path(out_dir or config.output_dir)
@@ -111,6 +112,10 @@ def run_cycle(config: MonitorConfig, config_path: str | Path | None = None,
     for source in config.sources:
         if not source.enabled:
             continue
+        if should_stop is not None and should_stop():
+            # 用户点了「终止」：不再开新来源；已读完的候选留到下一轮
+            result.status = "cancelled"
+            break
         try:
             entry = _sync_source(
                 source, connector_factory, components["extractor"], now=started,
@@ -122,6 +127,15 @@ def run_cycle(config: MonitorConfig, config_path: str | Path | None = None,
             result.errors.append(message)
             entry = _failed_entry(source, message)
         result.sources.append(entry)
+
+    if result.status == "cancelled" or (should_stop is not None and should_stop()):
+        # 终止轮次不写 xlsx / data.json / calendar.html：半轮数据不覆盖上一轮完整结果
+        result.status = "cancelled"
+        result.sources_ok = sum(1 for entry in result.sources if entry.get("error") is None)
+        result.finished_at = datetime.now(TZ).isoformat(timespec="seconds")
+        result.llm = tracker.since(usage_before)
+        _write_cycle(out, cycle_id, result)
+        return result
 
     enabled = [source for source in config.sources if source.enabled]
     result.sources_ok = sum(1 for entry in result.sources if entry.get("error") is None)
