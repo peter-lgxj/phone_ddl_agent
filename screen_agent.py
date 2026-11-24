@@ -1835,7 +1835,7 @@ class ScreenAgent:
     # ══════════════════════════════════════════════════════════
 
     def _ocr_list_navigate(self, memory: TaskMemory) -> dict | None:
-        """QQ 列表定位兜底：截图 OCR 匹配群名；找不到就滚动列表。
+        """列表定位兜底（QQ / 微信）：截图 OCR 匹配群名；找不到就滚动列表。
 
         不依赖控件树，也不打开搜索框/输入中文。命中多个时只接受标题完全相等
         或「标题 + 少量未读数」前缀，避免把「2026 计算机班级二群」当成
@@ -1887,6 +1887,29 @@ class ScreenAgent:
             ):
                 return None
 
+        # 微信不暴露控件树：会话页底部没有「通讯录/发现」这两个 Tab，
+        # 用它判定“当前不在聊天列表”。冷启动后微信会恢复上次的会话页，
+        # 模型会把当前会话当成目标群直接读（item1 因此读成了 llm小组）。
+        on_wechat_tabs = any(
+            text == _compact_ocr("通讯录") for text, _ in entries
+        ) and any(text == _compact_ocr("发现") for text, _ in entries)
+        if getattr(self, "tree_unsupported", False) and not on_wechat_tabs:
+            probe = getattr(self.launcher, "current_package", None)
+            current = probe() if callable(probe) else None
+            if current != "com.tencent.mm":
+                # 桌面/其它界面上不盲按返回，避免把 App 退掉
+                return None
+            if state.get("chat_backs", 0) >= 2:
+                state["exhausted"] = True
+                print("  ⚠️  微信会话页连续返回仍未回到列表，放弃本轮 OCR 定位")
+                return None
+            state["chat_backs"] = state.get("chat_backs", 0) + 1
+            return {
+                "action_type": "back",
+                "description": "OCR 兜底：当前在微信会话页，先返回聊天列表",
+                "ocr_chat_back": state["chat_backs"],
+            }
+
         if _is_chat_page(entries):
             # 已经在聊天页：绝不能把聊天内容当列表继续下滑。
             # 未进入目标会话时先退回列表；连续退回两次仍不在列表则放弃。
@@ -1910,7 +1933,7 @@ class ScreenAgent:
             any(marker in text for marker in _LIST_PAGE_MARKERS)
             for text, _ in entries
         )
-        on_list = in_group_list or in_message_list
+        on_list = in_group_list or in_message_list or on_wechat_tabs
         if on_list:
             state["unknown_waits"] = 0
         if not on_list:
@@ -2090,7 +2113,7 @@ class ScreenAgent:
             "x": width // 2, "y": y,
             "x2": width // 2, "y2": y2,
             "description": (
-                f"OCR 兜底：向{'下' if direction == 'down' else '上'}滚动 QQ 列表"
+                f"OCR 兜底：向{'下' if direction == 'down' else '上'}滚动聊天列表"
                 f"查找「{targets[0]}」"
             ),
             "ocr_list_scroll": state["scrolls"],
@@ -2484,9 +2507,12 @@ class ScreenAgent:
         tree_only = bool(getattr(config, "TREE_ONLY_DECISION", False))
         rule_action = self._rule_action(memory) if (merged_active or tree_only) else None
         in_group = bool((getattr(self, "_rule_state", None) or {}).get("entered_group"))
-        if rule_action is None and _is_qq_task(memory.task) and not in_group:
-            # QQ 群定位兜底：规则路径（首屏 → 搜索 → 滚动）都没结论时，用截图 OCR
-            # 在列表里精确匹配 + 滚动；已在目标群内时绝不调用，避免误退回列表。
+        ocr_nav_app = _is_qq_task(memory.task) or bool(
+            getattr(self, "tree_unsupported", False))
+        if rule_action is None and ocr_nav_app and not in_group:
+            # 群定位兜底：规则路径（首屏 → 搜索 → 滚动）都没结论时，用截图 OCR
+            # 在列表里精确匹配 + 滚动；微信没有控件树，也用它先退回列表再精确匹配。
+            # 已在目标群内时绝不调用，避免误退回列表。
             rule_action = self._ocr_list_navigate(memory)
             if rule_action is not None:
                 rule_action.setdefault("rule", {"name": "ocr_list"})
