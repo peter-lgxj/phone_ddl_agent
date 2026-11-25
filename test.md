@@ -1,77 +1,77 @@
-# 对比实验方案
+# Comparison Experiment Plan
 
-> 本文件是任务集与统计口径的**唯一定义处**。重复次数、Level 3 参与系统、AT 汇总口径标记为【待定】，由组内拍板后只需改第 4 节；其他章节、`tasks.json`、`metrics.py` 的默认值都只做引用或作为实现默认，不代表最终口径。
+> This file is the **single source of truth** for the task set and statistical criteria. The repeat count, the systems participating in Level 3, and the AT aggregation criterion are marked [TBD], and after the team decides, only Section 4 needs to change; other sections, `tasks.json`, and the defaults in `metrics.py` are references or implementation defaults only and do not represent the final criteria.
 
-## 一、对比系统
+## 1. Comparison Systems
 
-| 系统 | 定位 | 获取方式 |
+| System | Positioning | How to get it |
 |------|------|---------|
-| **Open-AutoGLM** | 最直接竞品，中文 Android 场景 | github.com/zai-org/Open-AutoGLM |
-| **Mobile-Agent-v2** | 学术界主流基线，多智能体架构 | github.com/X-PLUG/MobileAgent |
-| **AppAgent** | 单智能体领域奠基工作 | github.com/TencentQQGYLab/AppAgent |
-| **本系统（Ours）** | 双模型分层 + 多应用编排 | — |
+| **Open-AutoGLM** | The most direct competitor, Chinese Android scenario | github.com/zai-org/Open-AutoGLM |
+| **Mobile-Agent-v2** | Mainstream academic baseline, multi-agent architecture | github.com/X-PLUG/MobileAgent |
+| **AppAgent** | Foundational work in the single-agent line | github.com/TencentQQGYLab/AppAgent |
+| **Ours (this system)** | Dual-model layering + multi-app orchestration | — |
 
-Mobile-Agent-v3 与 AppAgent-v2 部署成本高，不纳入本轮。四个系统形成「基础→进阶→多智能体→本系统」的梯度。
+Mobile-Agent-v3 and AppAgent-v2 have high deployment costs and are not included in this round. The four systems form a gradient of "basic → advanced → multi-agent → ours".
 
-## 二、评测指标
+## 2. Evaluation Metrics
 
-共 6 个指标，全部基于 `results.jsonl` 的人工 `success` 判定。
+There are 6 metrics in total, all based on the manual `success` judgement in `results.jsonl`.
 
-**① 任务成功率（TSR）**
-
-```
-TSR = 成功任务数 / 已判定任务数 × 100%
-```
-
-同一任务有多次重复时，任意一次成功即该任务计为成功（取最优）。
-
-**② 步骤效率（SE）**
+**① Task Success Rate (TSR)**
 
 ```
-SE = 任务理论步数 / 实际执行步数
+TSR = successful tasks / judged tasks × 100%
 ```
 
-只统计成功的 attempt；多个成功 attempt 取平均后再对任务平均。理论步数见任务集的 `theory_steps`。
+When a task has multiple repeats, the task counts as successful if any attempt succeeds (best of).
 
-**③ 跨应用任务成功率（Multi-App TSR）**
-
-只统计 `apps` 长度 ≥ 2 的任务，计算方式同 TSR。
-
-**④ 平均执行时间（AT）**
-
-单任务耗时口径：`该任务纳入统计的 attempt 耗时均值`。
-
-跨任务汇总有两种候选公式（**口径待定，见 4.2**）：
+**② Step Efficiency (SE)**
 
 ```
-A. total_per_task = 纳入统计的全部 attempt 总耗时 / 任务数
-B. task_mean      = 先算每个任务的平均耗时，再对任务等权平均
+SE = theoretical steps for the task / actual executed steps
 ```
 
-两者在每任务尝试次数相同时相等；尝试次数不相等（超时、失败重放）时会分叉。
-`--at-mode` 决定哪些 attempt 纳入统计（all / success / best），与上述汇总口径正交。
+Only successful attempts are counted; when there are multiple successful attempts, average them first and then average over tasks. Theoretical step counts are in `theory_steps` of the task set.
 
-**⑤ 单步平均耗时（ST）**
+**③ Multi-App Task Success Rate (Multi-App TSR)**
+
+Only tasks with `apps` length ≥ 2 are counted, computed the same way as TSR.
+
+**④ Average Time (AT)**
+
+Per-task time criterion: `mean elapsed time of the attempts included in the statistics for that task`.
+
+There are two candidate formulas for cross-task aggregation (**criterion pending, see 4.2**):
 
 ```
-ST = 总耗时 / 总步数（秒/步）
+A. total_per_task = total elapsed time of all included attempts / number of tasks
+B. task_mean      = first compute each task's mean elapsed time, then average equally over tasks
 ```
 
-**⑥ 任务完成稳定性（CS）**
+The two are equal when every task has the same number of attempts; they diverge when attempt counts differ (timeouts, failed replays).
+`--at-mode` decides which attempts are included (all / success / best), orthogonal to the aggregation criterion above.
+
+**⑤ Average Step Time (ST)**
 
 ```
-CS = 全部重复均成功的任务数 / 已判定任务数 × 100%
+ST = total elapsed time / total steps (seconds/step)
 ```
 
-重复次数按 4.2 的规程（**Level 3 的重复次数待定**）。CS 要求逐次判定（`{"T01": [true, false, true]}`）；只给了任务级布尔的任务不参与 CS 分母，`metrics.py` 会列出 `CS_pending`。
+**⑥ Completion Stability (CS)**
 
-## 三、测试任务集
+```
+CS = tasks where all repeats succeeded / judged tasks × 100%
+```
 
-共 20 个任务，分三级；任务文本以 `experiments/tasks.json` 为准。
+The repeat count follows the procedure in 4.2 (**the Level 3 repeat count is TBD**). CS requires per-attempt judgement (`{"T01": [true, false, true]}`); tasks that only provide a task-level boolean do not enter the CS denominator, and `metrics.py` lists them as `CS_pending`.
 
-### Level 1：单应用基础任务（8 个）
+## 3. Test Task Set
 
-| 编号 | 任务描述 | 目标 App | 理论步数 |
+There are 20 tasks in total, in three levels; the task text is defined by `experiments/tasks.json`.
+
+### Level 1: Single-app basic tasks (8)
+
+| ID | Task description | Target App | Theoretical steps |
 |------|---------|---------|---------|
 | T01 | 打开微信，向「文件传输助手」发送「测试消息123」 | 微信 | 5 |
 | T02 | 打开设置，查看当前 WiFi 名称 | 系统设置 | 4 |
@@ -82,9 +82,9 @@ CS = 全部重复均成功的任务数 / 已判定任务数 × 100%
 | T07 | 打开网易云音乐，搜索「稻香」，播放第一首 | 网易云音乐 | 5 |
 | T08 | 打开京东，搜索「AirPods Pro」，收藏第一个商品 | 京东 | 6 |
 
-### Level 2：跨应用双 App 任务（8 个）
+### Level 2: Cross-app two-App tasks (8)
 
-| 编号 | 任务描述 | 涉及 App | 理论步数 |
+| ID | Task description | Apps involved | Theoretical steps |
 |------|---------|---------|---------|
 | T09 | 打开微信，阅读指定联系人最新消息，提取消息中的地点，用高德地图导航过去 | 微信+高德 | 9 |
 | T10 | 打开微信，阅读指定联系人推荐的餐厅名，去大众点评搜索该餐厅，报告评分 | 微信+大众点评 | 9 |
@@ -95,106 +95,106 @@ CS = 全部重复均成功的任务数 / 已判定任务数 × 100%
 | T15 | 打开淘宝搜索指定商品，记录价格，发微信告知指定联系人 | 淘宝+微信 | 10 |
 | T16 | 打开微信阅读联系人消息中的歌曲名，打开网易云音乐搜索并播放 | 微信+网易云 | 9 |
 
-### Level 3：三 App 链式任务（4 个）
+### Level 3: Three-App chained tasks (4)
 
-| 编号 | 任务描述 | 涉及 App | 理论步数 |
+| ID | Task description | Apps involved | Theoretical steps |
 |------|---------|---------|---------|
 | T17 | 读微信联系人消息提取餐厅名 → 大众点评查地址 → 高德地图导航 | 微信+大众点评+高德 | 14 |
 | T18 | 淘宝搜索商品记录价格 → 京东搜索同款比价 → 微信发送比价结果 | 淘宝+京东+微信 | 14 |
 | T19 | 打开微信找到与指定联系人的对话，确认对方在哪，用高德查询公共交通路线，再用微信回复路线安排 | 微信+高德+微信 | 13 |
 | T20 | 美团查餐厅评分 → 网易云音乐搜索该餐厅 BGM → 微信分享给联系人 | 美团+网易云+微信 | 15 |
 
-Level 3 有哪些系统参加、未参加的系统如何记分，见 **4.2 待定项**；本节不单独规定。
+Which systems participate in Level 3, and how non-participating systems are scored, are covered in **4.2 pending items**; this section does not prescribe it separately.
 
-## 四、执行规程与待定口径
+## 4. Execution Procedure and Pending Criteria
 
-### 4.1 测试环境
+### 4.1 Test environment
 
-- 同一台手机（荣耀 70 或 vivo X200），网络条件一致（同一 WiFi）
-- 各系统使用相同底座模型（Qwen-VL-Max）确保公平
-- 每个任务前由 runner 自动「回桌面 + force-stop 已知应用」；应用内草稿、聊天输入框、剪贴板与输入法状态**无法自动清除**，需要人工检查（`--no-reset` 可关闭自动重置，`reset` 字段会记录 `stopped/failed/not_installed/not_mapped`）
+- The same phone (Honor 70 or vivo X200), with consistent network conditions (same WiFi)
+- Every system uses the same base model (Qwen-VL-Max) to ensure fairness
+- Before each task, the runner automatically "returns to the home screen + force-stops known apps"; in-app drafts, the chat input box, clipboard and IME state **cannot be cleared automatically**, so manual checking is required (`--no-reset` disables the automatic reset; the `reset` field records `stopped/failed/not_installed/not_mapped`)
 
-### 4.2 待定口径（需组内拍板）
+### 4.2 Pending criteria (require a team decision)
 
-以下三项**尚未定稿**；代码里的默认值只是实现默认，不是实验结论。
+The following three items are **not yet finalized**; the defaults in the code are implementation defaults, not experiment conclusions.
 
-| 待定项 | 候选 | 当前实现默认 | 定了之后改哪里 |
+| Pending item | Candidates | Current implementation default | Where to change after the decision |
 |---|---|---|---|
-| **A. Level 3 重复次数** | A1：与 L1/L2 相同，3 次；A2：2 次 | `tasks.json` 的 `repeat_by_level.3 = 2` | `tasks.json` 的 `repeat_by_level` + 本节 |
-| **B. Level 3 参与系统** | B1：四个系统都跑，不支持多应用者按失败记录；B2：仅本系统 + Mobile-Agent-v2 参加，其余记 N/A 且不计入分母 | 无（runner 不区分系统） | 本节 + baseline 结果汇总表 |
-| **C. AT 跨任务汇总** | C1：`total_per_task`（总耗时 ÷ 任务数）；C2：`task_mean`（先任务内平均再任务间等权） | `metrics.py` 的 `--at-aggregate task_mean` | `metrics.py` 默认值或运行参数 + 本节 |
+| **A. Level 3 repeat count** | A1: same as L1/L2, 3 times; A2: 2 times | `repeat_by_level.3 = 2` in `tasks.json` | `repeat_by_level` in `tasks.json` + this section |
+| **B. Systems participating in Level 3** | B1: all four systems run, those not supporting multi-app are recorded as failures; B2: only our system + Mobile-Agent-v2 participate, the rest are marked N/A and excluded from the denominator | none (the runner does not distinguish systems) | this section + the baseline results summary table |
+| **C. AT cross-task aggregation** | C1: `total_per_task` (total time ÷ number of tasks); C2: `task_mean` (average within a task first, then equal-weight across tasks) | `--at-aggregate task_mean` in `metrics.py` | the default in `metrics.py` or run arguments + this section |
 
-补充规则：
+Supplementary rules:
 
-- **重复次数的执行规则**：未指定 `--repeat` 时按等级规则（`repeat_by_level`，缺省回落到 `default_repeat`）；显式 `--repeat N` 会**强制覆盖所有等级**（包括 Level 3）。使用 `--repeat` 时必须在结果 tag / manifest 中能看出这次不是按等级规程跑的。
-- **超时/崩溃**一律记失败，不计入 AT 的 success 口径。
-- 口径未定期间，两类 AT 数值可以都算出来对比，但论文/报告只能引用组内确认的那一个。
+- **Execution rule for repeat counts**: when `--repeat` is not specified, follow the per-level rule (`repeat_by_level`, falling back to `default_repeat` when absent); an explicit `--repeat N` **forcibly overrides all levels** (including Level 3). When using `--repeat`, the result tag / manifest must make clear that this run did not follow the per-level procedure.
+- **Timeouts/crashes** are always recorded as failures and are not included in the AT success criterion.
+- While the criterion is pending, both AT numbers may be computed for comparison, but the paper/report may cite only the one confirmed by the team.
 
-### 4.3 人工判分标准
+### 4.3 Manual judging criteria
 
 ```
-成功标准：
-  - 信息提取类：提取的实体名称完全正确（不接受语义相近但文字不同）
-  - 操作执行类：目标界面/状态达到（截图为证）
-  - 跨应用类：各子任务均完成且信息传递正确
+Success criteria:
+  - Information extraction: the extracted entity names are exactly correct (semantically close but textually different is not accepted)
+  - Operation execution: the target interface/state is reached (screenshot as evidence)
+  - Cross-app: every subtask is completed and information is passed correctly
 
-失败标准：
-  - 实体识别错误（「财富又一城」误识别为餐厅名）
-  - 步数达到上限仍未完成（MAX_STEPS 默认 30）
-  - 中途崩溃/报错
-  - 完成了操作但内容错误（发送了错误内容）
+Failure criteria:
+  - Entity recognition error (「财富又一城」 misidentified as a restaurant name)
+  - Step limit reached without completion (MAX_STEPS defaults to 30)
+  - Crash/error midway
+  - Operation completed but content wrong (wrong content sent)
 ```
 
-## 五、预期结果与分析框架
+## 5. Expected Results and Analysis Framework
 
-| 指标 | AppAgent | Open-AutoGLM | Mobile-Agent-v2 | 本系统 |
+| Metric | AppAgent | Open-AutoGLM | Mobile-Agent-v2 | Ours |
 |------|---------|--------------|----------------|-------|
-| 单 App TSR | 中 | 中高 | 高 | 高 |
-| 双 App TSR | 低 | 低 | 中 | **高** |
-| 三 App TSR | 极低/0 | 极低/0 | 低 | **中高** |
-| 平均时间 | 慢 | 中 | 中 | 中（多一次文字模型调用） |
-| 步骤效率 | 低 | 中 | 中 | 中高 |
-| 稳定性 CS | 低 | 中 | 中 | **高**（语义校正层效果） |
+| Single-App TSR | Medium | Medium-high | High | High |
+| Two-App TSR | Low | Low | Medium | **High** |
+| Three-App TSR | Very low/0 | Very low/0 | Low | **Medium-high** |
+| Average time | Slow | Medium | Medium | Medium (one extra text-model call) |
+| Step efficiency | Low | Medium | Medium | Medium-high |
+| Stability CS | Low | Medium | Medium | **High** (effect of the semantic correction layer) |
 
-论文分析重点：
+Key points of the paper analysis:
 
-1. **多应用任务的优势**：Level 3 的 TSR 差距最能说明问题（具体参与系统按 4.2-B 执行）。
-2. **语义校正层对稳定性的贡献**：分析 CS，并用具体案例说明 VL 模型实体识别错误如何被文字模型纠正。
-3. **时间代价的合理性**：双模型分层带来额外延迟，用「精度-效率权衡」小节讨论。
+1. **Advantage on multi-app tasks**: the TSR gap on Level 3 explains the point best (the participating systems follow 4.2-B).
+2. **Contribution of the semantic correction layer to stability**: analyze CS and use concrete cases to show how entity-recognition errors of the VL model are corrected by the text model.
+3. **Reasonableness of the time cost**: dual-model layering adds latency; discuss it in the "accuracy-efficiency trade-off" subsection.
 
-## 六、论文中的呈现结构
+## 6. Presentation Structure in the Paper
 
 ```
-5.1 实验环境与配置
-5.2 评测任务集设计
-5.3 评测指标定义
-5.4 实验结果与分析
-    5.4.1 总体对比（6 指标 × 4 系统）
-    5.4.2 分难度级别分析
-    5.4.3 多应用任务专项分析
-    5.4.4 典型案例分析
-5.5 消融实验
-    - 去掉语义分析层 vs 保留
-    - 去掉多应用规划 vs 保留
-5.6 实验结论
+5.1 Experiment environment and configuration
+5.2 Evaluation task set design
+5.3 Evaluation metric definitions
+5.4 Experimental results and analysis
+    5.4.1 Overall comparison (6 metrics × 4 systems)
+    5.4.2 Analysis by difficulty level
+    5.4.3 Dedicated analysis of multi-app tasks
+    5.4.4 Typical case analysis
+5.5 Ablation experiments
+    - Remove the semantic analysis layer vs keep it
+    - Remove multi-app planning vs keep it
+5.6 Experimental conclusions
 ```
 
-消融只需用本系统做两个变体，不需要额外部署其他系统。
+The ablation only needs two variants of our system and does not require deploying the other systems.
 
-## 七、与代码的对应关系
+## 7. Correspondence with the Code
 
-| 实验设定 | 代码入口 |
+| Experiment setting | Code entry |
 |---|---|
-| 20 个任务 | `experiments/tasks.json`（`apps` / `theory_steps` / `level`） |
-| 按等级重复 | 默认读 `repeat_by_level`；`--repeat N` 强制统一所有等级 |
-| 只跑部分任务 | `--levels L1,L2` / `--task-ids T01,T05`；筛选条件写入 `manifest.json` 与每条 `results.jsonl` 的 `filters` |
-| 单应用 / 多应用 | `--mode single` / `--mode multi` |
-| 最大 30 步 | `config.MAX_STEPS`（默认 30，`MAX_STEPS` 环境变量可覆盖） |
-| 六项指标 | `python experiments/metrics.py experiments/results/<run_dir>` |
-| AT 汇总口径 | `--at-aggregate total_per_task` / `task_mean`（默认 task_mean，见 4.2-C） |
-| AT 样本口径 | `--at-mode all / success / best` |
-| 消融：去掉语义分析层 | `--no-semantic` |
-| 消融：去掉多应用规划 | `--mode single` 跑 Level 2/3 任务 |
-| 对比系统 | `experiments/baselines/`（三个 wrapper 已按上游入口接入，见该目录 README） |
+| 20 tasks | `experiments/tasks.json` (`apps` / `theory_steps` / `level`) |
+| Per-level repeats | Reads `repeat_by_level` by default; `--repeat N` forces all levels to be uniform |
+| Run only some tasks | `--levels L1,L2` / `--task-ids T01,T05`; filter conditions are written to `manifest.json` and to `filters` in each `results.jsonl` line |
+| Single-app / multi-app | `--mode single` / `--mode multi` |
+| Maximum 30 steps | `config.MAX_STEPS` (default 30, overridable with the `MAX_STEPS` environment variable) |
+| Six metrics | `python experiments/metrics.py experiments/results/<run_dir>` |
+| AT aggregation criterion | `--at-aggregate total_per_task` / `task_mean` (default task_mean, see 4.2-C) |
+| AT sample criterion | `--at-mode all / success / best` |
+| Ablation: remove semantic analysis layer | `--no-semantic` |
+| Ablation: remove multi-app planning | `--mode single` on Level 2/3 tasks |
+| Comparison systems | `experiments/baselines/` (the three wrappers are integrated at the upstream entry points, see that directory's README) |
 
-脚本只负责采集与聚合，任务「成功/失败」仍按 4.3 的人工标准判定，需要在 `results.jsonl` 的 `success` 字段或 `judgement.json` 中标注。
+The script only collects and aggregates; a task's "success/failure" is still judged manually against the criteria in 4.3, and must be annotated in the `success` field of `results.jsonl` or in `judgement.json`.

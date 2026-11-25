@@ -1,68 +1,68 @@
 # Pull Request
 
-> 复制到 PR 描述里填写。没有实际跑过的验证不要勾；没验证的写在“未验证项”。
+> Copy this into the PR description and fill it in. Do not tick verification you have not actually run; write unverified items under "Not verified".
 
-## 1. 变更范围
+## 1. Scope of changes
 
-- 这个 PR 解决什么问题：
-- 改了哪些模块/文件：
-- 明确不做什么（避免范围蔓延）：
+- What problem does this PR solve:
+- Which modules/files changed:
+- Explicitly out of scope (to avoid scope creep):
 
-关联 Issue：#
+Related Issue: #
 
-## 2. 风险与影响
+## 2. Risks and impact
 
-- [ ] 影响失败/成功判定（异常、超时、pending、观察失败、锁冲突）
-- [ ] 影响实验口径（任务集/指标/重复次数/判分标准）
-- [ ] 影响设备锁或并发
-- [ ] 影响证据归档（`runs/`、`results.jsonl`、`task_log.json`）
-- [ ] 影响隐私/截图上传/Web 鉴权
-- [ ] 只改文档/注释/测试
+- [ ] Affects failure/success judgement (exceptions, timeouts, pending, observation failure, lock conflict)
+- [ ] Affects experiment criteria (task set/metrics/repeat count/judging criteria)
+- [ ] Affects device lock or concurrency
+- [ ] Affects evidence archiving (`runs/`, `results.jsonl`, `task_log.json`)
+- [ ] Affects privacy/screenshot upload/Web authentication
+- [ ] Docs/comments/tests only
 
-说明：
+Notes:
 
-## 3. 验证
+## 3. Verification
 
-### 已执行
+### Executed
 
 ```text
-# 命令 + 实际输出（粘贴关键行）
+# Command + actual output (paste key lines)
 pytest -q
 ruff check .
 python experiments/run_experiment.py --tasks experiments/tasks.json --dry-run
 ```
 
-- CI：
-- 真机：未跑 / 已跑（设备型号、任务、证据路径）
-- 真实 API：未跑 / 已跑（provider、模型、任务）
-- 失败路径验证：列出实际构造/观察到的失败场景
+- CI:
+- Real device: not run / run (device model, task, evidence path)
+- Real API: not run / run (provider, model, task)
+- Failure-path verification: list the failure scenarios actually constructed/observed
 
-### 未验证项
+### Not verified
 
-- [ ] 真机点击/输入/发送
-- [ ] 跨分辨率/跨 ROM
-- [ ] 真实模型 API 稳定性
-- [ ] 多应用真实规划输出
-- [ ] baseline 联调
-- 其他：
+- [ ] Real-device tap/input/send
+- [ ] Cross-resolution / cross-ROM
+- [ ] Real model API stability
+- [ ] Multi-app real planning output
+- [ ] Baseline integration
+- Other:
 
-## 4. 实验口径影响
+## 4. Impact on experiment criteria
 
-- 是否改动 `tasks.json` / `metrics.py` / `test.md` / 判分标准：是 / 否
-- 若是：关联的 experiment Issue、两人确认记录、旧口径 → 新口径、是否需要整批重跑
-- 指标数值是否受到影响：
+- Whether `tasks.json` / `metrics.py` / `test.md` / judging criteria changed: yes / no
+- If yes: related experiment Issue, two-person confirmation record, old criteria → new criteria, whether a full batch rerun is needed
+- Whether metric values are affected:
 
-## 5. 回滚
+## 5. Rollback
 
-- 回滚方式（revert / 开关 / 配置）：
-- 回滚后需要重新跑什么：
+- Rollback method (revert / switch / config):
+- What needs to be rerun after rollback:
 
 ## 6. Checklist
 
-- [ ] 一个 PR 一个主题，没有夹带无关格式化
-- [ ] 没有提交 `.env`、key、权重、`runs/`、`experiments/results/`、真实截图
-- [ ] 新增/修改的行为有测试，失败路径也被覆盖
-- [ ] 没有用 `importorskip` 让关键测试静默跳过
-- [ ] README/文档与代码一致；不一致处已改
-- [ ] 实验口径变更已走 Issue 并记录
-- [ ] 合并方式为 Squash；commit message 符合 Conventional Commits
+- [ ] One PR, one topic, no unrelated formatting dragged in
+- [ ] No `.env`, keys, weights, `runs/`, `experiments/results/`, real screenshots committed
+- [ ] New/modified behavior has tests, and failure paths are covered too
+- [ ] No `importorskip` used to silently skip key tests
+- [ ] README/docs agree with the code; inconsistencies have been fixed
+- [ ] Experiment-criteria changes went through an Issue and are recorded
+- [ ] Merge method is Squash; commit message follows Conventional Commits

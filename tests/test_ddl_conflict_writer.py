@@ -71,11 +71,11 @@ def test_source_credibility_constant_removed_and_docs_match():
 
     doc = (Path(__file__).resolve().parents[1] / "docs" / "proposal-compliance.md")
     text = doc.read_text(encoding="utf-8")
-    assert "SOURCE_CREDIBILITY" in text          # 只在“未按固定四级实现”的说明里出现
+    assert "SOURCE_CREDIBILITY" in text          # only in the "not implemented as fixed four levels" note
     assert "official_email=4" not in text
-    assert "最高可信度组内一致即采用" not in text
-    assert "未按固定四级实现" in text
-    assert "来源等级先验" in text
+    assert "highest credibility group agrees, use it" not in text
+    assert "not implemented as fixed four levels" in text
+    assert "source-level prior" in text
 
 
 def test_conflict_same_time_same_weight_is_uncertain():

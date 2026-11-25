@@ -1,15 +1,15 @@
-# 三类样例输入（普通 / 变更 / 失败）
+# Three Kinds of Sample Input (normal / change / failure)
 
-课程要求提交“普通任务、变更请求、失败案例”三类样例输入。这里的 D01、D08、D18 来自
-外部任务集 `测试数据集/微Q邮/ddl_tasks.json`，只抽取了这三条，不引入整库。
+The course requires submitting three kinds of sample input: "normal task, change request, failure case". The D01, D08 and D18 here come from the
+external task set `测试数据集/微Q邮/ddl_tasks.json`; only these three entries are extracted, the whole library is not imported.
 
-| 类型 | 任务 ID | 输入要点 | 期望结果 |
+| Type | Task ID | Key input | Expected result |
 |---|---|---|---|
-| 普通任务 | D01 | 微信「COMP7503 课程群」，找最近一条作业通知 | 机器学习作业三 / COMP7503 / 2026-11-29 23:59 |
-| 变更条件 | D08 | 同群同时有作业二旧时间和作业三新时间 | 只报作业三 11-29；作业二 11-15 不得出现在结果里 |
-| 失败案例 | D18 | 只有闲聊的群里找不存在的「数据库作业」 | 明确未找到（空结果 / `no_match`），不得编造 DDL |
+| Normal task | D01 | WeChat 「COMP7503 课程群」, find the most recent assignment notice | 机器学习作业三 / COMP7503 / 2026-11-29 23:59 |
+| Change condition | D08 | The same group has both the old time of assignment 2 and the new time of assignment 3 | Report only assignment 3 at 11-29; assignment 2 at 11-15 must not appear in the result |
+| Failure case | D18 | In a group with only chit-chat, look for the nonexistent 「数据库作业」 | Explicitly not found (empty result / `no_match`); must not fabricate a DDL |
 
-## 真机运行（需要手机、API key 和测试群）
+## Real-device run (requires a phone, API key and test groups)
 
 ```bash
 python experiments/run_experiment.py \
@@ -18,24 +18,24 @@ python experiments/run_experiment.py \
   --repeat 1
 ```
 
-- 需要手机已连接并授权，`.env` 里有 `DEEPSEEK_API_KEY`。
-- D01/D08 依赖测试手机上的「COMP7503 课程群」，D18 依赖只有闲聊的「闲聊群」；
-  建群与消息内容见仓库外的 `测试前准备清单.md`。没有这些群时，用下面的离线案例。
-- 脚本只采集 `results.jsonl` 和运行目录，不自动判分；按 `ddl_cases.json` 里的
-  `judge` 字段人工判定，并把 `success` 写回结果。
+- The phone must be connected and authorized, and `.env` must contain `DEEPSEEK_API_KEY`.
+- D01/D08 depend on the test phone having 「COMP7503 课程群」, and D18 depends on 「闲聊群」, which contains only chit-chat;
+  group creation and message content are described in `测试前准备清单.md` outside the repository. If these groups are unavailable, use the offline case below.
+- The script only collects `results.jsonl` and the run directory and does not judge automatically; judge manually according to the
+  `judge` field in `ddl_cases.json`, and write `success` back into the results.
 
-## 离线运行（不需要手机和 key）
+## Offline run (no phone or key required)
 
-普通 + 变更条件（`examples/demo` 里已包含 11.29 → 12.06 的延期更正和 11.31 的干扰消息）：
+Normal + change condition (`examples/demo` already contains the 11.29 → 12.06 extension correction and the 11.31 distractor message):
 
 ```bash
 python scripts/demo.py --offline
 ```
 
-期望：3 条 confirmed；微信「作业三」生效值为 2026-12-06 23:59，
-旧值 2026-11-29 只出现在 `data.json` 的 `superseded_by`。
+Expected: 3 confirmed records; the effective value of WeChat 「作业三」 is 2026-12-06 23:59,
+and the old value 2026-11-29 appears only in `superseded_by` in `data.json`.
 
-失败案例（只有一个闲聊群，查询不存在的「数据库作业」）：
+Failure case (only a chit-chat group; query the nonexistent 「数据库作业」):
 
 ```bash
 python scripts/demo.py --offline \
@@ -43,12 +43,12 @@ python scripts/demo.py --offline \
   --query "数据库作业的截止时间"
 ```
 
-期望：`共 0 条 DDL`，不输出编造记录；输出目录 `demo_output/cases_failure/`。
+Expected: `共 0 条 DDL`, no fabricated records; output directory `demo_output/cases_failure/`.
 
-## 边界
+## Boundaries
 
-- `examples/demo/*.json` 是离线替身归档，不是真机证据；不能写成“真机通过”。
-- 真机样例的实际结果取决于手机上的群、消息版本和模型输出；提交报告时引用
-  `results.jsonl`、运行目录截图与人工判分，不要只写期望值。
-- 旧值与新值同时出现时，系统按“同源更正/延期”裁决，只输出生效值；旧值保留在
-  `superseded_by` 供审计。
+- `examples/demo/*.json` are offline stand-in archives, not real-device evidence; they must not be written as "passed on a real device".
+- The actual result of the real-device samples depends on the groups, message versions and model output on the phone; when submitting the report, cite
+  `results.jsonl`, run-directory screenshots and manual judging, not just expected values.
+- When an old value and a new value appear at the same time, the system resolves them as a "same-source correction/extension" and outputs only the effective value; the old value is kept in
+  `superseded_by` for auditing.

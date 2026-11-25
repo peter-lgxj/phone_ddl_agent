@@ -1,34 +1,34 @@
-# 实验 / 口径变更 Issue
+# Experiment / Criteria Change Issue
 
-> 标题格式：`[experiment] 简短描述`
-> 用于：任务集、重复次数、指标公式、判分标准、baseline 接入、reset/max-steps 等任何会影响实验数值的改动。
-> **没有两个人确认，不要改代码，也不要开跑。**
+> Title format: `[experiment] short description`
+> Used for: any change that affects experiment numbers, such as the task set, repeat count, metric formulas, judging criteria, baseline integration, reset/max-steps.
+> **Without two-person confirmation, do not change code and do not start a run.**
 
-## 1. 变更目的
+## 1. Purpose of the change
 
-- 要解决什么问题：
-- 不改会怎样：
-- 关联论文/报告章节：
+- What problem is being solved:
+- What happens if it is not changed:
+- Related paper/report section:
 
-## 2. 变更内容
+## 2. Change content
 
-- [ ] `experiments/tasks.json`（任务文本/App/理论步数/Level/重复次数）
-- [ ] `experiments/metrics.py`（分子/分母/过滤条件）
-- [ ] `experiments/run_experiment.py`（reset/max steps/retry/锁/success 写入）
-- [ ] `test.md` / `deliverable/docs/02-experiment-protocol.md`（公式/判分/重复）
-- [ ] baseline 接入方式/模型/版本
-- [ ] 判分表字段/成功标准
+- [ ] `experiments/tasks.json` (task text/App/theoretical steps/Level/repeat count)
+- [ ] `experiments/metrics.py` (numerator/denominator/filter conditions)
+- [ ] `experiments/run_experiment.py` (reset/max steps/retry/lock/success writing)
+- [ ] `test.md` / `deliverable/docs/02-experiment-protocol.md` (formulas/judging/repeats)
+- [ ] Baseline integration method/model/version
+- [ ] Judging-table fields/success criteria
 
-具体改动（旧 → 新）：
+Specific change (old → new):
 
 ```text
-旧：
-新：
+Old:
+New:
 ```
 
-## 3. 影响分析
+## 3. Impact analysis
 
-| 指标 | 是否受影响 | 说明 |
+| Metric | Affected | Notes |
 |---|---|---|
 | TSR | | |
 | Multi-App TSR | | |
@@ -36,23 +36,23 @@
 | AT | | |
 | ST | | |
 | CS | | |
-| 已跑数据是否可比 | | |
-| 是否需要整批重跑 | | |
+| Whether already-run data is comparable | | |
+| Whether a full batch rerun is needed | | |
 
-## 4. 待拍板项
+## 4. Items awaiting decision
 
-- 需要谁确认（组长/实验负责人/导师）：
-- 截止时间（如有）：
-- 确认记录（评论链接/日期）：
+- Who needs to confirm (team lead/experiment owner/advisor):
+- Deadline (if any):
+- Confirmation record (comment link/date):
 
-## 5. 验收标准
+## 5. Acceptance criteria
 
-- [ ] 代码与 `docs/02`、`test.md` 三处一致
-- [ ] 有对应测试（至少覆盖新口径的边界）
-- [ ] 在 Issue 里写了“旧口径 → 新口径”
-- [ ] 明确旧数据是保留、标注还是废弃
-- [ ] 如果改变数值，更新了汇总表模板说明
+- [ ] Code, `docs/02` and `test.md` are consistent in all three places
+- [ ] Corresponding tests exist (at least covering the boundaries of the new criteria)
+- [ ] "Old criteria → new criteria" is written in the Issue
+- [ ] It is explicit whether old data is kept, annotated, or discarded
+- [ ] If values change, the summary-table template description has been updated
 
-## 6. 备注
+## 6. Notes
 
-- 任何临时妥协、未覆盖的场景、后续待办。
+- Any temporary compromises, uncovered scenarios, follow-up todos.
