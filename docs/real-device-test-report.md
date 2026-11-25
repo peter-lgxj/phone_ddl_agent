@@ -1,65 +1,65 @@
-# 真机读取与端到端抽取验证报告
+# Real-Device Reading and End-to-End Extraction Verification Report
 
-> 验证日期：2026-11-18（旧记录）；2026-11-23（三群复跑，见 4.4）
-> 分支：`fix/p0-run-blockers`（2026-11-18）；`1e38364`（2026-11-23 复跑）
-> 设备：OPPO PLJ110（真机，USB + ADB）
-> 口径：标注「真机实测」的内容来自设备截图、`step_*.json`、`task_log.json` 与抽取产物；
-> 标注「推断/估算」的内容不来自日志，需按文中说明理解。
+> Verification dates: 2026-11-18 (old record); 2026-11-23 (three-group rerun, see 4.4)
+> Branch: `fix/p0-run-blockers` (2026-11-18); `1e38364` (2026-11-23 rerun)
+> Device: OPPO PLJ110 (real device, USB + ADB)
+> Criteria: content marked "measured on device" comes from device screenshots, `step_*.json`, `task_log.json` and extraction artifacts;
+> content marked "inferred/estimated" does not come from logs and must be understood as explained in the text.
 
-> **两批记录不能合并**：
-> - 2026-11-18 微信「文件传输助手」自聊，3 条记录 = **1 confirmed / 2 uncertain**（4.2、4.3）。
-> - 2026-11-23 三个真实群，demo 与 launcher 各 3 条 = **2 confirmed / 1 uncertain**（4.4）。
-> 两批消息不同，状态分布不可互换或相加。
+> **The two batches of records must not be merged**:
+> - 2026-11-18 WeChat 「文件传输助手」 self-chat, 3 records = **1 confirmed / 2 uncertain** (4.2, 4.3).
+> - 2026-11-23 three real groups, 3 records each from demo and launcher = **2 confirmed / 1 uncertain** (4.4).
+> The messages in the two batches differ; the status distributions cannot be substituted for or added to each other.
 
-## 1. 设备与环境
+## 1. Device and environment
 
-| 项目 | 值 | 来源 |
+| Item | Value | Source |
 | --- | --- | --- |
-| 型号 | OPPO PLJ110 | `adb devices -l`（真机实测） |
-| Android 版本 | 17（SDK 37） | `getprop`（真机实测） |
-| 屏幕 | 1080×2374，物理密度 560，override 480 | `wm size` / `wm density`（真机实测） |
-| 目标 App | 微信，会话「文件传输助手」 | 截图与 `topResumedActivity`（真机实测） |
-| 微信版本 | **未取到** | 验证结束后 `adb devices` 已无设备，`dumpsys package` 无法读取；不写推断值 |
-| 读屏模型 | `deepseek-flash` | ScreenAgent 启动日志（真机实测） |
-| 抽取引擎 | `engine=llm`（DeepSeek） | `extraction_result.json`（真机实测） |
+| Model | OPPO PLJ110 | `adb devices -l` (measured on device) |
+| Android version | 17 (SDK 37) | `getprop` (measured on device) |
+| Screen | 1080×2374, physical density 560, override 480 | `wm size` / `wm density` (measured on device) |
+| Target App | WeChat, conversation 「文件传输助手」 | screenshots and `topResumedActivity` (measured on device) |
+| WeChat version | **not obtained** | after verification `adb devices` showed no device, so `dumpsys package` could not be read; no inferred value was written |
+| Screen-reading model | `deepseek-flash` | ScreenAgent startup log (measured on device) |
+| Extraction engine | `engine=llm` (DeepSeek) | `extraction_result.json` (measured on device) |
 
-> 版本订正：该机实际为 **Android 17（API 37）**。`uiautomator2` 3.7.1 在 Android 17
-> 上首次 `deviceInfo` RPC 会报 `ApplicationSharedMemory not initialized`
-> （openatx/uiautomator2#1209），因此本机真机读取走 `SCREEN_DRIVER=adb_dump` 回退驱动；
-> 这是 Android 17 设备记录，不是 Android 16。仓库中没有另一台 Android 16 真机的测试记录。
+> Version correction: the device is actually **Android 17 (API 37)**. `uiautomator2` 3.7.1 on Android 17
+> reports `ApplicationSharedMemory not initialized` on the first `deviceInfo` RPC
+> (openatx/uiautomator2#1209), so real-device reading on this device uses the `SCREEN_DRIVER=adb_dump` fallback driver;
+> this is an Android 17 device record, not Android 16. The repository has no test record for another Android 16 real device.
 
-## 2. 时间线
+## 2. Timeline
 
-| 阶段 | 时间 | 运行目录 | 结果 |
+| Stage | Time | Run directory | Result |
 | --- | --- | --- | --- |
-| 首轮（修复前） | 2026-11-18 13:19:36 | 本地证据已清理 | 10 步全部为 swipe，`timeout`，**0 条消息**，81.42 s |
-| 修复后第一次 | 约 13:26 | 本地证据已清理 | 设备侧读取成功；测试脚本保存 JSON 时因 `datetime` 不可序列化报错，结果未落盘 |
-| 修复后复跑 | 2026-11-18 13:28:27 | 本地证据已清理 | 10 条消息，`timeout` + `partial=true`，105.59 s |
-| 端到端抽取 | 2026-11-18 13:47:38 | 本地证据已清理 | 3 步，`done`，读到目标消息；LLM 抽取 3 条记录，目标记录时间正确 |
+| First round (before fix) | 2026-11-18 13:19:36 | local evidence cleaned up | 10 steps all swipe, `timeout`, **0 messages**, 81.42 s |
+| First run after fix | about 13:26 | local evidence cleaned up | device-side read succeeded; the test script errored while saving JSON because `datetime` was not serializable, so the result was not written to disk |
+| Rerun after fix | 2026-11-18 13:28:27 | local evidence cleaned up | 10 messages, `timeout` + `partial=true`, 105.59 s |
+| End-to-end extraction | 2026-11-18 13:47:38 | local evidence cleaned up | 3 steps, `done`, target message read; LLM extracted 3 records, target record time correct |
 
-首轮的根因是三处缺陷：
+The root causes of the first round were three defects:
 
-1. `screen_agent._observe` 对 swipe/scroll 只要求“一句话描述界面”，不输出消息正文。
-2. 滚动观察没有触发 OCR（`ocr_triggered=false`），模型概括丢失后没有文本兜底。
-3. `MobileChatConnector.fetch` 在 `timeout` 时直接抛错，已归档的观察被丢弃。
+1. `screen_agent._observe` required only "a one-sentence description of the interface" for swipe/scroll, not the message body.
+2. Scroll observation did not trigger OCR (`ocr_triggered=false`); when the model's summary lost content, there was no text fallback.
+3. `MobileChatConnector.fetch` threw directly on `timeout`, discarding already-archived observations.
 
-修复后：滚动观察要求逐条列出消息，并叠加 OCR 文本；`timeout` 返回部分观察并标记 `partial=true`、`last_status=timeout`。
+After the fix: scroll observation requires listing messages one by one and overlays OCR text; `timeout` returns partial observations marked `partial=true`, `last_status=timeout`.
 
-## 3. 关键数字对照
+## 3. Key Numbers Comparison
 
-| 指标 | 首轮（修复前） | 修复后（复跑） | 端到端抽取 |
+| Metric | First round (before fix) | After fix (rerun) | End-to-end extraction |
 | --- | --- | --- | --- |
-| 返回消息条数 | 0 | **10** | 3（2 条观察 + 1 条 `任务完成`） |
-| observation 总字符 | 216 | **1751** | 1738 |
-| 总耗时 | 81.42 s | 105.59 s | 28.91 s（读取）+ 3.35 s（抽取） |
-| 平均每步 | 8.14 s | 10.56 s | 9.64 s |
-| OCR 总开销 | 0 | **26.27 s** | 5.22 s |
-| 抽取候选 | 0 | 0 | 3 条记录 |
-| 结束状态 | `timeout`，结果丢弃 | `timeout`，`partial=true` | `done`，`partial=false` |
+| Returned messages | 0 | **10** | 3 (2 observations + 1 `任务完成`) |
+| Total observation characters | 216 | **1751** | 1738 |
+| Total time | 81.42 s | 105.59 s | 28.91 s (reading) + 3.35 s (extraction) |
+| Average per step | 8.14 s | 10.56 s | 9.64 s |
+| Total OCR cost | 0 | **26.27 s** | 5.22 s |
+| Extraction candidates | 0 | 0 | 3 records |
+| End status | `timeout`, result discarded | `timeout`, `partial=true` | `done`, `partial=false` |
 
-### 3.1 首轮每步耗时（真机实测，单位 s）
+### 3.1 First-Round Per-Step Timings (measured on device, unit s)
 
-| 步 | 动作 | 决策 | 执行 | 观察 | OCR |
+| Step | Action | Decision | Execution | Observation | OCR |
 | --- | --- | --- | --- | --- | --- |
 | 1 | swipe | 3.71 | 1.96 | 2.95 | — |
 | 2 | swipe | 2.99 | 1.94 | 3.03 | — |
@@ -72,9 +72,9 @@
 | 9 | swipe | 2.74 | 1.96 | 2.64 | — |
 | 10 | swipe | 2.54 | 1.94 | 3.05 | — |
 
-### 3.2 修复后每步耗时（真机实测，单位 s）
+### 3.2 Post-Fix Per-Step Timings (measured on device, unit s)
 
-| 步 | 动作 | 决策 | 执行 | 观察 | OCR |
+| Step | Action | Decision | Execution | Observation | OCR |
 | --- | --- | --- | --- | --- | --- |
 | 1 | swipe | 2.36 | 1.98 | 11.79 | 7.33 |
 | 2 | swipe | 2.49 | 1.93 | 7.55 | 4.70 |
@@ -87,161 +87,161 @@
 | 9 | swipe | 2.73 | 1.94 | 3.52 | 0.90 |
 | 10 | swipe | 2.17 | 1.95 | 3.63 | 1.17 |
 
-第 1 步 OCR 含模型首次加载，7.33 s；后续稳定在 0.90–4.70 s。
+Step 1 OCR includes the model's first load, 7.33 s; afterwards it stabilizes at 0.90–4.70 s.
 
-### 3.3 端到端每步耗时（真机实测，单位 s）
+### 3.3 End-to-End Per-Step Timings (measured on device, unit s)
 
-| 步 | 动作 | 决策 | 执行 | 观察 | OCR |
+| Step | Action | Decision | Execution | Observation | OCR |
 | --- | --- | --- | --- | --- | --- |
 | 1 | swipe | 2.88 | 1.96 | 8.19 | 4.25 |
 | 2 | swipe | 2.47 | 1.95 | 5.10 | 0.97 |
 | 3 | finish | 3.38 | 0.00 | — | — |
 
-### 3.4 LLM 调用与成本
+### 3.4 LLM Calls and Cost
 
-| 环节 | 调用次数 | prompt token | completion token | 合计 token | 成本 USD | 耗时 |
+| Stage | Calls | prompt token | completion token | Total token | Cost USD | Time |
 | --- | --- | --- | --- | --- | --- | --- |
-| 抽取链路（规划 + 抽取） | 2 | 1043 | 379 | 1422 | 0.000699 | 3.35 s |
-| 读屏视觉模型 | 5（推断） | 未统计 | 未统计 | 未统计 | 未统计 | 计入读取耗时 |
+| Extraction chain (planning + extraction) | 2 | 1043 | 379 | 1422 | 0.000699 | 3.35 s |
+| Screen-reading vision model | 5 (inferred) | not counted | not counted | not counted | not counted | included in reading time |
 
-- 抽取链路的 token/成本来自 `UsageTracker`（真机实测）。
-- 读屏调用次数由 3 次决策 + 2 次观察推断；视觉模型未接入 token 统计，**不能给出 token 与成本**。
+- Extraction-chain token/cost comes from `UsageTracker` (measured on device).
+- Screen-reading calls are inferred from 3 decisions + 2 observations; the vision model is not connected to token statistics, so **token and cost cannot be given**.
 
-## 4. 原文与抽取结果对照
+## 4. Original Text and Extraction Result Comparison
 
-### 4.1 实际读到的原文
+### 4.1 Original Text Actually Read
 
-VLM 转写（真机实测）：
+VLM transcription (measured on device):
 
 > 机器学习作业三，11.29 晚上 23.59 交到 Moodle
 
-OCR 转写（真机实测）：
+OCR transcription (measured on device):
 
 > 机器学习作业三，11.29晚上23.59
 > 交到 Moodle
 
-差异只在空格与换行，文字内容一致。发送者为用户本人（绿色气泡），时间 13:39。
+The difference is only spaces and line breaks; the text content is identical. The sender is the user themselves (green bubble), time 13:39.
 
-同屏还有两条旧消息（`llm 的 ddl 是 11.31`、`多媒体 project 的截止日期是 10 月 21`），下方 13:43 是一张课程表图片（COMP7415 / COMP7503），图片本身不含截止时间。
+The same screen also has two old messages (`llm 的 ddl 是 11.31`, `多媒体 project 的截止日期是 10 月 21`), and below at 13:43 is a course-timetable image (COMP7415 / COMP7503); the image itself contains no deadline.
 
-### 4.2 目标记录
+### 4.2 Target Record
 
-| 字段 | 值 | 判定 |
+| Field | Value | Judgement |
 | --- | --- | --- |
-| 任务名 | 机器学习作业三 | 正确 |
-| 课程 | `null` | 原文未给课程代码；未从相邻图片硬推，标空是合理选择，但需要人工补全 |
-| 截止时间 | `2026-11-29T23:59:00+08:00` | 正确 |
-| 状态 | `confirmed` | 时间明确，合理 |
-| 置信度 | 0.95 | — |
-| 是否需要复核 | 时间不需要；**课程字段需要** | 人工补全课程归属 |
-| 来源 | `wechat-filehelper (student_chat)` | — |
-| 证据 | `wechat-filehelper-step-002:llm3` | 对应第 2 步观察 |
+| Task name | 机器学习作业三 | correct |
+| Course | `null` | the original text gives no course code; it was not forced from the adjacent image; leaving it empty is a reasonable choice, but manual completion is needed |
+| Deadline | `2026-11-29T23:59:00+08:00` | correct |
+| Status | `confirmed` | the time is explicit, reasonable |
+| Confidence | 0.95 | — |
+| Needs review | time no; **course field yes** | manually complete the course attribution |
+| Source | `wechat-filehelper (student_chat)` | — |
+| Evidence | `wechat-filehelper-step-002:llm3` | corresponds to the step 2 observation |
 
-**一致性检查（真机实测 + 推断）**
+**Consistency checks (measured on device + inferred)**
 
-| 检查项 | 结果 |
+| Check | Result |
 | --- | --- |
-| `11.29` → `11-29` | 一致 |
-| `23.59` → `23:59` | 一致 |
-| 年份 | 原文没有年份；按当前日期推断为 2026（**推断，不是原文事实**） |
-| 时区 | `+08:00`（Asia/Shanghai），无偏移 |
-| 日期是否越界/错日 | 未发现 |
+| `11.29` → `11-29` | consistent |
+| `23.59` → `23:59` | consistent |
+| Year | the original text has no year; inferred as 2026 from the current date (**inference, not a fact from the original text**) |
+| Time zone | `+08:00` (Asia/Shanghai), no offset |
+| Whether the date is out of range/wrong day | not found |
 
-### 4.3 同屏其他记录
+### 4.3 Other Records on the Same Screen
 
-| 任务名 | 截止时间 | 状态 | 置信度 | 说明 |
+| Task name | Deadline | Status | Confidence | Notes |
 | --- | --- | --- | --- | --- |
-| llm 的 ddl | `null` | `uncertain` | 0.4 | 原文 `11.31` 不是合法日期，未编造时间，标记交人工 |
-| 多媒体 project | `null` | `uncertain` | 0.4 | 原文只说 `10 月 21`；模型把同屏课程表里的 `COMP7503` 关联了进来，属于过度关联 |
+| llm 的 ddl | `null` | `uncertain` | 0.4 | the original `11.31` is not a valid date; no time was fabricated, marked for manual review |
+| 多媒体 project | `null` | `uncertain` | 0.4 | the original only says `10 月 21`; the model associated `COMP7503` from the timetable on the same screen, which is over-association |
 
-这两条不是本次目标消息；保留它们是为了说明抽取器会在同一段观察里处理相邻消息，并暴露过度关联问题。
+These two are not the target message of this run; they are kept to show that the extractor processes adjacent messages in the same observation and to expose the over-association problem.
 
-### 4.4 2026-11-23 三群复跑（demo 与 launcher）
+### 4.4 2026-11-23 Three-Group Rerun (demo and launcher)
 
-复跑主提交 `1e38364`（PR #27 之前），只读；产物在 `runs/_verify/live2_20261123/`。开始前 adb 曾 offline，执行一次 `adb reconnect` 后恢复。
+Rerun on main commit `1e38364` (before PR #27), read-only; artifacts in `runs/_verify/live2_20261123/`. Before starting, adb was offline once and recovered after one `adb reconnect`.
 
-| 运行 | 退出码 | 耗时 | 来源与抓取量 | 记录 |
+| Run | Exit code | Duration | Sources and fetch counts | Records |
 | --- | --- | --- | --- | --- |
-| `demo --live` | 0 | 329.1 s | COMP7503 作业通知群 42 / COMP7415 课程群 137 / 2026 计算机班级群 192；候选 18 / 0 / 14 | 3 条：**2 confirmed / 1 uncertain** |
-| launcher 单次 | 0 | 289.4 s | 3 个来源成功；抓取 29 / 132 / 192 | 3 条：**2 confirmed / 1 uncertain** |
+| `demo --live` | 0 | 329.1 s | COMP7503 作业通知群 42 / COMP7415 课程群 137 / 2026 计算机班级群 192; candidates 18 / 0 / 14 | 3 records: **2 confirmed / 1 uncertain** |
+| launcher single run | 0 | 289.4 s | 3 sources succeeded; fetched 29 / 132 / 192 | 3 records: **2 confirmed / 1 uncertain** |
 
-两次产物的 3 条记录逐条一致：
+The 3 records from the two artifacts are identical one by one:
 
-| 任务 | 课程 | 截止时间 | 状态 | 置信度 | 依据（`data.json` 的 `note`） |
+| Task | Course | Deadline | Status | Confidence | Basis (`note` in `data.json`) |
 | --- | --- | --- | --- | --- | --- |
-| 操作系统作业一 | COMP7503 | `2026-11-26T23:59:00+08:00` | `confirmed` | 0.95 | 同源更正/延期，采用最新一条生效值；旧值 11.28 保留在 `superseded_by`，未并列输出 |
-| 机器学习作业三 | COMP7503 | `null` | `uncertain` | 0.40 | 抽取置信度不足，标记 `uncertain` 交人工 |
-| 实验报告二 | `null` | `2026-11-22T23:59:00+08:00` | `confirmed` | 0.95 | 所有来源一致 |
+| 操作系统作业一 | COMP7503 | `2026-11-26T23:59:00+08:00` | `confirmed` | 0.95 | same-source correction/extension, taking the latest effective value; the old value 11.28 is kept in `superseded_by` and not output side by side |
+| 机器学习作业三 | COMP7503 | `null` | `uncertain` | 0.40 | extraction confidence insufficient, marked `uncertain` for manual review |
+| 实验报告二 | `null` | `2026-11-22T23:59:00+08:00` | `confirmed` | 0.95 | all sources consistent |
 
-- 产物：`runs/_verify/live2_20261123/demo_out/{data.json,deadlines.ics,calendar.html}`、`launcher_out/{data.json,deadlines.ics,calendar.html}`、`summary.json`。
-- `write_phone_calendar=false`，本轮未写手机日历。
-- 与 4.2/4.3 的关系：4.2/4.3 是 2026-11-18 自聊旧记录（1 confirmed / 2 uncertain）；4.4 是 2026-11-23 三群复跑（2 confirmed / 1 uncertain）。两批消息不同，**不得合并或用一个数覆盖另一个**。
+- Artifacts: `runs/_verify/live2_20261123/demo_out/{data.json,deadlines.ics,calendar.html}`, `launcher_out/{data.json,deadlines.ics,calendar.html}`, `summary.json`.
+- `write_phone_calendar=false`; this round did not write the phone calendar.
+- Relationship with 4.2/4.3: 4.2/4.3 are the old 2026-11-18 self-chat records (1 confirmed / 2 uncertain); 4.4 is the 2026-11-23 three-group rerun (2 confirmed / 1 uncertain). The two batches of messages differ and **must not be merged or have one number overwrite the other**.
 
-**QQ 向上找回记录订正**：`summary.json` 的 `item3_qq_navigation.scroll_up_recovery_passed` 为 `false`。该轮在步骤 3–6 掉头向上后，步骤 7 误判“向上滚动到顶”并放弃，随后视觉模型改向下滚并点开“展示最近不活跃的群(13)”，最终未回到目标群（单轮运行目录已清理，保留探针证据 `runs/_verify/live_20261123/qq_scrollup_probe.json`）。该失败发生在 PR #27 之前；PR #27 改为画面哈希/OCR 文本集合连续两次判顶并锁定方向，但其修复后的真机复跑证据不在本次产物目录，不能把本轮记作 #27 已验证。
+**QQ scroll-up recovery correction**: `item3_qq_navigation.scroll_up_recovery_passed` in `summary.json` is `false`. In that run, after turning upward at steps 3–6, step 7 misjudged "scrolled up to the top" and gave up; the vision model then changed to scrolling down and tapped 「展示最近不活跃的群(13)」, ultimately not returning to the target group (the single-run directory has been cleaned up; the probe evidence is retained at `runs/_verify/live_20261123/qq_scrollup_probe.json`). This failure occurred before PR #27; PR #27 changed to judging the top twice consecutively via frame hash/OCR text-set and locking the direction, but post-fix real-device rerun evidence is not in this artifact directory, so this round cannot be recorded as #27 verified.
 
-## 5. 发现的问题
+## 5. Problems Found
 
-1. **过度关联**：`多媒体 project` 被填上 `COMP7503`。依据只是同一屏下方的课程表图片，原文没有建立“多媒体 project = COMP7503”的关系。该记录已标 `uncertain`，但字段仍可能误导，复查时应清空或要求显式证据。
-   - 后续修复已加入硬性证据校验：课程名与截止时间必须在该条消息自己的正文中找到字串或等价归一化形式，否则置空并标 `needs_review`。本报告保留当时的实际输出，用于对照修复前行为。
-2. **非法日期处理正确**：`11.31` 没有对应日期，抽取结果保持 `deadline_iso=null`、`status=uncertain`，没有静默改写成 `11.30` 或 `12.01`。
-3. **测试脚本的序列化问题**：修复后第一次运行（13:26）设备侧已经读到消息，但保存 JSON 时 `datetime` 无法序列化，导致汇总文件未生成。修正脚本的 `json.dumps(..., default=str)` 后复跑。该问题属于验证脚本，不是产品链路；复跑结果见 3.2。
-4. **OCR 噪声**：OCR 会带入状态栏时间、电量、标题栏等系统文字；当前用 prompt 要求忽略，但文本里仍然存在。抽取器没有把它们当成 DDL，属于可接受噪声，但会增加 token。
-5. **同屏多消息**：一次 observation 可能包含多条历史消息，抽取器会全部处理；本次目标记录正确，但相邻消息增加了误抽取面。
+1. **Over-association**: `多媒体 project` was filled with `COMP7503`. The only basis was the timetable image lower on the same screen; the original text did not establish the relation "多媒体 project = COMP7503". That record is marked `uncertain`, but the field may still mislead, and a review should clear it or require explicit evidence.
+   - A later fix added a hard evidence check: the course name and deadline must be found as a string or an equivalent normalized form in that message's own body, otherwise they are cleared and marked `needs_review`. This report keeps the actual output at the time for comparison with pre-fix behavior.
+2. **Invalid date handled correctly**: `11.31` has no corresponding date; the extraction result keeps `deadline_iso=null`, `status=uncertain`, and does not silently rewrite it to `11.30` or `12.01`.
+3. **Serialization problem in the test script**: in the first run after the fix (13:26), the device side had already read messages, but `datetime` could not be serialized when saving JSON, so the summary file was not generated. After changing the script to `json.dumps(..., default=str)` and rerunning, it worked. This problem belongs to the verification script, not the product path; the rerun results are in 3.2.
+4. **OCR noise**: OCR brings in system text such as the status-bar time, battery and title bar; the prompt currently asks to ignore it, but it is still present in the text. The extractor does not treat it as a DDL, which is acceptable noise, but it increases tokens.
+5. **Multiple messages on one screen**: one observation may contain several historical messages, and the extractor processes all of them; the target record this time was correct, but adjacent messages increase the surface for mis-extraction.
 
-## 6. 只读与安全约束
+## 6. Read-Only and Safety Constraints
 
-| 约束 | 执行情况 |
+| Constraint | Execution |
 | --- | --- |
-| 不发送消息 | 未发送；三次运行的实际动作只有 swipe 与 finish |
-| 不输入聊天内容 | `type` 被拦截器禁止；实际未触发 |
-| 不点发送/回车 | `send` / `press_enter` 被拦截器禁止；实际未触发 |
-| 不改联系人 | 未进入联系人编辑页面 |
-| 不写真实日历/正式 xlsx | 只写本地临时输出目录（不入库） |
-| 设备锁 | 每次通过 `device_lock` 获取；运行结束检查为 `LOCK_RELEASED` |
-| 明文密钥 | 未写入任何报告或产物 |
-| 隐私事件 | 首次启动微信时直接落在用户与某联系人的私聊页；该截图已删除（回收站），未读取、未抽取、未写入报告。后续改为先回到聊天列表再搜索「文件传输助手」 |
+| Do not send messages | not sent; the actual actions in the three runs were only swipe and finish |
+| Do not type chat content | `type` is blocked by the interceptor; not triggered in practice |
+| Do not tap send/Enter | `send` / `press_enter` are blocked by the interceptor; not triggered in practice |
+| Do not modify contacts | never entered the contact-edit page |
+| Do not write the real calendar/formal xlsx | only wrote to a local temporary output directory (not committed) |
+| Device lock | acquired through `device_lock` each time; the check at the end of the run was `LOCK_RELEASED` |
+| Plaintext keys | not written into any report or artifact |
+| Privacy incident | the first WeChat launch landed directly on the private-chat page between the user and a contact; that screenshot was deleted (recycle bin) and was not read, extracted, or written into the report. Afterwards the flow was changed to return to the chat list first and then search 「文件传输助手」 |
 
-## 7. 验证边界（明确未验证）
+## 7. Verification Boundaries (explicitly unverified)
 
-先区分“能力存在”与“已真机验证”：
+First distinguish "capability exists" from "verified on a real device":
 
-| 能力 | 代码/单测状态 | 真机验证状态 |
+| Capability | Code/unit-test status | Real-device verification status |
 | --- | --- | --- |
-| 微信手机读屏 | 存在，单测覆盖解析与超时部分结果 | 2026-11-18 自聊 1 次；2026-11-23 三群 demo/launcher 各 1 次 |
-| QQ 手机读屏 | 包名映射与通用读屏路径存在 | 仅一次向上找回 probe，且失败（PR #27 前）；其余未验证 |
-| Outlook 手机读屏 | 包名映射与通用读屏路径存在 | **未验证** |
-| monitor 单进程读屏→抽取 | 代码与单测存在 | launcher 单次跑通（3 群、3 条记录）；monitor 专项未单独验证 |
-| 手机系统日历写入 | 已按只读约束禁用 | **不提供**（`PhoneCalendarWriter` 始终跳过） |
+| WeChat phone screen reading | exists; unit tests cover parsing and partial results on timeout | 2026-11-18 self-chat 1 run; 2026-11-23 three groups, demo/launcher 1 run each |
+| QQ phone screen reading | package-name mapping and the generic screen-reading path exist | only one scroll-up recovery probe, which failed (before PR #27); the rest unverified |
+| Outlook phone screen reading | package-name mapping and the generic screen-reading path exist | **unverified** |
+| monitor single-process screen reading→extraction | code and unit tests exist | launcher single run passed (3 groups, 3 records); the monitor-specific path was not verified separately |
+| Phone system calendar writing | disabled by the read-only constraint | **not provided** (`PhoneCalendarWriter` always skips) |
 
-- **单机单系统**：只测了一台 OPPO PLJ110 / Android 17（`adb_dump` 回退），没有第二台设备或系统版本对照。
-- **单账号、两批场景**：2026-11-18 只测一个微信账号的「文件传输助手」自聊；2026-11-23 测同一账号的 3 个真实群（COMP7503 作业通知群、COMP7415 课程群、2026 计算机班级群），第三方私聊未测。
-- **QQ 仅一次失败 probe**：2026-11-23 的 QQ 向上找回子项在 PR #27 之前运行，`scroll_up_recovery_passed=false`；没有 #27 之后的真机复跑证据。Outlook 未测。
-- **微信版本未知**：验证后设备断开，未能读取 `versionName`。
-- **未测图片型 DDL**：同屏有课程表图片，但图片不含截止时间；没有验证“只靠图片里的截止时间”能否抽取。
-- **导航不是 Agent 自主完成**：微信由 ADB 手动打开，目标会话通过搜索/粘贴定位；ScreenAgent 负责滚动到最新、读屏与 OCR。未验证 Agent 自主搜索并进入会话。
-- **读取与抽取分两步执行**：先用 `read_latest.py` 把真机观察落盘，再用 `extract_e2e.py` 通过 `CapturedSource` 喂给 `DdlAgent`；不是单进程从设备直达 writer。链路数据是真实真机数据，但进程是分开的。
-- **单次运行**：耗时与 token 都是单次结果，没有重复 3 次取均值，不能当作稳定性能指标。
-- **视觉模型 token 未统计**：只统计了抽取链路的 2 次调用；读屏的 5 次调用 token/成本未知。
-- **未写真实日历**：`.ics` 与手机系统日历写入未在本轮验证。
+- **Single device, single system**: only one OPPO PLJ110 / Android 17 (`adb_dump` fallback) was tested; there is no second device or OS version for comparison.
+- **Single account, two batches of scenarios**: 2026-11-18 tested only one WeChat account's 「文件传输助手」 self-chat; 2026-11-23 tested 3 real groups of the same account (COMP7503 作业通知群, COMP7415 课程群, 2026 计算机班级群); third-party private chats were not tested.
+- **QQ only one failed probe**: the 2026-11-23 QQ scroll-up recovery sub-item ran before PR #27 with `scroll_up_recovery_passed=false`; there is no real-device rerun evidence after #27. Outlook was not tested.
+- **WeChat version unknown**: the device disconnected after verification, so `versionName` could not be read.
+- **Image-type DDL not tested**: there is a timetable image on the same screen, but the image contains no deadline; whether a deadline that exists only in an image can be extracted was not verified.
+- **Navigation is not done autonomously by the Agent**: WeChat was opened manually via ADB, and the target conversation was located by search/paste; ScreenAgent is responsible for scrolling to the latest, screen reading and OCR. The Agent autonomously searching for and entering a conversation was not verified.
+- **Reading and extraction run as two steps**: first `read_latest.py` persists the real-device observation, then `extract_e2e.py` feeds it to `DdlAgent` through `CapturedSource`; it is not a single process from device straight to writer. The pipeline data is real real-device data, but the processes are separate.
+- **Single run**: timings and tokens are single-run results, not repeated 3 times and averaged, and cannot be treated as stable performance metrics.
+- **Vision-model tokens not counted**: only the 2 calls of the extraction chain were counted; the token/cost of the 5 screen-reading calls is unknown.
+- **Real calendar not written**: `.ics` and phone system calendar writing were not verified in this round.
 
-## 8. 证据路径
+## 8. Evidence Paths
 
-证据目录在本地 `runs/` 下，已被 `.gitignore` 忽略（`runs/`），不随仓库提交：
+The evidence directories are under local `runs/` and are ignored by `.gitignore` (`runs/`), so they are not committed with the repository:
 
-| 内容 | 路径 |
+| Content | Path |
 | --- | --- |
-| 2026-11-23 demo 产物 | `runs/_verify/live2_20261123/demo_out/{data.json,deadlines.ics,calendar.html}` |
-| 2026-11-23 launcher 产物 | `runs/_verify/live2_20261123/launcher_out/{data.json,deadlines.ics,calendar.html}` |
-| 2026-11-23 汇总与 QQ 子项 | `runs/_verify/live2_20261123/summary.json`、`runs/_verify/live_20261123/qq_scrollup_probe.json` |
-| 2026-11-24 本轮只读复验 | `runs/verify2_20261124/`（截图、OCR、跳过 dump、只读拒绝、未定位失败、清理策略） |
+| 2026-11-23 demo artifacts | `runs/_verify/live2_20261123/demo_out/{data.json,deadlines.ics,calendar.html}` |
+| 2026-11-23 launcher artifacts | `runs/_verify/live2_20261123/launcher_out/{data.json,deadlines.ics,calendar.html}` |
+| 2026-11-23 summary and QQ sub-item | `runs/_verify/live2_20261123/summary.json`, `runs/_verify/live_20261123/qq_scrollup_probe.json` |
+| 2026-11-24 read-only re-verification of this round | `runs/verify2_20261124/` (screenshots, OCR, skipped dump, read-only rejection, not-located failure, cleanup policy) |
 
-2026-11-18 首轮与端到端运行的逐步截图、`read_result.json`、`extraction_result.json` 等中间产物已在本地清理（`runs/` 不入库）；上表对应的结论仍保留在正文中。
+The step-by-step screenshots, `read_result.json`, `extraction_result.json` and other intermediate artifacts of the 2026-11-18 first round and end-to-end runs have been cleaned up locally (`runs/` is not committed); the conclusions corresponding to the table above remain in the body text.
 
-## 9. 结论
+## 9. Conclusion
 
-- 修复后，屏幕文字可以进入 observation 并进入抽取链路：消息条数 0 → 10，目标消息被正确抽出。
-- 2026-11-23 三群复跑：demo 与 launcher 均产出 3 条记录（**2 confirmed / 1 uncertain**），两次明细一致；这是与 2026-11-18 自聊（1 confirmed / 2 uncertain）不同的另一批消息。
-- 2026-11-23 的 QQ 向上找回子项失败（`scroll_up_recovery_passed=false`，PR #27 之前），不能记为该能力已验证。
-- 目标记录时间 `2026-11-29T23:59:00+08:00` 与原文一致，时区无偏移；课程字段为空，需要人工补全。
-- 仍存在过度关联问题（`COMP7503` 被关联到 `多媒体 project`），当前靠 `uncertain` 暴露，不能视为可靠结果。
-- 覆盖范围仍有限：单机、单账号；真实群聊只覆盖 3 个配置群；QQ 修复后、Outlook、图片型 DDL 与稳定性统计均未验证。
+- After the fix, screen text can enter the observation and the extraction pipeline: messages 0 → 10, and the target message is correctly extracted.
+- 2026-11-23 three-group rerun: both demo and launcher produce 3 records (**2 confirmed / 1 uncertain**), and the two details agree; this is a different batch of messages from the 2026-11-18 self-chat (1 confirmed / 2 uncertain).
+- The 2026-11-23 QQ scroll-up recovery sub-item failed (`scroll_up_recovery_passed=false`, before PR #27) and cannot be recorded as that capability verified.
+- The target record time `2026-11-29T23:59:00+08:00` matches the original text with no time-zone offset; the course field is empty and needs manual completion.
+- The over-association problem still exists (`COMP7503` associated with `多媒体 project`); it is currently exposed via `uncertain` and cannot be regarded as a reliable result.
+- Coverage remains limited: single device, single account; real group chats cover only 3 configured groups; post-fix QQ, Outlook, image-type DDL and stability statistics are all unverified.

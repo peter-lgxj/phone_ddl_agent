@@ -1,65 +1,65 @@
-# baseline 接入说明
+# Baseline Integration Guide
 
-本目录只提供**适配层**，不包含任何对比系统的代码。三个对比系统需要各自克隆、按其官方方式安装，
-再由这里的 wrapper 以统一协议交给 `experiments/run_experiment.py` 调度。
+This directory provides only the **adapter layer** and contains no comparison-system code. The three comparison systems must each be cloned and installed in their official way,
+then handed to `experiments/run_experiment.py` for scheduling through the wrappers here under a unified protocol.
 
-> 三个系统的入口、参数与输出格式已按上游仓库代码核对，但本机没有真机、依赖与密钥，
-> **命令未实跑**。协议层只用假上游做过离线测试。
+> The entry points, arguments and output formats of the three systems have been checked against the upstream repository code, but this machine has no real device, dependencies or keys,
+> so **the commands have not actually been run**. The protocol layer has only been tested offline with fake upstreams.
 
-## 协议
+## Protocol
 
-wrapper 必须：
+A wrapper must:
 
-1. 从 stdin 读取一行 JSON：`{"task": "任务描述", "apps": ["微信", "高德地图"]}`
-   - `task` 必填；`apps` 可选，来自 `experiments/tasks.json` 的 `apps` 字段（AppAgent 用它作为 `--app`）
-2. 驱动对应系统执行该任务
-3. 在 stdout 最后一行输出 JSON：
+1. Read one line of JSON from stdin: `{"task": "任务描述", "apps": ["微信", "高德地图"]}`
+   - `task` is required; `apps` is optional and comes from the `apps` field in `experiments/tasks.json` (AppAgent uses it as `--app`)
+2. Drive the corresponding system to execute the task
+3. Output JSON on the last line of stdout:
    `{"summary": "...", "steps": 12, "elapsed": 45.6, "returncode": 0, "upstream_status": "finished", "command": [...]}`
-   - `summary` 必填；`steps` / `elapsed` 可省略（省略时由适配器计时）
-   - `upstream_status` 是复盘线索（见下表），**不参与 success 判定**
-4. 正常结束退出码为 0，异常为非 0（适配器会把非 0 视为失败）
+   - `summary` is required; `steps` / `elapsed` may be omitted (the adapter times them when omitted)
+   - `upstream_status` is a debugging clue (see the table below) and **does not participate in the success judgement**
+4. Exit code 0 on normal completion, non-0 on exception (the adapter treats non-0 as failure)
 
-## 已接入的三个 wrapper
+## The three integrated wrappers
 
-三个系统都不需要再改 `build_command()`；仍可用 `<SYSTEM>_CMD` 整体覆盖命令（支持 `{task}` 占位），
-用 `BASELINE_STEP_MARKER` 覆盖步骤标记。
+None of the three systems needs further changes to `build_command()`; you can still override the whole command with `<SYSTEM>_CMD` (supports the `{task}` placeholder),
+and override the step marker with `BASELINE_STEP_MARKER`.
 
-| 系统 | 环境变量 | 默认命令 | 步骤统计 | `upstream_status` 来源 |
+| System | Environment variables | Default command | Step counting | `upstream_status` source |
 |---|---|---|---|---|
-| Open-AutoGLM | `OPEN_AUTOGLM_DIR`，可选 `OPEN_AUTOGLM_MAX_STEPS` | `python main.py [--device-id $ANDROID_SERIAL] [--max-steps N] "<task>"` | 含 `🎯` 的行 | 结尾 `Result:` → `finished` / `max_steps` |
-| Mobile-Agent-v2 | `MOBILE_AGENT_V2_DIR` | `python run.py`（无 CLI 参数） | 含 ` Decision ` 的标题行 | 出现 `### Action ### Stop` → `stopped` |
-| AppAgent | `APPAGENT_DIR`，可选 `APPAGENT_APP` / `APPAGENT_STDIN` | `python run.py --app <apps[0]>` | 含 `Round ` 的行 | 结束文案 → `completed` / `max_rounds` / `unexpected` |
+| Open-AutoGLM | `OPEN_AUTOGLM_DIR`, optional `OPEN_AUTOGLM_MAX_STEPS` | `python main.py [--device-id $ANDROID_SERIAL] [--max-steps N] "<task>"` | Lines containing `🎯` | Trailing `Result:` → `finished` / `max_steps` |
+| Mobile-Agent-v2 | `MOBILE_AGENT_V2_DIR` | `python run.py` (no CLI arguments) | Title lines containing ` Decision ` | `### Action ### Stop` appears → `stopped` |
+| AppAgent | `APPAGENT_DIR`, optional `APPAGENT_APP` / `APPAGENT_STDIN` | `python run.py --app <apps[0]>` | Lines containing `Round ` | Closing message → `completed` / `max_rounds` / `unexpected` |
 
 ### Open-AutoGLM
 
-- 上游：`github.com/zai-org/Open-AutoGLM`
-- 任务以**位置参数**传入（最后一个参数），没有 `--task`；设备用 `--device-id`（wrapper 会读 `ANDROID_SERIAL`）
-- 模型服务用上游自己的 `--base-url` / `--model` / `--apikey`，或 `PHONE_AGENT_BASE_URL` / `PHONE_AGENT_MODEL` / `PHONE_AGENT_API_KEY`
-- 每步打印 `💭 思考：` / `🎯 动作：`；结束时打印 `Result: <message>`，超步数为 `Result: Max steps reached`
+- Upstream: `github.com/zai-org/Open-AutoGLM`
+- The task is passed as a **positional argument** (the last argument); there is no `--task`; the device is selected with `--device-id` (the wrapper reads `ANDROID_SERIAL`)
+- The model service uses upstream's own `--base-url` / `--model` / `--apikey`, or `PHONE_AGENT_BASE_URL` / `PHONE_AGENT_MODEL` / `PHONE_AGENT_API_KEY`
+- Each step prints `💭 思考：` / `🎯 动作：`; at the end it prints `Result: <message>`, and step overflow is `Result: Max steps reached`
 
 ### Mobile-Agent-v2
 
-- 上游：`github.com/X-PLUG/MobileAgent` 的 `Mobile-Agent-v2/` 目录
-- `run.py` **没有命令行参数**：`instruction` / `adb_path` / `API_url` / `token` / `qwen_api` 都写在文件顶部
-- 使用前必须先在 `run.py` 顶部填好这些常量，或设置 `MOBILE_AGENT_V2_CMD` 指向自定义入口；
-  仍为空时 wrapper 会直接报错，避免空任务空跑
-- 每步打印 `### Decision ###` 块（Thought/Action/Operation），截图在 `screenshot/`；动作 `Stop` 结束
+- Upstream: the `Mobile-Agent-v2/` directory of `github.com/X-PLUG/MobileAgent`
+- `run.py` has **no command-line arguments**: `instruction` / `adb_path` / `API_url` / `token` / `qwen_api` are all written at the top of the file
+- Before use, fill in these constants at the top of `run.py`, or set `MOBILE_AGENT_V2_CMD` to point at a custom entry point;
+  if it is still empty, the wrapper fails directly, avoiding an empty run with an empty task
+- Each step prints a `### Decision ###` block (Thought/Action/Operation), screenshots go to `screenshot/`; the `Stop` action ends the task
 
 ### AppAgent
 
-- 上游：`github.com/TencentQQGYLab/AppAgent`（原 `mnotgod96/AppAgent` 已迁移）
-- 入口 `python run.py --app <app>`，其余输入是交互式提示；wrapper 把 `APPAGENT_STDIN`
-  （缺省 `y\n<task>\n`）喂给子进程，对应「无文档库 + 单设备」的提示顺序，环境不同请自行设置
-- 应用名取 stdin JSON 的 `apps[0]`，没有时读 `APPAGENT_APP`
-- 每轮打印 `Round <n>`；日志在 `tasks/task_<app>_<时间戳>/log_*.txt`；结束文案三选一：
+- Upstream: `github.com/TencentQQGYLab/AppAgent` (the original `mnotgod96/AppAgent` has migrated)
+- Entry point is `python run.py --app <app>`, and the remaining input is interactive prompts; the wrapper feeds `APPAGENT_STDIN`
+  (default `y\n<task>\n`) to the child process, corresponding to the "no document library + single device" prompt order; adjust it for different environments
+- The app name is taken from `apps[0]` of the stdin JSON, falling back to `APPAGENT_APP`
+- Each round prints `Round <n>`; logs go to `tasks/task_<app>_<timestamp>/log_*.txt`; the closing message is one of three:
   `Task completed successfully` / `Task finished due to reaching max rounds` / `Task finished unexpectedly`
 
 ## `_common.py`
 
-负责读 stdin（`task` + 可选 `apps`）、校验目录、启动子进程、计时与按协议输出 JSON。
-`status_fn` 只提取上游结束提示，不改写 `success`；`stdin_text` 用于 AppAgent 这类交互式入口。
+Responsible for reading stdin (`task` + optional `apps`), validating directories, launching the child process, timing, and outputting JSON per the protocol.
+`status_fn` only extracts the upstream closing hint and does not rewrite `success`; `stdin_text` is used for interactive entry points such as AppAgent.
 
-## 运行
+## Running
 
 ```bash
 python experiments/run_experiment.py \
@@ -68,12 +68,12 @@ python experiments/run_experiment.py \
   --baseline-command "python experiments/baselines/openautoglm_wrapper.py"
 ```
 
-结果同样写入 `experiments/results/<时间戳>_<tag>/results.jsonl`，`success` 仍需人工按
-`test.md` 第 4 节的标准判定；`upstream_status` 会随 `baseline_raw` 一起落盘，便于复盘。
-Level 3 任务如果 baseline 本身不支持多应用规划，按失败记录即可，这正是 `test.md` 里说明的对比点。
+Results are written to `experiments/results/<timestamp>_<tag>/results.jsonl` in the same way, and `success` still needs manual judgement against
+Section 4 of `test.md`; `upstream_status` is persisted together with `baseline_raw` for review.
+If a Level 3 task is not supported by a baseline's own multi-app planning, just record it as a failure; this is exactly the comparison point explained in `test.md`.
 
-## 测试
+## Tests
 
-`tests/test_baseline_wrappers.py` 用假上游覆盖：缺失目录、退出码透传、步骤/摘要统计、
-Open-AutoGLM 参数拼装、Mobile-Agent-v2 空配置拒绝与 Stop 识别、AppAgent stdin 喂入与状态解析。
-`tests/test_adapter.py` 覆盖 JSON 协议解析与 `apps` 透传。这些测试不依赖真实系统。
+`tests/test_baseline_wrappers.py` uses fake upstreams to cover: missing directory, exit-code passthrough, step/summary statistics,
+Open-AutoGLM argument assembly, Mobile-Agent-v2 empty-config rejection and Stop detection, AppAgent stdin feeding and status parsing.
+`tests/test_adapter.py` covers JSON protocol parsing and `apps` passthrough. These tests do not depend on real systems.

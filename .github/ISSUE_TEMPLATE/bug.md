@@ -1,58 +1,58 @@
 # Bug Issue
 
-> 标题格式：`[P0|P1|P2|P3][area] 简短描述`
-> 例：`[P0][agent] 发送动作被执行两次，微信出现重复消息`
+> Title format: `[P0|P1|P2|P3][area] short description`
+> Example: `[P0][agent] send action executed twice, WeChat shows duplicate messages`
 
-## 1. 现象
+## 1. Symptoms
 
-- 实际发生了什么：
-- 期望是什么：
-- 影响范围（单任务/多应用/实验/Web/CLI）：
-- 是否阻塞实验：是 / 否
+- What actually happened:
+- What was expected:
+- Scope of impact (single task/multi-app/experiment/Web/CLI):
+- Does it block experiments: yes / no
 
-## 2. 环境
+## 2. Environment
 
-| 项 | 值 |
+| Item | Value |
 |---|---|
-| 代码分支 + SHA | |
-| 工作区是否干净 | |
-| Python 版本 | |
-| 手机型号 / Android / ROM | |
-| 分辨率 | |
-| 执行 provider / 模型 | |
-| 规划 provider / 模型 | |
-| 输入框权重（有/无 + sha） | |
-| 是否开语义校正 | |
-| 启动入口（Web/CLI/runner/Streamlit） | |
+| Code branch + SHA | |
+| Whether the working tree is clean | |
+| Python version | |
+| Phone model / Android / ROM | |
+| Resolution | |
+| Execution provider / model | |
+| Planning provider / model | |
+| Input-box weights (present/absent + sha) | |
+| Semantic correction enabled | |
+| Launch entry (Web/CLI/runner/Streamlit) | |
 
-## 3. 复现步骤
+## 3. Reproduction steps
 
 1.
 2.
 3.
 
-- 是否稳定复现：必现 / 偶现（约几次一次）/ 只出现一次
-- 任务文本（如有）：
-- attempt / 步数（如有）：
+- Reproducibility: always / intermittent (about once every N times) / only once
+- Task text (if any):
+- attempt / step count (if any):
 
-## 4. 证据
+## 4. Evidence
 
-- 终端日志（粘贴关键行，不要贴整段）：
-- 证据目录：`runs/<stamp>/…`
-- 关键 `step_NNN.json`：
-- 截图路径（不要直接上传含隐私的图）：
-- `results.jsonl` 对应行：
-- `manifest.json` 关键字段：
+- Terminal log (paste key lines, not the whole block):
+- Evidence directory: `runs/<stamp>/…`
+- Key `step_NNN.json`:
+- Screenshot path (do not upload images containing private data):
+- Corresponding line in `results.jsonl`:
+- Key fields in `manifest.json`:
 
-## 5. 初步分析（可选）
+## 5. Initial analysis (optional)
 
-- 怀疑的模块/函数：
-- 是否与已知问题重复：
-- 是否与环境（adb/API/文件锁）有关：
+- Suspected module/function:
+- Duplicate of a known issue:
+- Related to the environment (adb/API/file lock):
 
-## 6. 期望的修复与验收
+## 6. Expected fix and acceptance
 
-- 修复后应满足：
-- 需要补的回归测试：
-- 是否需要真机验证：
-- 是否需要重跑实验数据：
+- After the fix it should satisfy:
+- Regression tests to add:
+- Real-device verification required:
+- Experiment data rerun required:
