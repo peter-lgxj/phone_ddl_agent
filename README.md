@@ -2,13 +2,14 @@
 
 使用视觉语言模型理解 Android 手机屏幕，通过 ADB 和 uiautomator2 执行操作；支持任务规划、多应用任务、OCR 定位与网页交互界面。
 
-## 提交信息（打包前必须核对）
+## 提交信息
 
 - 项目：手机智能体（Phone Agent）
-- 组号 / 成员：**待填**，必须与最终报告一致
-- 提交版本：本文件不固定最终版本号；`main@375700bb` 只是 2026-11-24 的审计基线，不是当前版本。最终版本以打包快照的 `git rev-parse HEAD` 为准。
+- 组号 / 标题：Group 54，An Agentic Cross-Application DDL Integration System
+- 成员：Xiao Shutian（3036795663）、Huang Xiaoyu（3036807686）、Ye Xiaofan（3036795912）
+- 提交版本：`main` HEAD；报告中引用的审计基线为 `main@375700bb`（2026-11-24）
 
-## 操作模型：电脑驱动手机（先读这一段）
+## 操作模型：电脑驱动手机
 
 - **操作对象是手机**。微信（群聊/私聊）、QQ（群聊）、Outlook App 收件箱的界面，全部在**手机上**被读取和点击。
   agent 不会在电脑上打开微信/QQ/Outlook 桌面客户端，也不读取电脑本地邮件
@@ -50,7 +51,7 @@
 
 ## 演示（一条命令）
 
-给老师和同学演示时，不需要读代码，只需要：
+演示只需一条命令，不需要读代码。
 
 ```bash
 python scripts/demo.py
@@ -224,7 +225,7 @@ $env:SCREEN_DRIVER="uiautomator2"; python run.py
 `experiments/summarize_timings.py`、`experiments/run_experiment.py`、`experiments/metrics.py`
 都能照常运行。若某步画面哈希与上一帧相同，`step_NNN.json` 顶层写 `reused_frame=true`，
 `timings.reuse_reason="hash"`，该步跳过重新截图与重编码；settle 保留了稳定帧但画面已变时，
-`reuse_reason="settle"`、`reused_frame=false`，只省截图不省编码。但报告口径要注意：
+`reuse_reason="settle"`、`reused_frame=false`，只省截图不省编码。
 
 - `driver=adb_dump` 的 run **不能和 `uiautomator2` run 混进同一组均值**。A/B 时把
   `driver` 当作分组变量，或在表格里单列“回退模式”。
@@ -445,7 +446,7 @@ A/B 时保持同一任务文本、同一设备、同一网络与同一 provider�
 
 ### 验证标签：真机实测 / 离线回放 / 未执行
 
-报告和判分表必须带上来源标签，**离线回放 ≠ 真机实测**：
+报告和判分表都标注来源标签，离线回放不等于真机实测。
 
 | 标签 | 含义 | 当前结论 |
 | --- | --- | --- |
@@ -682,7 +683,7 @@ CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
 
 ## Mocks、未启用与不可用依赖
 
-以下内容不是可直接使用的完整能力，使用或写报告时必须按“未启用 / 未验证 / 可选”标注：
+下列各项不是可直接使用的完整能力，使用时按“未启用 / 未验证 / 可选”标注：
 
 | 项 | 当前状态 | 对使用与报告的影响 |
 |---|---|---|
