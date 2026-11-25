@@ -1,518 +1,516 @@
-﻿# 手机智能体（Phone Agent）
+# Phone Agent
 
-使用视觉语言模型理解 Android 手机屏幕，通过 ADB 和 uiautomator2 执行操作；支持任务规划、多应用任务、OCR 定位与网页交互界面。
+Understands the Android phone screen with a vision-language model and performs actions through ADB and uiautomator2; supports task planning, multi-application tasks, OCR-based localization and a web interface.
 
-## 提交信息
+## Submission Information
 
-- 项目：手机智能体（Phone Agent）
-- 组号 / 标题：Group 54，An Agentic Cross-Application DDL Integration System
-- 成员：Xiao Shutian（3036795663）、Huang Xiaoyu（3036807686）、Ye Xiaofan（3036795912）
-- 提交版本：`main` HEAD；报告中引用的审计基线为 `main@375700bb`（2026-11-24）
+- Project: Phone Agent
+- Group / Title: Group 54, An Agentic Cross-Application DDL Integration System
+- Members: Xiao Shutian (3036795663), Huang Xiaoyu (3036807686), Ye Xiaofan (3036795912)
+- Submitted version: `main` HEAD; the audit baseline cited in the report is `main@375700bb` (2026-11-24)
 
-## 操作模型：电脑驱动手机
+## Operating Model: the Computer Drives the Phone
 
-- **操作对象是手机**。微信（群聊/私聊）、QQ（群聊）、Outlook App 收件箱的界面，全部在**手机上**被读取和点击。
-  agent 不会在电脑上打开微信/QQ/Outlook 桌面客户端，也不读取电脑本地邮件
-  （本地 `.eml` / 聊天归档只是没有手机时的离线测试替身）。
-- **运行环境是电脑**。本项目在电脑上运行，通过 **ADB（USB 线或 WiFi 调试）** 驱动手机。
-  手机端**不安装任何本项目组件**，也**不需要 root**。首次使用时 uiautomator2 可能自行安装一个自动化辅助组件，
-  那是 uiautomator2 的既有机制，不是本项目的部署。
-- 一句话：**电脑上的 agent 通过 ADB 操作手机 GUI**，把手机里的群聊和邮件 DDL 汇总成日历。
+- **The phone is the object being operated on**. The WeChat (group chats / direct chats), QQ (group chats) and Outlook App inbox interfaces are all read and tapped **on the phone**.
+  The agent never opens the WeChat/QQ/Outlook desktop clients on the computer, and never reads local mail on the computer
+  (local `.eml` files / chat archives are only offline test stand-ins used when no phone is available).
+- **The runtime environment is the computer**. This project runs on the computer and drives the phone through **ADB (USB cable or WiFi debugging)**.
+  **No component of this project is installed on the phone**, and **root is not required**. On first use, uiautomator2 may install an automation
+  helper component by itself; that is uiautomator2's existing mechanism, not a deployment of this project.
+- In one sentence: **the agent on the computer operates the phone GUI through ADB**, aggregating the group-chat and email DDLs on the phone into a calendar.
 
-> 手机读屏已在单台真机做过只读验证：微信「文件传输助手」自聊（2026-11-18）与
-> QQ「COMP7503 作业通知群」测试群的 once 扫描（2026-11-24，`cycle 20261124T163807`，status=ok）。
-> 微信真实课程群、Outlook、图片型 DDL、定时模式与真实实验数据仍未验证。
+> Phone screen reading has been verified read-only on a single physical device: the WeChat "File Transfer Assistant" (「文件传输助手」) self-chat (2026-11-18) and
+> a once-only scan of the QQ "COMP7503 作业通知群" test group (2026-11-24, `cycle 20261124T163807`, status=ok).
+> Real WeChat course groups, Outlook, image-based DDLs, the scheduled mode and real experimental data have still not been verified.
 >
-> Outlook **只走手机 App 读屏**，不接 Microsoft Graph；Graph 相关代码只是保留的未启用骨架，
-> 不是可切换的第二条读取路径。
+> Outlook **goes through phone App screen reading only**; Microsoft Graph is not integrated. The Graph-related code is a retained but disabled skeleton,
+> not a second, switchable read path.
 
-## 一键启动（Windows）
+## One-Click Launch (Windows)
 
-网页入口：运行 `python app.py` 后打开 `http://127.0.0.1:5000/ddl`，可在页面里用自然语言
-添加微信 / QQ / Outlook 手机来源、开始扫描并直接查看日历；首页也有「DDL 日历」入口。
-扫描会占用手机，接口默认只允许本机调用；需要从局域网访问时设置 `DDL_WEB_TOKEN`，
-并在请求头 `X-DDL-Token` 中带上同一个值。真正的设备互斥由扫描线程持有的设备锁保证，
-不会出现「预检通过后被其他窗口抢占」的情况。
+Web entry point: run `python app.py` and open `http://127.0.0.1:5000/ddl`. In the page you can add WeChat / QQ / Outlook phone sources in natural language,
+start a scan and view the calendar directly; the home page also has a "DDL calendar" entry.
+A scan occupies the phone, and the API is by default only callable from the local machine; to access it from the LAN, set `DDL_WEB_TOKEN`
+and send the same value in the `X-DDL-Token` request header. Real device mutual exclusion is guaranteed by the device lock held by the scanning thread,
+so a "pre-check passed but then preempted by another window" situation cannot occur.
 
-1. 首次使用，先告诉 agent 要检索什么（自然语言，会写入 `sources.yaml`）：
+1. On first use, first tell the agent what to retrieve (natural language, written into `sources.yaml`):
 
    ```bash
    python -m ddl_agent.monitor.cli add "定期读取微信「21级课程群」和 QQ「机器学习课程群」，每6小时一次"
    python -m ddl_agent.monitor.cli list
    ```
 
-2. 双击仓库根目录的 `run_ddl_monitor.bat`。脚本会依次检查 adb、手机是否在线且已授权、设备锁，
-   然后询问「1. 仅扫描一次 / 2. 定期」，跑完自动刷新并打开 `output/calendar.html`。
+   (The quoted argument is a natural-language instruction meaning "periodically read the WeChat 「21级课程群」 group and the QQ 「机器学习课程群」 group, once every 6 hours"; it is passed to the CLI verbatim.)
 
-3. 产物：`output/deadlines.xlsx`（含审计表）、`data.json`、`deadlines.ics`（可导入系统日历）、`calendar.html`。`deadlines.ics` 的 `DTSTART` 使用 `TZID=Asia/Shanghai` 本地时间（`DTSTAMP` 仍为 UTC）；`calendar.html` 是静态日历视图，只按截止时间落格并显示时间，不含倒计时或红/橙/灰状态。
+2. Double-click `run_ddl_monitor.bat` in the repository root. The script checks adb, whether the phone is online and authorized, and the device lock
+   in turn, then asks "1. 仅扫描一次 / 2. 定期" (1. scan once / 2. scan periodically); when it finishes it refreshes automatically and opens `output/calendar.html`.
 
-没插手机、未授权 USB 调试、找不到 adb、手机被其他窗口占用（设备锁）时，脚本会分别给出对应提示与下一步动作，
-不会抛 Python traceback。详细说明见 [docs/ddl-agent-monitor.md](docs/ddl-agent-monitor.md)。
+3. Artifacts: `output/deadlines.xlsx` (including an audit sheet), `data.json`, `deadlines.ics` (importable into a system calendar), `calendar.html`. The `DTSTART` of `deadlines.ics` uses local time with `TZID=Asia/Shanghai` (`DTSTAMP` remains UTC); `calendar.html` is a static calendar view that only places items by deadline and shows the time — it has no countdown and no red/orange/grey status.
 
-## 演示（一条命令）
+If the phone is not plugged in, USB debugging is not authorized, adb cannot be found, or the phone is occupied by another window (device lock), the script gives a corresponding hint and next action for each case
+and does not throw a Python traceback. See [docs/ddl-agent-monitor.md](docs/ddl-agent-monitor.md) for details.
 
-演示只需一条命令，不需要读代码。
+## Demo (One Command)
+
+The demo takes a single command and requires no reading of the code.
 
 ```bash
 python scripts/demo.py
 ```
 
-默认 `auto`：检测到一台已授权手机会走真机只读扫描；没有手机就自动用
-`examples/demo/` 的归档回放完整链路。也可以显式指定：
+The default is `auto`: if one authorized phone is detected it performs a read-only scan on the real device; without a phone it automatically replays the full pipeline
+from the archives in `examples/demo/`. You can also choose explicitly:
 
 ```bash
-python scripts/demo.py --offline      # 不需要手机/API key，确定性回放
+python scripts/demo.py --offline      # no phone/API key needed, deterministic replay
 python scripts/demo.py --offline --demo-config examples/demo/sources.json --engine rules
-python scripts/demo.py --live         # 强制真机，读取 sources.yaml
+python scripts/demo.py --live         # force the real device, read sources.yaml
 python scripts/demo.py --live --sources my_sources.yaml --out demo_output
 ```
 
-**前置条件**
+**Prerequisites**
 
-- 离线：只装 Python 依赖（`requirements.txt` / `requirements-dev.txt`）。
-- 真机：手机开启 USB 调试并与电脑授权；`adb devices` 能看到设备；
-  `sources.yaml` 里配置好微信 / QQ / Outlook 来源（可从 `sources.example.yaml` 复制修改）。
+- Offline: install only the Python dependencies (`requirements.txt` / `requirements-dev.txt`).
+- Real device: USB debugging enabled on the phone and authorized with the computer; `adb devices` can see the device;
+  WeChat / QQ / Outlook sources configured in `sources.yaml` (copy and modify `sources.example.yaml`).
 
-**会看到什么**
+**What You Will See**
 
-- 人读摘要：共几条 DDL、每条任务名/截止时间/状态/来源、同源延期覆盖或跨来源冲突裁决依据。
-- 产物：`demo_output/data.json`、`deadlines.ics`、`calendar.html`（真机模式还会写 `deadlines.xlsx`）。
-- 只读保证：演示不会输入聊天框、不会点发送、不会发消息；唯一会改变界面的是打开 App、滚动和点击进入目标会话。
+- A human-readable summary: how many DDLs in total, each task's name/deadline/status/source, and the basis for same-source postponement overrides or cross-source conflict resolution.
+- Artifacts: `demo_output/data.json`, `deadlines.ics`, `calendar.html` (in real-device mode it also writes `deadlines.xlsx`).
+- Read-only guarantee: the demo does not type into a chat box, does not tap send and does not send messages; the only things that change the screen are opening an App, scrolling and tapping into the target conversation.
 
-**失败怎么办**
+**What to Do If It Fails**
 
-- 没手机 / 没授权：提示 `adb devices` 的下一步动作，并自动改走离线回放（加 `--no-fallback` 可要求直接失败）。
-- 没 API key：仍可用规则引擎完成演示；要演示 LLM 抽取，在 `.env` 配置 `DEEPSEEK_API_KEY` 后加 `--engine llm`。
-- 设备被占用：提示 `runs/.device.lock` 的占用来源，关闭 Web/实验进程后重试，或直接 `--offline`。
-- 没有 `sources.yaml`：提示复制 `sources.example.yaml` 后修改群名/收件箱。
+- No phone / not authorized: it shows the next action for `adb devices` and automatically switches to offline replay (add `--no-fallback` to require a hard failure).
+- No API key: the demo can still be completed with the rule engine; to demo LLM extraction, configure `DEEPSEEK_API_KEY` in `.env` and add `--engine llm`.
+- Device occupied: it reports which process holds `runs/.device.lock`; close the Web/experiment process and retry, or just use `--offline`.
+- No `sources.yaml`: it hints to copy `sources.example.yaml` and then modify the group names / inbox.
 
-**离线回放怎么用**
+**How to Use Offline Replay**
 
-`examples/demo/sources.json` 是演示配置，`sources` 里的 `path` 指向本地聊天归档 JSON。
-把它替换成自己的归档（格式见 `ddl_agent/connectors/local_chat.py` 顶部），或改 `--demo-config`
-指向新文件即可；不需要改代码、不需要手机。
+`examples/demo/sources.json` is the demo configuration; the `path` of each entry in `sources` points to a local chat archive JSON.
+Replace it with your own archive (format documented at the top of `ddl_agent/connectors/local_chat.py`), or point `--demo-config`
+at a new file; no code changes and no phone are needed.
 
-## 离线评测与消融
+## Offline Evaluation and Ablation
 
 ```bash
-# 三方对比：Agent-LLM / Agent-规则 / 单次直出 baseline
+# Three-way comparison: Agent-LLM / Agent-rules / single-shot baseline
 python -m ddl_agent.evaluation.run_eval --split test
 
-# RQ4 单模块消融：全开 / 关去重 / 关冲突验证 / 固定来源
+# RQ4 single-module ablation: all on / dedupe off / conflict validation off / fixed sources
 python -m ddl_agent.evaluation.run_eval --ablation --split test \
   --out experiments/ddl_agent/results/ablation_distractors2
 
-# 语义匹配三策略对比：词法 / 本地 embedding / 组合
+# Three semantic matching strategies: lexical / local embedding / combined
 python -m ddl_agent.evaluation.run_eval --similarity-ablation --split test \
   --out experiments/ddl_agent/results/similarity_test4
 ```
 
-数据集里每个样本都带有与查询无关的干扰来源（实习内推群、家人群、社团活动群、其他课程群），
-用于检验动态选源；这些消息不进入 ground truth。
+Every sample in the dataset carries distractor sources unrelated to the query (internship referral groups, family groups, club activity groups, other course groups)
+to test dynamic source selection; these messages never enter the ground truth.
 
-embedding 是**可选**能力：默认不装、不联网也能跑评测。
+Embedding is an **optional** capability: by default the evaluation runs without it installed and without network access.
 
 ```bash
-# 安装可选依赖（不进入主 requirements / CI）
+# Install optional dependencies (not part of the main requirements / CI)
 pip install -r requirements-embedding.txt
 
-# 模型与框架缓存默认在用户目录（~/.cache/ddl-agent/sentence-transformers）；可显式指定
+# Model and framework caches live in the user directory by default (~/.cache/ddl-agent/sentence-transformers); they can be set explicitly
 set DDL_EMBEDDING_CACHE=%USERPROFILE%\.cache\ddl-agent\sentence-transformers
 set DDL_EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
 ```
 
-首次运行会下载多语种小模型；**离线环境**把整个缓存目录拷到目标机器，或让 `DDL_EMBEDDING_CACHE`
-指向已有目录即可。模型缺失、下载失败或加载异常时，评测自动退回纯词法，报告的
-`similarity.available` 为 `false` 并给出 `fallback_reason`，不会中断流程。
-真实模型用例默认跳过，设置 `RUN_EMBEDDING_TESTS=1` 才执行。
+The first run downloads the multilingual small model; for an **offline environment**, copy the whole cache directory to the target machine, or point `DDL_EMBEDDING_CACHE`
+at an existing directory. If the model is missing, the download fails or loading raises an error, the evaluation automatically falls back to pure lexical matching, the report's
+`similarity.available` is `false` and a `fallback_reason` is given; the run is never aborted.
+Real-model test cases are skipped by default; set `RUN_EMBEDDING_TESTS=1` to run them.
 
-逐条 proposal 符合度、RQ4 消融与三种相似度的前后对比数字见
-[docs/proposal-compliance.md](docs/proposal-compliance.md)。
-所有数字来自合成数据；真机只做过单机、单账号自聊会话的只读读取验证
-（`docs/real-device-test-report.md`），真实群聊、QQ / Outlook 与用户研究尚未验证。
+Per-proposal compliance, the RQ4 ablation and the before/after numbers of the three similarity strategies are in
+[docs/proposal-compliance.md](docs/proposal-compliance.md).
+All numbers come from synthetic data; on a real device only a read-only read of a single-device, single-account self-chat session has been verified
+(`docs/real-device-test-report.md`); real group chats, QQ / Outlook and user studies have not been verified.
 
-## 环境与安装
+## Environment and Installation
 
-- Python 3.10 或更高版本（具体兼容性取决于依赖版本）
-- Android 手机，开启开发者选项和 USB 调试
-- Android Platform Tools（`adb` 已加入 PATH；未加入时可用 `ADB_BINARY` 指向 adb 可执行文件，或直接复用 `uiautomator2` 自带的 adb，`adb_utils.py` 会自动兜底）
-- 可用的模型 API 密钥。DeepSeek / DashScope 均为**按量计费**；没有 key 时可用规则引擎与离线 demo，LLM 路径不可用
+- Python 3.10 or later (exact compatibility depends on dependency versions)
+- An Android phone with developer options and USB debugging enabled
+- Android Platform Tools (`adb` on PATH; if it is not, point `ADB_BINARY` at the adb executable, or reuse the adb bundled with `uiautomator2` — `adb_utils.py` falls back automatically)
+- A working model API key. DeepSeek / DashScope are both **billed per use**; without a key you can use the rule engine and the offline demo, but the LLM path is unavailable
 
 ```bash
 git clone https://github.com/peter-lgxj/phone_ddl_agent.git
 cd phone_ddl_agent
-# 与 CI 完全一致：运行时 + 测试依赖都从这一份锁文件安装
+# Exactly the same as CI: runtime and test dependencies are both installed from this single lock file
 pip install -r requirements-lock.txt
 ```
 
-`requirements-lock.txt` 是本项目在 Windows + Python 3.12 下实际解析出的完整版本清单（含传递依赖），也是 **CI 与本地安装的唯一真源**；`requirements-dev.txt` 只保留 `-r requirements-lock.txt` 的兼容入口。实验室机器或 GPU 环境请重新 `pip freeze` 替换 lock。
+`requirements-lock.txt` is the complete version list (including transitive dependencies) actually resolved for this project on Windows + Python 3.12, and is the **single source of truth for both CI and local installation**; `requirements-dev.txt` only keeps a compatibility entry point `-r requirements-lock.txt`. On a lab machine or GPU environment, re-run `pip freeze` and replace the lock.
 
-> 新增测试依赖时只改 `requirements-lock.txt`，不要再往 `ci.yml` 里加手写 pip 清单；详见[开发与测试](#开发与测试)。
+> When adding test dependencies, change only `requirements-lock.txt`; do not add hand-written pip lists to `ci.yml` again. See [Development and Testing](#development-and-testing).
 
-`requirements.txt` 只维护运行时依赖的最低版本，供需要自行解析环境的场景参考。
+`requirements.txt` only maintains the minimum versions of runtime dependencies, for scenarios where you need to resolve the environment yourself.
 
-用 `adb devices` 确认手机已连接并完成授权。默认执行模型与规划模型都是 `deepseek`（`deepseek-flash`，读 `DEEPSEEK_API_KEY`）；执行模型可切回 `qwen`（`qwen-vl-max`，读 `DASHSCOPE_API_KEY`）。其他模型与接口配置见 `config.py`。
+Use `adb devices` to confirm that the phone is connected and authorized. The default execution model and planning model are both `deepseek` (`deepseek-flash`, reads `DEEPSEEK_API_KEY`); the execution model can be switched back to `qwen` (`qwen-vl-max`, reads `DASHSCOPE_API_KEY`). Other model and endpoint settings are in `config.py`.
 
-### 凭据配置（不要把 key 提交进仓库）
+### Credential Configuration (Never Commit Keys to the Repository)
 
-1. 复制模板：PowerShell 用 `copy .env.example .env`，bash 用 `cp .env.example .env`。
-2. 至少填写 `DEEPSEEK_API_KEY`；使用 Qwen 时填写 `DASHSCOPE_API_KEY`。
-3. `.env` 与 `.env.*` 已被 `.gitignore` 忽略；提交前用 `git status` 确认没有 `.env`。
-4. `sources.yaml` 是本地来源配置，同样不入库；从 `sources.example.yaml` 复制修改。
-5. 仓库里只保留 `.env.example` 的占位值，不要写真实 key。
+1. Copy the template: `copy .env.example .env` in PowerShell, `cp .env.example .env` in bash.
+2. Fill in at least `DEEPSEEK_API_KEY`; fill in `DASHSCOPE_API_KEY` when using Qwen.
+3. `.env` and `.env.*` are ignored by `.gitignore`; before committing, use `git status` to confirm there is no `.env`.
+4. `sources.yaml` is the local source configuration and is also not tracked; copy and modify it from `sources.example.yaml`.
+5. Only the placeholder values of `.env.example` are kept in the repository; never write real keys.
 
-首次运行默认使用 RapidOCR，会下载对应的 ONNX 模型（需要联网，体积较小）；只有显式设置 `OCR_ENGINE=easyocr` 时才会使用 EasyOCR 及其模型。截图定位还依赖 uiautomator2 在手机上安装的自动化组件。
+The first run uses RapidOCR by default and downloads the corresponding ONNX model (network required, small in size); EasyOCR and its models are used only when `OCR_ENGINE=easyocr` is set explicitly. Screenshot localization also depends on the automation component that uiautomator2 installs on the phone.
 
-`torch` / `ultralytics` 是 YOLO 输入框兜底的真实依赖（`input_detector.py`）：只有控件树不可用或找不到 EditText、需要定位输入框时才加载模型；常规截图、OCR、控件树读取不会加载。因此它们不能删除，CI 会安装这两个包（体积较大，保留 pip 缓存）。
+`torch` / `ultralytics` are real dependencies of the YOLO input-box fallback (`input_detector.py`): the model is loaded only when the control tree is unavailable or no EditText can be found and the input box must be located; regular screenshots, OCR and control-tree reads never load it. They therefore cannot be removed, and CI installs these two packages (they are large, so the pip cache is kept).
 
-`.env`、任务运行记录和手机界面导出文件不提交到仓库。日志与 `runs/` 证据目录会保存群名、昵称和消息正文用于排障；启动时只清理 `runs/` 下 `YYYYMMDD-HHMMSS` 形式的自动运行目录，默认保留最近 20 次（环境变量 `RUNS_KEEP` 可调）；`verify_*`、`wx_*` 等人工目录、名称以 `keep` 开头或含 `KEEP` 文件的目录不会被删除。
+`.env`, task run records and phone UI export files are not committed to the repository. Logs and the `runs/` evidence directory store group names, nicknames and message bodies for troubleshooting; at startup only automatic run directories of the form `YYYYMMDD-HHMMSS` under `runs/` are cleaned up, keeping the most recent 20 by default (adjustable via the `RUNS_KEEP` environment variable); manual directories such as `verify_*` and `wx_*`, directories whose names start with `keep`, and directories containing a `KEEP` file are never deleted.
 
-## Android 17（API 37）与 ADB 回退驱动
+## Android 17 (API 37) and the ADB Fallback Driver
 
-### 现状与判据
+### Current State and Criteria
 
-真机 OPPO PLJ110 / Android 17 / 1080×2374 上，`uiautomator2` 3.7.1 在第一次
-`d.info` RPC 就抛 `ApplicationSharedMemory not initialized`，`ScreenAgent`
-无法截图和点击；系统自带的 `adb shell uiautomator dump` 与 `screencap` 正常。
+On a physical OPPO PLJ110 / Android 17 / 1080×2374, `uiautomator2` 3.7.1 throws `ApplicationSharedMemory not initialized` on the very first
+`d.info` RPC, so `ScreenAgent` cannot take screenshots or tap; the built-in `adb shell uiautomator dump` and `screencap` work normally.
 
-- **升级结论**：截至 2026-11-21，PyPI 最新版就是 `uiautomator2==3.7.1`（2026-10-23）；
-  上游 issue [openatx/uiautomator2#1209](https://github.com/openatx/uiautomator2/issues/1209)
-  记录从 3.3.1 升到 3.7.1 后错误不变，仍是 open。**目前没有任何已发布版本能解决 Android 17**。
-- **版本下限**：`requirements.txt` 写 `uiautomator2>=3.7.1`。这是非 Android 17 设备的
-  实测基线；Android 17 上即使满足该下限也会失败，必须用回退驱动。
-- **判据**：`SCREEN_DRIVER=auto`（默认）会先 `u2.connect()` 并读取 `device.info`；
-  连接失败（无 adb / 未授权）仍给出原来的连接错误，只有“已连接但 RPC 不可用”
-  （`ApplicationSharedMemory`、SDK 37 或 `device.info` 异常）才回退 `adb_dump`。
-  `SCREEN_DRIVER=uiautomator2` 强制 u2，不兼容时直接给出含 issue 链接与回退命令的明确报错；
-  `SCREEN_DRIVER=adb_dump` 强制回退。
+- **Upgrade conclusion**: as of 2026-11-21, the latest version on PyPI is `uiautomator2==3.7.1` (2026-10-23);
+  the upstream issue [openatx/uiautomator2#1209](https://github.com/openatx/uiautomator2/issues/1209)
+  records that the error is unchanged after upgrading from 3.3.1 to 3.7.1, and is still open. **No released version currently fixes Android 17**.
+- **Version floor**: `requirements.txt` says `uiautomator2>=3.7.1`. This is the measured baseline for non-Android-17 devices;
+  on Android 17 it fails even though the floor is satisfied, and the fallback driver must be used.
+- **Criteria**: `SCREEN_DRIVER=auto` (the default) first calls `u2.connect()` and reads `device.info`;
+  a connection failure (no adb / not authorized) still returns the original connection error, and only "connected but RPC unavailable"
+  (`ApplicationSharedMemory`, SDK 37 or a `device.info` exception) falls back to `adb_dump`.
+  `SCREEN_DRIVER=uiautomator2` forces u2 and, when incompatible, gives an explicit error containing the issue link and the fallback command;
+  `SCREEN_DRIVER=adb_dump` forces the fallback.
 
-### 两种驱动怎么选
+### Choosing Between the Two Drivers
 
-| 能力 | `uiautomator2`（完整链路） | `adb_dump`（回退） |
+| Capability | `uiautomator2` (full pipeline) | `adb_dump` (fallback) |
 |---|---|---|
-| 截图 | `device.screenshot()` | `adb exec-out screencap -p` |
-| 控件树 | `device.dump_hierarchy()` | `adb shell uiautomator dump` + `cat` |
+| Screenshot | `device.screenshot()` | `adb exec-out screencap -p` |
+| Control tree | `device.dump_hierarchy()` | `adb shell uiautomator dump` + `cat` |
 | tap / swipe | u2 `click` / `swipe` | `adb shell input tap` / `input swipe` |
 | back / home | u2 `press` | `adb shell input keyevent 4/3` |
-| 打开 App | u2 / monkey | `adb shell monkey -p <pkg>` |
-| 当前界面文本 | 控件树 | dump XML 的 `text` / `content-desc` |
-| 输入框 | `EditText` 选择器 | dump 中找 `EditText` 并点中心 |
-| type / send / press_enter | 上层只读保护 | **驱动层再拦**：只读时抛 `PermissionError` |
-| u2 专有能力 | XPath、`set_text`、长连接 session | 不支持；当前 `ScreenAgent` 不依赖 |
+| Open App | u2 / monkey | `adb shell monkey -p <pkg>` |
+| Current screen text | control tree | `text` / `content-desc` of the dumped XML |
+| Input box | `EditText` selector | find `EditText` in the dump and tap its centre |
+| type / send / press_enter | upper-layer read-only guard | **blocked again at the driver layer**: raises `PermissionError` in read-only mode |
+| u2-only capabilities | XPath, `set_text`, persistent session | not supported; the current `ScreenAgent` does not depend on them |
 
 ```powershell
-# 推荐：自动探测，Android 17 自动回退
+# Recommended: auto-detect, Android 17 falls back automatically
 python run.py
 
-# 强制回退（已知 u2 故障或要做 A/B）
+# Force the fallback (known u2 failure, or for A/B)
 $env:SCREEN_DRIVER="adb_dump"; python run.py
 
-# 强制 u2（排查用；Android 17 会在这里得到明确报错）
+# Force u2 (for troubleshooting; on Android 17 this yields the explicit error)
 $env:SCREEN_DRIVER="uiautomator2"; python run.py
 ```
 
-回退发生时：
+When a fallback happens:
 
-- `runs/<run>/step_NNN.json` 顶层写 `"driver": "adb_dump"`；
-- 任务结束的 `usage_summary.json` 写 `driver` / `driver_mode` / `full_pipeline` /
-  `driver_note`，其中 `full_pipeline=false`，明确标注**本次不是完整 uiautomator2 链路**；
-- 启动日志与任务结束都会打印回退提示。
+- `runs/<run>/step_NNN.json` writes `"driver": "adb_dump"` at the top level;
+- at the end of the task, `usage_summary.json` writes `driver` / `driver_mode` / `full_pipeline` /
+  `driver_note`, where `full_pipeline=false`, explicitly marking that **this run did not use the full uiautomator2 pipeline**;
+- both the startup log and the end of the task print a fallback notice.
 
-### 回退模式的 A/B 与判分口径
+### A/B and Scoring Conventions in Fallback Mode
 
-回退驱动不会改变 `ScreenAgent` 的决策、观察、OCR、settle、证据归档与 token 统计，
-因此 `step_NNN.json` 仍包含 `timings` / `usage` / `image` / `driver`，
-`experiments/summarize_timings.py`、`experiments/run_experiment.py`、`experiments/metrics.py`
-都能照常运行。若某步画面哈希与上一帧相同，`step_NNN.json` 顶层写 `reused_frame=true`，
-`timings.reuse_reason="hash"`，该步跳过重新截图与重编码；settle 保留了稳定帧但画面已变时，
-`reuse_reason="settle"`、`reused_frame=false`，只省截图不省编码。
+The fallback driver does not change `ScreenAgent`'s decision-making, observation, OCR, settle, evidence archiving or token accounting,
+so `step_NNN.json` still contains `timings` / `usage` / `image` / `driver`, and
+`experiments/summarize_timings.py`, `experiments/run_experiment.py` and `experiments/metrics.py`
+all run as usual. If a step's frame hash equals the previous frame, `step_NNN.json` writes `reused_frame=true` at the top level and
+`timings.reuse_reason="hash"`, and that step skips re-screenshotting and re-encoding; when settle keeps a stable frame but the picture has changed,
+`reuse_reason="settle"`, `reused_frame=false`, and only the screenshot is saved, not the encoding.
 
-- `driver=adb_dump` 的 run **不能和 `uiautomator2` run 混进同一组均值**。A/B 时把
-  `driver` 当作分组变量，或在表格里单列“回退模式”。
-- 回退模式能给出：决策/观察/OCR/settle/execute 阶段耗时、每步 token、动作执行结果、
-  是否完成；不能给出 u2 专有路径的指标（如 `dump_hierarchy` 内部 RPC 延迟、`set_text`）。
-- 离线单测用 `tests/fixtures/android17` 裁出的 dump XML 与截图回放，
-  CI 不需要真机；真机验证需要自己连接 Android 17 设备后执行：
+- A run with `driver=adb_dump` **must not be mixed into the same set of means as a `uiautomator2` run**. When doing A/B, treat
+  `driver` as a grouping variable, or give "fallback mode" its own column in the table.
+- Fallback mode can provide: decision/observation/OCR/settle/execute stage timings, per-step tokens, action execution results and
+  whether the task completed; it cannot provide metrics of u2-only paths (such as `dump_hierarchy` internal RPC latency, `set_text`).
+- Offline unit tests replay dump XML and screenshots cut from `tests/fixtures/android17`,
+  so CI needs no physical device; real-device verification requires connecting an Android 17 device yourself and running:
 
 ```powershell
 adb devices
-# 预期在 Android 17 上失败，并给出可读错误
+# Expected to fail on Android 17, with a readable error
 python -c "import uiautomator2 as u2; print(u2.connect().info)"
-# 回退驱动冒烟：能截图、dump、点击即可
+# Fallback driver smoke test: screenshot, dump and tap are enough
 $env:SCREEN_DRIVER="adb_dump"; python run.py
 ```
 
-### 中文输入与控件树限制
+### Chinese Input and Control-Tree Limitations
 
-- **中文输入（`adb_dump`）**：`adb shell input text` 只可靠支持 ASCII。非 ASCII 文本改走
-  ADBKeyboard 的 `ADB_INPUT_B64` 广播（正文按 UTF-8 编码后 base64，避免 shell 编码问题），
-  发送后从控件树校验输入框文字是否真的变化。前置条件：
-  1. 安装 ADBKeyboard（`com.android.adbkeyboard`）；
-  2. 启用并设为当前输入法：
-     `adb shell ime enable com.android.adbkeyboard/.AdbIME`、
-     `adb shell ime set com.android.adbkeyboard/.AdbIME`。
-  未安装/未启用或校验未通过时，智能体不会重复同一个输入动作：记录 `blocked_reason`
-  并提示改用列表滚动定位，连续两次无效输入直接中止任务。
-- **微信控件树为空**：部分微信版本/页面（尤其 WebView、自绘列表）经
-  `uiautomator dump` 只能拿到很少或空节点。这是平台限制，不做代码绕过；
-  读屏回退到截图 + OCR，控件树只作为辅助。
-- **QQ 群定位顺序**：控件树规则优先——首屏有逐字一致的群名直接点（`open_group`）；
-  没有则打开搜索框输入群名，只点逐字一致的结果（`search_entry` / `search_result`）；
-  搜索不可用或无结果才按控件树文本滚动列表（`list_scroll`，最多 `QQ_LIST_MAX_SCROLLS`
-  （默认 8）屏，只滑不点相似名）。规则没有结论时才用截图 OCR 精确匹配兜底
-  （`ocr_list`），仍无结论交视觉模型。OCR 只接受与群名完全相等或「群名 + 少量未读数」
-  的标题，避免把 `2026 计算机班级二群` 当成 `2026 计算机班级群`。
-- **QQ 搜索页 dump**：真机复测 `uiautomator dump` 在搜索页可正常返回（约 360~374 个
-  节点），此前空树是 dump 与截图/OCR 并发或页面切换中的瞬时失败，并非
-  `could not get idle state`。关闭动画（`animator_duration_scale` 等）后节点数无提升；
-  实验后已恢复设备原值。搜索页控件树正是 `search_result` 规则的读取来源。
+- **Chinese input (`adb_dump`)**: `adb shell input text` reliably supports ASCII only. Non-ASCII text goes through
+  ADBKeyboard's `ADB_INPUT_B64` broadcast instead (the body is base64-encoded after UTF-8 encoding, avoiding shell encoding problems),
+  and after sending, the input box text is checked against the control tree to confirm it actually changed. Prerequisites:
+  1. Install ADBKeyboard (`com.android.adbkeyboard`);
+  2. Enable it and set it as the current IME:
+     `adb shell ime enable com.android.adbkeyboard/.AdbIME`,
+     `adb shell ime set com.android.adbkeyboard/.AdbIME`.
+  If it is not installed/enabled or the check fails, the agent does not repeat the same input action: it records `blocked_reason`
+  and suggests switching to list scrolling to locate the target; two consecutive ineffective inputs abort the task immediately.
+- **Empty WeChat control tree**: for some WeChat versions/pages (especially WebViews and custom-drawn lists),
+  `uiautomator dump` returns very few or no nodes. This is a platform limitation and no code workaround is attempted;
+  screen reading falls back to screenshot + OCR, with the control tree used only as a supplement.
+- **QQ group location order**: control-tree rules first — if the first screen contains an exactly matching group name, tap it directly (`open_group`);
+  otherwise open the search box, type the group name and tap only an exactly matching result (`search_entry` / `search_result`);
+  only when search is unavailable or returns nothing does it scroll the list by control-tree text (`list_scroll`, at most `QQ_LIST_MAX_SCROLLS`
+  (default 8) screens, only scrolling, never tapping similar names). Only when the rules reach no conclusion does it fall back to exact matching by screenshot OCR
+  (`ocr_list`), and if that still reaches no conclusion the vision model decides. OCR only accepts titles that exactly equal the group name or are
+  "group name + a small unread count", so that `2026 计算机班级二群` is not mistaken for `2026 计算机班级群`.
+- **QQ search page dump**: a real-device re-test showed `uiautomator dump` returns normally on the search page (about 360–374 nodes); the earlier empty tree was a transient failure
+  caused by dump running concurrently with screenshot/OCR or during a page transition, not `could not get idle state`. Disabling animations (`animator_duration_scale` etc.) did not increase the node count;
+  the device settings were restored afterwards. The search page control tree is exactly what the `search_result` rule reads.
 
-## 运行
+## Running
 
 ```bash
-# 网页界面（http://localhost:5000）
+# Web interface (http://localhost:5000)
 python app.py
 
-# 单任务命令行
+# Single-task command line
 python run.py
 
-# 多应用任务命令行
+# Multi-application task command line
 python multi_agent.py
 
-# 可选 Streamlit 界面
+# Optional Streamlit interface
 streamlit run frontend.py
 ```
 
-Windows 用户也可通过 `start.bat` 启动；该脚本要求已有名为 `mobile_agent` 的 Conda 环境。
+Windows users can also launch via `start.bat`; that script requires a Conda environment named `mobile_agent` to exist.
 
-可选 Streamlit 界面（`streamlit run frontend.py`）读取 `agent_state.json` 展示每步状态，属于调试用途；`streamlit` 不在必需依赖里，未安装就不用该入口。
+The optional Streamlit interface (`streamlit run frontend.py`) reads `agent_state.json` to show the per-step state and is intended for debugging; `streamlit` is not a required dependency, so if it is not installed just skip this entry point.
 
-## 配置
+## Configuration
 
-模型与行为开关集中在 `config.py`，`.env` 只放密钥：
+Models and behaviour switches are centralized in `config.py`; `.env` holds only secrets:
 
-| 配置项 | 说明 |
+| Setting | Description |
 |---|---|
-| `ACTIVE_PROVIDER` | 执行模型（视觉），默认 `deepseek` → `deepseek-flash`，需要 `DEEPSEEK_API_KEY`；可设 `qwen` / `zhipu` / `openai` / `local` |
-| `PLANNER_PROVIDER` | 规划/语义模型，默认 `deepseek`（`deepseek-flash`），单任务与多应用模式都读这一项；可切回 `qwen3` |
-| `MAX_STEPS` / `STEP_RETRIES` | 最大步数（默认 30，可用同名环境变量覆盖）与单步失败重试次数。步数按**模型请求**计：一次响应用 `actions` 数组返回多个连续动作也只算一步 |
-| `MAX_ACTIONS_PER_STEP` | 一次响应最多接受的连续动作数，默认 3；超出截断。动作按顺序执行，`step_NNN.json` 里记 `action_type="sequence"` 与 `actions` 数组 |
-| `READ_ONLY_MODE` | 只读保护，默认开启：拒绝 `send` / `press_enter` / `type`，monitor 生产读屏强制开启；单独跑任务脚本时可置 0 |
-| `SCREEN_DRIVER` | 屏幕驱动：`auto`（默认，u2 不可用时自动回退 `adb_dump`）/ `uiautomator2`（强制 u2，失败明确报错）/ `adb_dump`（Android 17 回退） |
-| `LLM_TEMPERATURE` | 决策与观察调用温度，默认 0.0，保证重复实验可比 |
-| `ENABLE_SEMANTIC_ANALYSIS` | 语义分析（每步一次纯文本请求），默认关闭；置 1 可开启消融对比 |
-| `COMPLETION_CHECK` | 完成判断：`decision`（默认，读决策响应里的 `task_done`）/ `every_step`（旧行为，每步额外一次带图请求）/ `off` |
-| `MERGED_OBSERVE` | 观察并入决策，默认开；正常每步 1 次带图请求，响应不合法时本步回退两段式 |
-| `RULE_FASTPATH` | 规则快路，默认开：任务里点名的群/会话、返回、以及进入会话后的滚动，只要控件树能证明就直接执行，不调用视觉模型；命中与省下的调用数写入 `step_NNN.json` 的 `timings.rule_*` 和 `usage_summary.json` 的 `rule_fastpath` |
-| `RULE_MAX_SCROLLS` | 规则快路在同一个会话里最多连续滚几步（默认 6），到上限交回模型 |
-| `CONNECTION_WARMUP` | 启动时预热连接，默认开：视觉与规划共用同一个 httpx 连接池（keep-alive），并发一次 `models.list()` 完成 TLS 握手；设备侧调用驱动 `warmup()`（adb 回退时启动 adb server）。预热耗时写 `usage_summary.json` 的 `warmup_seconds`，不计入第一步 |
-| `HTTP_KEEPALIVE_SECONDS` / `HTTP_MAX_CONNECTIONS` | 共用连接池的 keep-alive 秒数（默认 90）与最大连接数（默认 8） |
-| `OCR_PREHEAT` | 启动时预热 RapidOCR，默认开 |
-| `OBSERVE_SETTLE_MODE` | `adaptive`（默认，界面稳定即返回）/ `fixed`（固定等满 `OBSERVE_SETTLE_SECONDS`） |
-| `OBSERVE_SETTLE_POLL_SECONDS` | 自适应 settle 的截图轮询间隔，默认 0.15s |
-| `OCR_MODE` | OCR 调用策略：`on_demand`（默认，仅 tap 时跑并吸附落点）/ `always`（旧行为，每步预跑）/ `off` |
-| `OCR_SNAP_MODE` | 候选来源：`tree_first`（默认，控件树、YOLO 与 OCR 合并后按目标匹配）/ `ocr_only` / `tree_only` |
-| `OCR_ENGINE` | OCR 引擎：`rapidocr`（默认，ONNX CPU 实测 1.2–1.5s/张）/ `easyocr`（旧实现，12.7–23s/张） |
-| `OCR_SCALE` | OCR 输入图缩放比例，默认 0.5；检测框按 `1/scale` 映射回原图，tap 坐标仍是设备坐标 |
-| `OCR_SNAP_MAX_DISTANCE` | 吸附半径（像素），默认 80；超出则保留模型原始坐标 |
-| `SEARCH_ICON_DETECTION` | tap 目标为搜索/联系人时是否补 YOLO 候选，默认开；只有权重含 `search_icon` 类别时才产生搜索图标候选 |
-| `GUI_MODEL_PATH` | YOLO 权重路径，默认 `models/input_box.pt`（随仓库分发，含 `input_box` 与 `search_icon`）；换成其它权重时，含 `search_icon` 类别才会启用搜索图标视觉候选 |
-| `OBSERVE_SETTLE_SECONDS` | 动作后等待界面稳定的秒数，默认 1.0 |
-| `HISTORY_IMAGE_WINDOW` / `HISTORY_TEXT_STEPS` | 历史上下文窗口：带最近几张原图（默认 1，当前屏幕始终带图）、更早步骤最多列几条文字摘要（默认 8）；均可用同名环境变量覆盖 |
-| `IMAGE_PREPROCESS` | 截图预处理总开关（默认开）；置 0 时原样发送 PNG |
-| `IMAGE_JPEG_QUALITY` | JPEG 质量，默认 85；置 0 保留 PNG |
-| `IMAGE_MAX_SIDE` | 等比缩放的边长上限，默认 0（不缩放）。**缩放会破坏坐标一致性，见下节** |
-| `IMAGE_ENHANCE` | 对比度/锐化增强，默认关；不改变几何尺寸 |
-| `ARTIFACT_DIR` | 每步截图与动作记录目录，默认 `runs/` |
-| `WECHAT_INPUT_RESOURCE_ID` | 微信输入框 resource-id，随版本变化，置空即跳过该分支 |
+| `ACTIVE_PROVIDER` | Execution model (vision), default `deepseek` → `deepseek-flash`, requires `DEEPSEEK_API_KEY`; can be set to `qwen` / `zhipu` / `openai` / `local` |
+| `PLANNER_PROVIDER` | Planning/semantic model, default `deepseek` (`deepseek-flash`); both single-task and multi-application modes read this setting; can be switched back to `qwen3` |
+| `MAX_STEPS` / `STEP_RETRIES` | Maximum number of steps (default 30, overridable with the environment variable of the same name) and the retry count for a failed step. Steps are counted per **model request**: one response that returns several consecutive actions in the `actions` array still counts as one step |
+| `MAX_ACTIONS_PER_STEP` | Maximum number of consecutive actions accepted from one response, default 3; anything beyond is truncated. Actions execute in order, and `step_NNN.json` records `action_type="sequence"` and the `actions` array |
+| `READ_ONLY_MODE` | Read-only guard, on by default: rejects `send` / `press_enter` / `type`; forced on for monitor production screen reading; can be set to 0 when running task scripts standalone |
+| `SCREEN_DRIVER` | Screen driver: `auto` (default, automatically falls back to `adb_dump` when u2 is unavailable) / `uiautomator2` (force u2, explicit error on failure) / `adb_dump` (Android 17 fallback) |
+| `LLM_TEMPERATURE` | Temperature for decision and observation calls, default 0.0, keeping repeated experiments comparable |
+| `ENABLE_SEMANTIC_ANALYSIS` | Semantic analysis (one text-only request per step), off by default; set to 1 to enable the ablation comparison |
+| `COMPLETION_CHECK` | Completion detection: `decision` (default, reads `task_done` from the decision response) / `every_step` (old behaviour, an extra image request every step) / `off` |
+| `MERGED_OBSERVE` | Merge observation into the decision, on by default; normally 1 image request per step, and if the response is invalid that step falls back to the two-stage form |
+| `RULE_FASTPATH` | Rule fast path, on by default: groups/conversations named in the task, back, and scrolling after entering a conversation are executed directly whenever the control tree can prove them, without calling the vision model; hits and saved calls are written to `timings.rule_*` in `step_NNN.json` and `rule_fastpath` in `usage_summary.json` |
+| `RULE_MAX_SCROLLS` | Maximum number of consecutive scroll steps the rule fast path may take inside the same conversation (default 6); at the limit control returns to the model |
+| `CONNECTION_WARMUP` | Pre-warm connections at startup, on by default: vision and planning share a single httpx connection pool (keep-alive) and issue `models.list()` concurrently to complete the TLS handshake; on the device side it calls the driver's `warmup()` (starts the adb server in adb fallback). Warm-up time is written to `warmup_seconds` in `usage_summary.json` and is not counted in the first step |
+| `HTTP_KEEPALIVE_SECONDS` / `HTTP_MAX_CONNECTIONS` | Keep-alive seconds (default 90) and maximum connections (default 8) of the shared connection pool |
+| `OCR_PREHEAT` | Pre-warm RapidOCR at startup, on by default |
+| `OBSERVE_SETTLE_MODE` | `adaptive` (default, returns as soon as the screen is stable) / `fixed` (always waits the full `OBSERVE_SETTLE_SECONDS`) |
+| `OBSERVE_SETTLE_POLL_SECONDS` | Screenshot polling interval for adaptive settle, default 0.15s |
+| `OCR_MODE` | OCR invocation policy: `on_demand` (default, runs only on tap and snaps the landing point) / `always` (old behaviour, pre-run every step) / `off` |
+| `OCR_SNAP_MODE` | Candidate source: `tree_first` (default, merges control tree, YOLO and OCR then matches against the target) / `ocr_only` / `tree_only` |
+| `OCR_ENGINE` | OCR engine: `rapidocr` (default, measured 1.2–1.5s per image on ONNX CPU) / `easyocr` (old implementation, 12.7–23s per image) |
+| `OCR_SCALE` | Scale factor for the OCR input image, default 0.5; detection boxes are mapped back to the original image by `1/scale`, and tap coordinates remain device coordinates |
+| `OCR_SNAP_MAX_DISTANCE` | Snap radius (pixels), default 80; beyond it the model's original coordinates are kept |
+| `SEARCH_ICON_DETECTION` | Whether to add YOLO candidates when the tap target is a search/contact element, on by default; search-icon candidates are produced only when the weights contain the `search_icon` class |
+| `GUI_MODEL_PATH` | YOLO weights path, default `models/input_box.pt` (shipped with the repository, containing `input_box` and `search_icon`); with other weights, visual search-icon candidates are enabled only if the `search_icon` class is present |
+| `OBSERVE_SETTLE_SECONDS` | Seconds to wait for the screen to stabilize after an action, default 1.0 |
+| `HISTORY_IMAGE_WINDOW` / `HISTORY_TEXT_STEPS` | History context window: how many recent original images to include (default 1 — the current screen is always included as an image), and how many earlier steps to list as text summaries (default 8); both overridable with the environment variables of the same name |
+| `IMAGE_PREPROCESS` | Master switch for screenshot preprocessing (on by default); when 0 the PNG is sent as-is |
+| `IMAGE_JPEG_QUALITY` | JPEG quality, default 85; 0 keeps PNG |
+| `IMAGE_MAX_SIDE` | Upper bound on the longest side of the proportional resize, default 0 (no resize). **Resizing breaks coordinate consistency — see the next section** |
+| `IMAGE_ENHANCE` | Contrast/sharpness enhancement, off by default; does not change geometric dimensions |
+| `ARTIFACT_DIR` | Directory for per-step screenshots and action records, default `runs/` |
+| `WECHAT_INPUT_RESOURCE_ID` | WeChat input box resource-id, which changes between versions; leave empty to skip this branch |
 
-可切换的 provider 见 `config.PROVIDERS`；`qwen3` / `minimax` 是纯文本 provider，不能用作 `ACTIVE_PROVIDER`。
+Switchable providers are listed in `config.PROVIDERS`; `qwen3` / `minimax` are text-only providers and cannot be used as `ACTIVE_PROVIDER`.
 
-规划器默认用 DeepSeek：`base_url=https://api.deepseek.com`（不要加 `/v1`）、模型 `deepseek-flash`、密钥读 `.env` 的 `DEEPSEEK_API_KEY`。规划器只发文字，不接收截图；实测简单任务约 2 秒、三应用任务约 3.5 秒返回可解析 JSON。若开启 `thinking`（通过 `extra_body` 传 `{"thinking": {"type": "enabled"}}`）会返回 `reasoning_content` 并产生 reasoning token，当前默认关闭以降低延迟；实测开关两种模式返回的 `content` 都是合法 JSON。
+The planner uses DeepSeek by default: `base_url=https://api.deepseek.com` (do not append `/v1`), model `deepseek-flash`, key read from `DEEPSEEK_API_KEY` in `.env`. The planner sends text only and does not receive screenshots; measured, a simple task returns parseable JSON in about 2 seconds and a three-application task in about 3.5 seconds. If `thinking` is enabled (passing `{"thinking": {"type": "enabled"}}` via `extra_body`) it returns `reasoning_content` and incurs reasoning tokens; it is currently off by default to reduce latency. Measured, the `content` returned in both modes is valid JSON.
 
-## DeepSeek 视觉能力（实测）
+## DeepSeek Vision Capability (Measured)
 
-官方文档写的是 `deepseek-v4-flash-vision-exp` 已下线、旧名请求由 DeepSeek-V4.1-Flash-1017（即 `deepseek-flash`）承接，字面读起来像是纯文本模型。**实测与该表述不一致：`deepseek-flash` 能正常接收并理解 `image_url`。**
+The official documentation says `deepseek-v4-flash-vision-exp` has been retired and that requests under the old name are served by DeepSeek-V4.1-Flash-1017 (i.e. `deepseek-flash`), which reads as if it were a text-only model. **Measurements contradict that statement: `deepseek-flash` accepts and understands `image_url` normally.**
 
-- 控制图法：现场生成含随机编号的图片（`ORDER NO: ZX-739146`、`CNY 4287.35` 等），模型逐字读对，可排除「不报错但忽略图片」。
-- 真实桌面截图（1707×1067）：10.4s，`prompt_tokens=1012`，准确描述图标、窗口与正文段落。
-- 多图：单请求 3 张图（各有唯一编号），三张全部按顺序答对，因此 `support_multi_image=True`。
-- 端到端：走 `ScreenAgent._think_and_act` 的真实调用路径，5.9s 返回 `{"action_type": "tap", "x": 540, "y": 1441, ...}`，字段完整、坐标与真值差 1px。
+- Control-image method: images containing random numbers were generated on the spot (`ORDER NO: ZX-739146`, `CNY 4287.35`, etc.); the model read them correctly character by character, ruling out "no error but the image is ignored".
+- A real desktop screenshot (1707×1067): 10.4s, `prompt_tokens=1012`, accurately describing icons, windows and body paragraphs.
+- Multiple images: 3 images in one request (each with a unique number); all three were answered correctly and in order, hence `support_multi_image=True`.
+- End to end: going through the real call path of `ScreenAgent._think_and_act`, it returned `{"action_type": "tap", "x": 540, "y": 1441, ...}` in 5.9s, with complete fields and coordinates 1px off the ground truth.
 
-结论：`deepseek-flash` 可作为执行（视觉）模型；本文档保留「官方文档表述与实测不一致」这条记录，后续如服务端行为变化需重新验证。
+Conclusion: `deepseek-flash` can serve as the execution (vision) model; this document keeps the record that "the official documentation contradicts the measurements", and it must be re-verified if server behaviour changes.
 
-### 图片限制与 thinking
+### Image Limits and thinking
 
-- **每张图最多 1024 token**：服务端会把图片缩放到约 1300×1300 等效后再计费，实测 1707×1067 的截图 `prompt_tokens=1012`，已贴近上限。**客户端缩图省不到 token**。
-- **`detail` 语义**：`low` 会压到 512×512（手机界面小字会糊，不要用于执行模型）；`high` / `original` / `auto` 保留原图。实测控制图 `detail=low` 的 `prompt_tokens=240` vs `detail=high` 的 `631`，代价是细节丢失。
-- 图片可放在 user / system / tool 消息；assistant 消息带图会 400；单请求最多 600 张。本项目一次只发 1–3 张，不涉及上限。
-- **thinking 开关**（`extra_body`）：同一张截图四种设置的动作完全一致（都是 `home`，JSON 均合法），但耗时与 reasoning token 差异明显：
+- **At most 1024 tokens per image**: the server scales the image to roughly a 1300×1300 equivalent before billing; the measured 1707×1067 screenshot had `prompt_tokens=1012`, already close to the cap. **Client-side downscaling saves no tokens**.
+- **`detail` semantics**: `low` compresses to 512×512 (small text on phone UIs becomes blurry — do not use it for the execution model); `high` / `original` / `auto` keep the original image. Measured on the control image, `detail=low` gave `prompt_tokens=240` vs `631` for `detail=high`, at the cost of lost detail.
+- Images can be placed in user / system / tool messages; an assistant message with an image returns 400; at most 600 images per request. This project sends only 1–3 at a time and is nowhere near the limit.
+- **thinking switch** (`extra_body`): on the same screenshot, all four settings produced exactly the same action (all `home`, all valid JSON), but the latency and reasoning tokens differ markedly:
 
-  | 设置 | 耗时 | completion_tokens | reasoning_tokens |
+  | Setting | Latency | completion_tokens | reasoning_tokens |
   |---|---|---|---|
   | `thinking` disabled | 1.42s | 60 | 0 |
   | `reasoning_effort=low` | 2.01s | 139 | 102 |
-  | 默认（不传） | 3.51s | 404 | 363 |
+  | default (not passed) | 3.51s | 404 | 363 |
   | `thinking` enabled | 3.19s | 296 | 258 |
 
-  质量无差异，因此 provider 默认 `{"thinking": {"type": "disabled"}}`，省时间也省费用。
+  There is no quality difference, so the provider defaults to `{"thinking": {"type": "disabled"}}`, saving both time and cost.
 
-## 截图预处理与坐标一致性
+## Screenshot Preprocessing and Coordinate Consistency
 
-截图后、发请求前会依次做：编码优化（PNG→JPEG）→ 可选等比缩放 → 可选轻量增强。实现见 `image_preprocess.py`，全部由 `config.py` 的 `IMAGE_*` 开关控制。
+After the screenshot and before the request, the following happen in order: encoding optimization (PNG→JPEG) → optional proportional resize → optional light enhancement. The implementation is in `image_preprocess.py` and is fully controlled by the `IMAGE_*` switches in `config.py`.
 
-**为什么默认不缩放**：实测客户端缩图不会减少 token（服务端本来就封顶 1024/图），但会让模型返回的坐标脱离发送图坐标系，反算后误差远超可接受范围：
+**Why there is no downscaling by default**: measured, client-side downscaling does not reduce tokens (the server already caps at 1024 per image), but it makes the coordinates returned by the model leave the coordinate system of the sent image, and the error after back-mapping is far beyond an acceptable range:
 
-| 档位 | 上传字节 | 发送尺寸 | prompt_tokens | 订单号识别 | 坐标误差 |
+| Setting | Upload bytes | Sent size | prompt_tokens | Order-number recognition | Coordinate error |
 |---|---|---|---|---|---|
-| 原图 PNG | 78,302 | 1080×1920 | 1075 | 正确 | 0 px |
-| JPEG q85 | 82,052 | 1080×1920 | 1075 | 正确 | 10 px |
-| JPEG q85 + 长边 1300 | 48,165 | 731×1300 | 680 | 正确 | **375 px** |
-| JPEG q85 + 长边 1000 | 34,052 | 562×1000 | 451 | 正确 | **691 px** |
+| Original PNG | 78,302 | 1080×1920 | 1075 | Correct | 0 px |
+| JPEG q85 | 82,052 | 1080×1920 | 1075 | Correct | 10 px |
+| JPEG q85 + longest side 1300 | 48,165 | 731×1300 | 680 | Correct | **375 px** |
+| JPEG q85 + longest side 1000 | 34,052 | 562×1000 | 451 | Correct | **691 px** |
 
-（测试图为模拟手机结算页，红按钮真值中心 `(540, 1440)`。缩放档的原始坐标既不是发送图坐标系也不是原图坐标系，反算后偏差数百像素。）
+(The test image was a simulated phone checkout page; the ground-truth centre of the red button is `(540, 1440)`. The raw coordinates of the scaled variants belong neither to the sent-image coordinate system nor to the original-image one, so after back-mapping they deviate by hundreds of pixels.)
 
-坐标本身有抖动：同一原图重复 3 次，PNG 误差 210/0/5 px，JPEG q85 为 10/146/38 px；格式不是主因，缩放才是。因此默认 `IMAGE_MAX_SIDE=0`，只做 JPEG 转码。
+The coordinates themselves jitter: repeating the same original image 3 times gave errors of 210/0/5 px for PNG and 10/146/38 px for JPEG q85; format is not the main cause, resizing is. Hence `IMAGE_MAX_SIDE=0` by default, with JPEG transcoding only.
 
-**体积收益**：真实桌面截图 PNG 730 KB → JPEG q85 224 KB（30.7%），token 不变（1044）。上传省流量、减少超时，但不省推理成本。
+**Size benefit**: a real desktop screenshot went from 730 KB PNG to 224 KB JPEG q85 (30.7%), with unchanged tokens (1044). Uploading saves bandwidth and reduces timeouts, but does not save inference cost.
 
-若确需缩放，`image_preprocess.map_action_coords` 会把 `x/y`、`x1/y1`、`x2/y2` 按 `scale_x/scale_y` 反算、四舍五入并裁到屏幕范围；每步的 `step_NNN.json` 会记录 `image`（原始/发送尺寸与比例）和 `model_action`（模型原始坐标），可事后核对。未缩放时该函数原样返回，不引入偏移。
+If resizing really is needed, `image_preprocess.map_action_coords` back-maps `x/y`, `x1/y1`, `x2/y2` by `scale_x/scale_y`, rounds them and clips them to the screen bounds; the per-step `step_NNN.json` records `image` (original/sent sizes and ratios) and `model_action` (the model's raw coordinates) for later cross-checking. Without resizing the function returns its input unchanged and introduces no offset.
 
-## 单步耗时与优化
+## Per-Step Latency and Optimizations
 
-真机读取实测（OPPO PLJ110 / Android 17 / 1080×2374，微信自聊会话，10 步；因 Android 17 与 uiautomator2 3.7.1 不兼容，真机走 `SCREEN_DRIVER=adb_dump`）：修复前 81.42s（8.14s/步），开启滚动观察与 OCR 后 105.59s（10.56s/步），其中 OCR 26.27s。完整记录见 `docs/real-device-test-report.md`；这是单次结果，不作为稳定性能指标。
+Measured real-device reading (OPPO PLJ110 / Android 17 / 1080×2374, WeChat self-chat conversation, 10 steps; because Android 17 is incompatible with uiautomator2 3.7.1, the real device used `SCREEN_DRIVER=adb_dump`): 81.42s (8.14s/step) before the fix, and 105.59s (10.56s/step) after enabling scroll observation and OCR, of which OCR accounted for 26.27s. The full record is in `docs/real-device-test-report.md`; this is a single result and not a stable performance figure.
 
-| 阶段 | 耗时 | 说明 |
+| Stage | Latency | Notes |
 |---|---|---|
-| 截图 | 0.2–0.9s | `uiautomator2` 截图 |
-| OCR | 0 或 1.2–1.5s | 按需模式只在 tap 步触发；RapidOCR + `OCR_SCALE=0.5` 实测 |
-| 决策请求 | 1.7–2.6s | DeepSeek，带历史图 + 当前图 |
-| 语义分析 | ≈2s | 仅开启时发生，纯文本 |
-| 执行动作 | 1.9–3.0s | 含 `tap`/`swipe` 固定等待、`open_app` 约 2.5s |
-| 观察请求 | 4.0–6.1s | 含 1.0s 稳定等待 + 截图 + 带图请求 |
-| 完成检测 | ≈2.5s | 旧行为每步一次带图请求 |
-| 循环间隔 | 0.5s | 固定 |
+| Screenshot | 0.2–0.9s | `uiautomator2` screenshot |
+| OCR | 0 or 1.2–1.5s | on-demand mode triggers only on tap steps; measured with RapidOCR + `OCR_SCALE=0.5` |
+| Decision request | 1.7–2.6s | DeepSeek, with history images + current image |
+| Semantic analysis | ≈2s | only when enabled, text-only |
+| Action execution | 1.9–3.0s | includes the fixed wait for `tap`/`swipe`, and about 2.5s for `open_app` |
+| Observation request | 4.0–6.1s | includes a 1.0s stability wait + screenshot + image request |
+| Completion detection | ≈2.5s | old behaviour, one image request per step |
+| Loop interval | 0.5s | fixed |
 
-优化前每步最多 **4 次模型请求**（决策 / 语义 / 观察 / 完成检测），其中 3 次带图。当前改动：
+Before optimization, each step made up to **4 model requests** (decision / semantic / observation / completion detection), 3 of them with images. The current changes:
 
-1. 完成判断并入决策响应（`task_done` 字段），默认不再单独发完成检测请求；
-2. 语义分析默认关闭（`ENABLE_SEMANTIC_ANALYSIS=0`）；
-3. 补上 vision 请求的 `extra_body`，确保 `thinking` 真正关闭（此前只有规划请求带了该参数）；
-4. `type_text` 在输入框已聚焦时直接写入，避免重复点击与再次 YOLO 兜底；
-5. OCR 改为按需（`OCR_MODE=on_demand`）：决策前不跑，只有模型给出 `tap` 时才跑；并改为「控件树优先、OCR 兜底」（`OCR_SNAP_MODE=tree_first`），控件树命中时完全不跑 OCR；
-6. OCR 引擎换成 RapidOCR（`OCR_ENGINE=rapidocr`，ONNX Runtime，跳过方向分类），并默认按 `OCR_SCALE=0.5` 缩小后再识别：1080×2374 真机截图实测 1.2–1.5s（不缩放约 1.3–1.6s；机器并行负载高时两者都会到 5–8s）。EasyOCR 路径保留，可切回对照；
-7. **观察并入决策（`MERGED_OBSERVE=1`，默认开）**：一次带图请求同时返回 `observation` 与 `action`；`step_NNN.json` 的 observation 标注 `observation_scope=pre_action`，表示它来自合并响应、描述本步动作执行前的屏幕。响应缺少 `observation` / `action_type` 或 JSON 不合法时，本步回退旧的两段式（observe + decide），动作仍只执行一次；
-8. **OCR 启动预热（`OCR_PREHEAT=1`，默认开）**：RapidOCR 在 `ScreenAgent` 初始化时加载，不把首次 7s 加载摊到第一步；
-9. **自适应 settle（`OBSERVE_SETTLE_MODE=adaptive`，默认）**：动作后连续两次截图哈希相同就提前返回，最多等 `OBSERVE_SETTLE_SECONDS`；`fixed` 保留旧的固定等待；
-10. 每步 `step_NNN.json` 新增 `timings`（screenshot/ocr_pre/ocr/ocr_triggered/ocr_reason/snap_source/snap_tree/snap_yolo/snap_ocr/ocr_snap/preprocess/semantic/decision/decide_total/execute/observe/settle/completion/merged_fallback），便于统计触发率与省下的时间；`timings.ocr` 已包含控件树、YOLO 与 OCR 三段定位耗时，`snap_yolo` 单独记录 YOLO 段。
+1. Completion detection is merged into the decision response (the `task_done` field), so by default a separate completion request is no longer sent;
+2. Semantic analysis is off by default (`ENABLE_SEMANTIC_ANALYSIS=0`);
+3. The vision request's `extra_body` was added, ensuring `thinking` is really disabled (previously only the planning request carried this parameter);
+4. `type_text` writes directly when the input box is already focused, avoiding double taps and a second YOLO fallback;
+5. OCR became on-demand (`OCR_MODE=on_demand`): it does not run before the decision, only when the model returns `tap`; and it became "control tree first, OCR fallback" (`OCR_SNAP_MODE=tree_first`), so OCR does not run at all when the control tree matches;
+6. The OCR engine was switched to RapidOCR (`OCR_ENGINE=rapidocr`, ONNX Runtime, skipping orientation classification), and by default the image is downscaled by `OCR_SCALE=0.5` before recognition: measured 1.2–1.5s on real 1080×2374 screenshots (about 1.3–1.6s without downscaling; both reach 5–8s under high parallel machine load). The EasyOCR path is retained and can be switched back for comparison;
+7. **Observation merged into the decision (`MERGED_OBSERVE=1`, on by default)**: one image request returns both `observation` and `action`; the observation in `step_NNN.json` is tagged `observation_scope=pre_action`, meaning it comes from the merged response and describes the screen before this step's action was executed. If the response lacks `observation` / `action_type` or the JSON is invalid, that step falls back to the old two-stage form (observe + decide), and the action is still executed only once;
+8. **OCR pre-warm at startup (`OCR_PREHEAT=1`, on by default)**: RapidOCR is loaded when `ScreenAgent` initializes, so the first 7s load is not pushed onto the first step;
+9. **Adaptive settle (`OBSERVE_SETTLE_MODE=adaptive`, default)**: after an action, returns early once two consecutive screenshot hashes match, waiting at most `OBSERVE_SETTLE_SECONDS`; `fixed` keeps the old fixed wait;
+10. Each step's `step_NNN.json` gains `timings` (screenshot/ocr_pre/ocr/ocr_triggered/ocr_reason/snap_source/snap_tree/snap_yolo/snap_ocr/ocr_snap/preprocess/semantic/decision/decide_total/execute/observe/settle/completion/merged_fallback) for computing trigger rates and saved time; `timings.ocr` already includes the control-tree, YOLO and OCR localization segments, and `snap_yolo` records the YOLO segment separately.
 
-按上表估算：旧流程每步最多 4 次模型请求；完成判断并入决策、语义分析关闭后为 2 次；`MERGED_OBSERVE=1` 默认再合并观察与决策，**正常每步 1 次带图请求**。整步耗时按旧阶段耗时推算约 **8–10s → 5–7s**（估算）。真机 A/B 见下一节：235deea 上合并观察反而更慢，原因是同期的规则快路固定滚动 6 次，不是合并观察本身；该问题已按「滚动上限 2 + 轻观察」修复：规则开关实测 11.44s vs 17.81s，规则快路在 adb_dump 下默认开启。OCR 预热只省启动后的第一步约 6–7s，自适应 settle 每步最多省约 1s。真机单次实测见上方报告链接，不作为稳定性能指标。
+Estimating from the table above: the old flow made up to 4 model requests per step; after merging completion detection into the decision and turning semantic analysis off it is 2; with `MERGED_OBSERVE=1` merging observation and decision by default, **normally 1 image request per step**. Extrapolating from the old stage timings gives roughly **8–10s → 5–7s** per step (estimate). Real-device A/B is in the next section: on 235deea merged observation was actually slower, caused by the concurrent rule fast path scrolling a fixed 6 times, not by merged observation itself; that was fixed with "scroll limit 2 + light observation": measured 11.44s with rules vs 17.81s without, and the rule fast path is on by default under `adb_dump`. OCR pre-warm only saves about 6–7s on the first step after startup, and adaptive settle saves at most about 1s per step. The single real-device measurement is linked in the report above and is not a stable performance figure.
 
-合并观察的回退路径：若合并响应不合法，本步总计 3 次请求（1 次失败的合并请求 + 1 次 observe + 1 次 decide），动作仍只执行一次；`COMPLETION_CHECK=every_step` 时不做合并，保持原两段式 + 完成检测，避免退化出额外的 task_done 调用。`tests/test_ocr_on_demand.py` 用假客户端断言了默认每步 1 次、关闭合并时 2 次、回退时动作只执行一次。
+Fallback path of merged observation: if the merged response is invalid, the step makes 3 requests in total (1 failed merged request + 1 observe + 1 decide), and the action is still executed only once; with `COMPLETION_CHECK=every_step` merging is not done, keeping the original two-stage form + completion detection, to avoid degenerating into an extra task_done call. `tests/test_ocr_on_demand.py` uses a fake client to assert 1 request per step by default, 2 when merging is off, and that the action executes only once on fallback.
 
-### 逐次 token 与耗时怎么读
+### How to Read Per-Step Tokens and Timings
 
-- 每步 `runs/<run>/step_NNN.json` 的 `usage` 是该步视觉调用的 token 汇总（`calls` 里按 `decision` / `observe` / `completion` 列出，缺 usage 时为 `null`）；`timings` 是各阶段耗时。
-- 任务正常结束或达到最大步数时写 `runs/<run>/usage_summary.json`：总 prompt/completion/total token、每步均值、按 provider 汇总。
-- 阶段耗时汇总（单 run 或多 run 对比）：
+- The `usage` of each step's `runs/<run>/step_NNN.json` is the token summary of that step's vision calls (listed by `decision` / `observe` / `completion` in `calls`; `null` when usage is missing); `timings` holds the per-stage latencies.
+- When a task ends normally or reaches the maximum number of steps, `runs/<run>/usage_summary.json` is written: total prompt/completion/total tokens, per-step means, and a per-provider summary.
+- Stage-timing summaries (single run or multi-run comparison):
 
 ```bash
 python experiments/summarize_timings.py runs/20261124-095136
 python experiments/summarize_timings.py runs/20261124-095045 runs/20261124-095136
 ```
 
-输出包含 `decision/observe/ocr/yolo/screenshot/execute/settle` 等阶段的样本数、总计、均值、P50、P90；多目录时追加 `mean / p90` 对比表。
+The output includes the sample count, total, mean, P50 and P90 of stages such as `decision/observe/ocr/yolo/screenshot/execute/settle`; with several directories a `mean / p90` comparison table is appended.
 
-### MERGED_OBSERVE A/B 怎么跑
+### How to Run the MERGED_OBSERVE A/B
 
-同一任务分别关闭/开启合并观察，然后对比两个 run：
+Run the same task with merged observation off and on, then compare the two runs:
 
 ```powershell
-# 1) 关闭合并（旧两段式）
+# 1) Merging off (old two-stage form)
 $env:MERGED_OBSERVE="0"; python run.py
-# 记录本次生成的 run 目录，例如 runs\20261120-101500-off
+# Note the run directory produced, e.g. runs\20261120-101500-off
 
-# 2) 开启合并
+# 2) Merging on
 $env:MERGED_OBSERVE="1"; python run.py
-# 记录 runs\20261120-102000-on
+# Note runs\20261120-102000-on
 
-# 3) 对比阶段耗时与 token
+# 3) Compare stage timings and tokens
 python experiments\summarize_timings.py runs\20261120-101500-off runs\20261120-102000-on
 Get-Content runs\20261120-101500-off\usage_summary.json
 Get-Content runs\20261120-102000-on\usage_summary.json
 ```
 
-A/B 时保持同一任务文本、同一设备、同一网络与同一 provider；否则数字不可比。`--json` 可把 `summarize_timings.py` 结果交给其他脚本。
+For an A/B, keep the same task text, the same device, the same network and the same provider; otherwise the numbers are not comparable. `--json` lets `summarize_timings.py` hand its result to other scripts.
 
-### 验证标签：真机实测 / 离线回放 / 未执行
+### Verification Labels: Real-Device Measurement / Offline Replay / Not Executed
 
-报告和判分表都标注来源标签，离线回放不等于真机实测。
+Both the report and the scoring table carry source labels; an offline replay does not equal a real-device measurement.
 
-| 标签 | 含义 | 当前结论 |
+| Label | Meaning | Current conclusion |
 | --- | --- | --- |
-| 真机实测（基线 235deea） | 设备截图、`step_*.json`、`usage_summary.json` 直接产生 | 同一任务同群、`adb_dump`：`MERGED_OBSERVE=0` 20.63s / 3 请求；`=1` 71.07s / 1 请求；序列不一致（`tap→finish` vs `tap→swipe×6→finish`），是策略差异 |
-| 真机实测（2026-11-22 改后，默认规则开启） | 同上 | `MERGED_OBSERVE=0` 21.03s / 5 请求 / 2 dumps；`=1` 11.45s / 1 请求 / 3 dumps（规则 `open_group` + 1 次模型完成，规则步 5.47–5.65s）。两组序列不同（模型导航 vs 规则导航），只能算策略差异 |
-| 真机实测（合并观察，规则关闭） | 同上 | 0/1 各 3 次：21.27s vs 17.81s（前两次；第三次超时 56.3s），序列一致（`wait→tap→finish`），合并观察约快 16% |
-| 真机实测（规则开关） | 同上 | 强制规则 11.44s / 1 请求 vs 默认关闭 17.81s / 3 请求；规则步 5.5s ≈ 模型步 5.3s，但少一次请求，故默认开启 |
-| 真机实测（搜索 vs 列表） | 同上 | 同群各 3 次：搜索 39.01s / 7 dumps / 4 步；列表 11.48s / 3 dumps / 2 步。`adb_dump` 下搜索页 dump 明显更慢，搜索不作为默认（`RULE_SEARCH_FORCE=1` 可强制） |
-| 真机实测（monitor） | 单进程 `run_cycle`（QQ 单群） | 7 步 / 51.2s / 19,591 tokens；`fetch→extract→dedupe→resolve→write` 全链路，输出 `data.json`、`deadlines.ics`、`calendar.html`；手机日历测试事件写入后已删除，.ics 生成 VEVENT+VALARM |
-| 离线回放 | 冻结真机抽取候选，用当前裁决/聚焦重算；不联网、不碰手机 | 判分复跑 **21/21 = 100%**（hit 21、partial 0、fail 0、violation 0；D02/D03 未采集已剔除分母；D06 在置顶过滤修复后由 partial 变 hit，旧值 20/21 已废弃）；2026-11-24 在 `main@411c48e` 复跑与 2026-11-22 产物逐字节一致（SHA256 `F4894F17…`）；证据 `runs/_verify/judge_replay_result.json`（`runs/` 不入库） |
-| 离线回放 | 规则停止条件 | 真机实时控件树：聊天页已显示「操作系统作业一」时规则 0 次滚动；群列表 `open_group`；发送区域坐标/文案均拒绝 |
+| Real-device measurement (baseline 235deea) | Screenshots, `step_*.json` and `usage_summary.json` produced directly on the device | Same task, same group, `adb_dump`: `MERGED_OBSERVE=0` 20.63s / 3 requests; `=1` 71.07s / 1 request; the sequences differ (`tap→finish` vs `tap→swipe×6→finish`), which is a policy difference |
+| Real-device measurement (after the 2026-11-22 change, rules on by default) | Same as above | `MERGED_OBSERVE=0` 21.03s / 5 requests / 2 dumps; `=1` 11.45s / 1 request / 3 dumps (rule `open_group` + 1 model completion; rule steps 5.47–5.65s). The two sequences differ (model navigation vs rule navigation), so this only counts as a policy difference |
+| Real-device measurement (merged observe, rules off) | Same as above | 3 runs each for 0/1: 21.27s vs 17.81s (the first two; the third timed out at 56.3s), sequences identical (`wait→tap→finish`), merged observation about 16% faster |
+| Real-device measurement (rule fast path on/off) | Same as above | rules forced on 11.44s / 1 request vs off by default 17.81s / 3 requests; a rule step takes 5.5s ≈ a model step's 5.3s, but with one fewer request, hence on by default |
+| Real-device measurement (search vs list) | Same as above | same group, 3 runs each: search 39.01s / 7 dumps / 4 steps; list 11.48s / 3 dumps / 2 steps. Under `adb_dump` the search-page dump is clearly slower, so search is not the default (`RULE_SEARCH_FORCE=1` forces it) |
+| Real-device measurement (monitor) | Single-process `run_cycle` (QQ, single group) | 7 steps / 51.2s / 19,591 tokens; the full `fetch→extract→dedupe→resolve→write` chain, outputting `data.json`, `deadlines.ics`, `calendar.html`; the phone-calendar test event was deleted after being written, and the .ics generates VEVENT+VALARM |
+| Offline replay | Frozen real-device extraction candidates, recomputed with the current resolution/focus logic; no network, no phone | Scoring re-run **21/21 = 100%** (hit 21, partial 0, fail 0, violation 0; D02/D03 were not collected and are excluded from the denominator; D06 went from partial to hit after the pinned-chat filter fix, the old 20/21 is deprecated); the 2026-11-24 re-run on `main@411c48e` is byte-identical to the 2026-11-22 artifacts (SHA256 `F4894F17…`); evidence `runs/_verify/judge_replay_result.json` (`runs/` is not committed) |
+| Offline replay | Rule stop conditions | Live control tree on the real device: on the chat page, when "操作系统作业一" is already displayed the rule scrolls 0 times; group list `open_group`; the send-area coordinates/text are rejected |
 
-同屏复用与连接预热不列为收益项：6 次归档 A/B 中 `reused_frame` 均为 0；复用只在静态页命中，聊天页因光标/动画哈希变化；复用最多省 `preprocess` 0.11–0.15s/步（monitor 中出现过 1 次同屏复用，但不足以改变任务耗时结论）；连接预热 0.22–0.43s 仅启动一次，每步收益 0.00s。
+Same-screen reuse and connection warm-up are not listed as gains: `reused_frame` was 0 in all 6 archive A/B runs; reuse only hits on static pages, and chat pages change hash because of the cursor/animation; reuse saves at most 0.11–0.15s/step of `preprocess` (one same-screen reuse occurred in monitor, but not enough to change the task-latency conclusion); connection warm-up costs 0.22–0.43s only once at startup, i.e. 0.00s per step.
 
-### 脱敏证据
+### Sanitized Evidence
 
-`experiments/export_evidence.py` 从 `runs/` 导出最小可公开集到 `docs/evidence/<run>/`：保留步数、动作类型、阶段耗时、token usage、观察长度与哈希；剔除全屏截图、发送图、原始 observation/action 文本、群名/课程名与 OCR 原文。示例见 `docs/evidence/20261117-211201/`。不要把 `runs/` 整体提交进仓库。
+`experiments/export_evidence.py` exports the minimal public set from `runs/` to `docs/evidence/<run>/`: it keeps step counts, action types, stage timings, token usage, observation length and hashes; it strips full-screen screenshots, sent images, raw observation/action text, group/course names and raw OCR text. See `docs/evidence/20261117-211201/` for an example. Do not commit the whole `runs/` directory.
 
-`OCR_SCALE` 取舍（同一批图片实测，二次调用、机器空闲）：
+`OCR_SCALE` trade-off (measured on the same batch of images, second invocation, idle machine):
 
-| scale | 缩放后尺寸 | 耗时 | 设置页元素 | 结算页元素 | 关键字段（￥128.00/订单号/确认支付） | 中心点偏差 |
+| scale | Size after scaling | Latency | Settings-page elements | Checkout-page elements | Key fields (￥128.00/order number/confirm payment) | Centre deviation |
 |---|---|---|---|---|---|---|
-| 1.0 | 1080×2374 | 1.3–1.6s | 23 | 14 | 全对 | 基准 |
-| 0.75 | 810×1780 | 1.2–1.4s | 25 | 14 | 全对 | 均值 1.2–4.4px，最大 32px |
-| **0.5（默认）** | 540×1187 | **1.2–1.5s** | 24 | 14 | 全对 | 均值 1.4–2.9px，最大 32px |
-| 0.35 | 378×831 | 1.3–1.5s | 23 | 14 | 全对 | 均值 1.4px，最大 3px |
+| 1.0 | 1080×2374 | 1.3–1.6s | 23 | 14 | all correct | baseline |
+| 0.75 | 810×1780 | 1.2–1.4s | 25 | 14 | all correct | mean 1.2–4.4px, max 32px |
+| **0.5 (default)** | 540×1187 | **1.2–1.5s** | 24 | 14 | all correct | mean 1.4–2.9px, max 32px |
+| 0.35 | 378×831 | 1.3–1.5s | 23 | 14 | all correct | mean 1.4px, max 3px |
 
-结论：在本机这批图上，0.5 没有出现漏字，`￥128.00`、订单号、按钮文字均正确，坐标偏差均值 1.4–2.9px（个别长文本行因 bbox 中心变化到 32px，仍在 80px 吸附半径内）。选 0.5 而不是 0.35，是给更小字号/低对比度界面留余量；若某些 App 小字识别率下降，把 `OCR_SCALE` 调回 1.0 即可。
+Conclusion: on this machine and this batch of images, 0.5 produced no missing characters — `￥128.00`, the order number and the button text were all correct — with a mean coordinate deviation of 1.4–2.9px (a few long text lines shift up to 32px because their bbox centre moves, still within the 80px snap radius). 0.5 rather than 0.35 was chosen to leave margin for smaller fonts / lower-contrast UIs; if small-text recognition degrades in some App, just set `OCR_SCALE` back to 1.0.
 
-按需定位的触发与路径（`ocr_locator.should_trigger_ocr` + `OCR_SNAP_MODE`）：
+Triggers and paths of on-demand localization (`ocr_locator.should_trigger_ocr` + `OCR_SNAP_MODE`):
 
-- 触发条件：`OCR_MODE=on_demand` 且动作为 `tap`；其余动作（`open_app`/`back`/`home`/`wait`/`swipe`/`type`/`send`/`finish`）完全不跑。
-- `tree_first`（默认）：合并控件树、OCR 文本与（按需）YOLO 候选；有 `target` 时按文字匹配打分，唯一匹配直接吸附，多个匹配按模型坐标选最近的一个；没有 `target` 时才用距离阈值。
-- `ocr_only` / `tree_only`：强制只走一条路径，便于对照。
-- 具名目标匹配不到时先保持界面重新观察；连续两次仍匹配不到时明确失败（“目标未定位，未执行点击”），不再按模型坐标猜测点击。
-- 无 target 的吸附只在距最近元素中心 ≤ `OCR_SNAP_MAX_DISTANCE`（默认 80px）或落在 bbox 内时发生；实际路径与耗时写进 `timings.snap_source`（`tree`/`ocr`/`yolo`/`none`）、`snap_tree`、`snap_yolo`、`snap_ocr`。
+- Trigger condition: `OCR_MODE=on_demand` and the action is `tap`; all other actions (`open_app`/`back`/`home`/`wait`/`swipe`/`type`/`send`/`finish`) do not run it at all.
+- `tree_first` (default): merges the control tree, OCR text and (on demand) YOLO candidates; with a `target` it scores by text match and snaps directly on a unique match, or picks the nearest to the model's coordinates among several; only without a `target` does it use the distance threshold.
+- `ocr_only` / `tree_only`: force a single path, for comparison.
+- If a named target cannot be matched, it first holds the screen and observes again; if it still cannot be matched twice in a row it fails explicitly ("目标未定位，未执行点击" — target not located, click not executed) and no longer guesses a tap from the model's coordinates.
+- Snapping without a target happens only when the distance to the nearest element centre is ≤ `OCR_SNAP_MAX_DISTANCE` (default 80px) or the point falls inside a bbox; the actual path and latency are written to `timings.snap_source` (`tree`/`ocr`/`yolo`/`none`), `snap_tree`, `snap_yolo` and `snap_ocr`.
 
+## Local Vision Model (Qwen3-VL-8B-Instruct GGUF)
 
+> **Optional configuration, not the default**: the default execution and planning models are still the cloud `deepseek` (see
+> `ACTIVE_PROVIDER` / `PLANNER_PROVIDER` in `config.py`; offline extraction also defaults to `deepseek`). The local 8B model is enabled only when
+> `ACTIVE_PROVIDER=local` is set explicitly, and requires downloading the weights and mmproj yourself (not included in the repository);
+> with 6 GB of VRAM the vision encoder has to stay on the CPU, giving about 75–80 seconds per image request.
 
-## 本地视觉模型（Qwen3-VL-8B-Instruct GGUF）
+Intended for offline execution without depending on a cloud vision API. Weights, mmproj, the llama.cpp runtime and the HF cache live outside the repository, by default in `%LOCALAPPDATA%\qwen3vl-local` (overridable with `-BaseDir` or `LOCAL_VLM_HOME`), and are not written to git.
 
-> **可选配置，非默认**：默认执行模型与规划模型仍是云端 `deepseek`（见 `config.py` 的
-> `ACTIVE_PROVIDER` / `PLANNER_PROVIDER`，离线抽取也默认走 `deepseek`）。本地 8B 仅在显式
-> 设置 `ACTIVE_PROVIDER=local` 时启用，并需要自行下载权重与 mmproj（仓库不包含）；
-> 6 GB 显存只能把视觉编码器留在 CPU，带图约 75–80 秒/次。
+### Hardware and Parameter Trade-offs
 
-用于不依赖云端视觉 API 的离线执行。权重、mmproj、llama.cpp 运行时与 HF 缓存放在仓库外，默认 `%LOCALAPPDATA%\qwen3vl-local`（可用 `-BaseDir` 或 `LOCAL_VLM_HOME` 覆盖），不写进 git。
+The machine is an RTX 3060 Laptop (6 GB VRAM). The Q4_K_M weights are 5,027,784,800 bytes (about 4.68 GiB) and mmproj F16 is 1,159,029,824 bytes (about 1.08 GiB); together they already exceed 6 GB, so **it is impossible to fit everything in VRAM**. Therefore:
 
-### 硬件与参数取舍
+- All text layers are offloaded to the GPU: `-ngl 36`
+- The vision encoder stays on the CPU: `--no-mmproj-offload`
+- KV cache quantization: `--cache-type-k q8_0 --cache-type-v q8_0`
+- Context: `-c 8192`
+- Measured steady usage about **5.3 GB / 6.1 GB** (`nvidia-smi` 5367 MiB), no OOM
 
-本机为 RTX 3060 Laptop（6 GB 显存）。Q4_K_M 权重 5,027,784,800 字节（约 4.68 GiB），mmproj F16 1,159,029,824 字节（约 1.08 GiB），两者合计已超过 6 GB，**不可能全部放进显存**。因此：
+The cost is that vision encoding runs on the CPU: a request with one 1707×1067 screenshot takes about **76–78 seconds**; text-only requests take about 10 seconds. Putting mmproj back on the GPU causes OOM due to insufficient VRAM; lowering `-ngl` leaves headroom but slows text generation.
 
-- 文本层全部卸载到 GPU：`-ngl 36`
-- 视觉编码器留在 CPU：`--no-mmproj-offload`
-- KV cache 量化：`--cache-type-k q8_0 --cache-type-v q8_0`
-- 上下文：`-c 8192`
-- 实测稳定占用约 **5.3 GB / 6.1 GB**（`nvidia-smi` 5367 MiB），无 OOM
+### Files and Downloads
 
-代价是视觉编码走 CPU：带一张 1707×1067 截图的请求约 **76–78 秒**；纯文本请求约 10 秒级。若把 mmproj 也放回 GPU，显存不足会 OOM；降低 `-ngl` 可留出余量但文本生成变慢。
-
-### 文件与下载
-
-从同一个 HF 仓库取权重与视觉投影（缺 mmproj 模型看不了图）：
+Fetch the weights and the vision projection from the same HF repository (the model cannot see images without mmproj):
 
 ```bash
-# 目标目录示例（仓库外，可按 -BaseDir 调整）
+# Example target directory (outside the repository; adjust with -BaseDir as needed)
 mkdir -p "$LOCALAPPDATA/qwen3vl-local/models"
 
 curl -L -o Qwen3VL-8B-Instruct-Q4_K_M.gguf \
@@ -521,244 +519,244 @@ curl -L -o mmproj-Qwen3VL-8B-Instruct-F16.gguf \
   https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-8B-Instruct-F16.gguf
 ```
 
-llama.cpp 使用 `b12470` 的 Windows CUDA 12.4 预编译包：`llama-b12470-bin-win-cuda-12.4-x64.zip` + `cudart-llama-bin-win-cuda-12.4-x64.zip`，解压到同一目录（本机 `runtime\llama-extract\`）。显式设置缓存目录：
+llama.cpp uses the `b12470` Windows CUDA 12.4 prebuilt package: `llama-b12470-bin-win-cuda-12.4-x64.zip` + `cudart-llama-bin-win-cuda-12.4-x64.zip`, extracted into the same directory (on this machine `runtime\llama-extract\`). Set the cache directory explicitly:
 
 ```powershell
 $env:HF_HOME = "$env:LOCALAPPDATA\qwen3vl-local\hf-cache"
 $env:HF_HUB_CACHE = "$env:HF_HOME\hub"
 ```
 
-### 启动与切换
+### Starting and Switching
 
-一键启动（前台运行，端口 8080）：
+One-click start (runs in the foreground, port 8080):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\start_local_vlm.ps1
 ```
 
-脚本参数可调：`-Port`、`-NGpuLayers`、`-Ctx`、`-Threads`、`-BaseDir`、`-ModelDir`、`-LlamaDir`。未指定 `-BaseDir` 时依次使用 `LOCAL_VLM_HOME`、`%LOCALAPPDATA%\qwen3vl-local`。服务提供 OpenAI 兼容接口：
+Script parameters can be adjusted: `-Port`, `-NGpuLayers`, `-Ctx`, `-Threads`, `-BaseDir`, `-ModelDir`, `-LlamaDir`. When `-BaseDir` is not given, `LOCAL_VLM_HOME` then `%LOCALAPPDATA%\qwen3vl-local` are used in that order. The server offers an OpenAI-compatible endpoint:
 
 ```bash
 curl http://127.0.0.1:8080/v1/models
-# 模型别名：qwen3-vl-8b-instruct；支持 multimodal（image_url base64）
+# Model alias: qwen3-vl-8b-instruct; multimodal (image_url base64) supported
 ```
 
-切换执行模型（不用改代码）：
+Switching the execution model (no code changes):
 
 ```powershell
-$env:ACTIVE_PROVIDER = "local"   # 或 "qwen" 切回云端
+$env:ACTIVE_PROVIDER = "local"   # or "qwen" to switch back to the cloud
 python run.py
 ```
 
-`config.PROVIDERS["local"]` 默认 `base_url=http://127.0.0.1:8080/v1`，可用 `LOCAL_VLM_BASE_URL`、`LOCAL_VLM_MODEL` 覆盖；`llama-server` 不校验密钥，`LOCAL_VLM_API_KEY` 仅需非空（默认 `local`）。
+`config.PROVIDERS["local"]` defaults to `base_url=http://127.0.0.1:8080/v1`, overridable with `LOCAL_VLM_BASE_URL` and `LOCAL_VLM_MODEL`; `llama-server` does not validate the key, so `LOCAL_VLM_API_KEY` only needs to be non-empty (default `local`).
 
-真实请求验证（本机实测）：一张真实桌面截图 → 视觉描述正确；按执行提示词返回 `{"action_type": "home", "params": {}, "observation": "返回桌面"}`，JSON 可解析。带图请求 prompt eval 约 76 秒（CPU 视觉编码），生成约 1–2 秒。未在 Android 真机上跑过，仅验证了模型服务与图片协议。
+Real-request verification (measured on this machine): a real desktop screenshot → correct visual description; following the execution prompt it returned `{"action_type": "home", "params": {}, "observation": "返回桌面"}` ("back to the home screen"), and the JSON is parseable. A request with an image spent about 76 seconds in prompt eval (CPU vision encoding) and about 1–2 seconds generating. It has not been run on a real Android device; only the model server and the image protocol were verified.
 
-### 上下文窗口（6 GB 卡为什么要限制）
+### Context Window (Why a 6 GB Card Must Be Limited)
 
-每张截图都会转成数百到上千个视觉 token，多轮任务里把历史原图全带上会同时抬高上下文与显存。默认策略：`HISTORY_IMAGE_WINDOW=1` 只带最近 1 张历史原图，当前屏幕始终带图；更早的步骤压成文字摘要（动作类型、坐标/输入文字、观察结论），由 `HISTORY_TEXT_STEPS` 控制条数。
+Every screenshot becomes hundreds to over a thousand vision tokens, and carrying all historical original images across multi-turn tasks raises both context and VRAM usage. Default policy: `HISTORY_IMAGE_WINDOW=1` includes only the most recent historical original image, with the current screen always included; earlier steps are compressed into text summaries (action type, coordinates/typed text, observation conclusion), with the count controlled by `HISTORY_TEXT_STEPS`.
 
-调大 `HISTORY_IMAGE_WINDOW` 的代价：视觉 token 与显存占用上升，6 GB 卡更容易 OOM，单步耗时也会增加；建议先在当前设备上逐步加 1 并观察 `nvidia-smi` 与请求耗时。
+The cost of raising `HISTORY_IMAGE_WINDOW`: vision tokens and VRAM usage rise, a 6 GB card OOMs more easily, and per-step latency increases; it is recommended to raise it by 1 at a time on the current device while watching `nvidia-smi` and request latency.
 
-## 项目结构
+## Project Structure
 
-- 核心链路：`screen_agent.py`（屏幕理解与操作循环）、`phone_controller.py`（uiautomator2 操作）、`phone_driver.py`（驱动选择/回退）、`adb_controller.py`（Android 17 的 adb dump 回退）、`ocr_locator.py`（OCR + 控件树定位）、`input_detector.py`（YOLO 输入框兜底）、`app_launcher.py`（应用启动）
-- 记忆与状态：`memory.py`（步骤记录）、`ui_state.py`（Streamlit 状态）
-- 规划：`task_planner.py`（子任务拆解与重规划，含 `context_needed` 信息传递）、`multi_agent.py`（多应用编排）
-- 界面：`app.py` + `templates/`（Flask + SocketIO），`frontend.py`（可选 Streamlit）
-- 配置：`config.py`、`.env.example`
-- 实验：`experiments/`（任务集、重复 runner、指标聚合、baseline 适配层与三个上游 wrapper）
-- 测试与工程化：`tests/`（644 passed、2 skipped，CI 全量执行且不依赖真机/模型）、`pyproject.toml`（ruff + pytest 配置）、`.github/workflows/ci.yml`、`requirements-lock.txt`（依赖唯一真源）、`scripts/check_test_deps.py`（测试 import 与 lock 一致性检查）、`scripts/create_pr.py`（UTF-8 安全的 REST 建 PR 脚本）
-- 辅助脚本：`get_packages.py`（导出手机已安装应用包名）、`debug_detector.py`（YOLO 权重自检）、`find_input.py`（手动探测各高度比例能否点出键盘）
-- 文档：`test.md` 为对比实验方案（任务集、指标、评判标准）
+- Core pipeline: `screen_agent.py` (screen understanding and action loop), `phone_controller.py` (uiautomator2 operations), `phone_driver.py` (driver selection/fallback), `adb_controller.py` (the adb dump fallback for Android 17), `ocr_locator.py` (OCR + control-tree localization), `input_detector.py` (YOLO input-box fallback), `app_launcher.py` (app launching)
+- Memory and state: `memory.py` (step records), `ui_state.py` (Streamlit state)
+- Planning: `task_planner.py` (subtask decomposition and replanning, including `context_needed` information passing), `multi_agent.py` (multi-application orchestration)
+- Interface: `app.py` + `templates/` (Flask + SocketIO), `frontend.py` (optional Streamlit)
+- Configuration: `config.py`, `.env.example`
+- Experiments: `experiments/` (task set, repeated runner, metric aggregation, baseline adapter layer and three upstream wrappers)
+- Tests and engineering: `tests/` (644 passed, 2 skipped; CI runs the full suite with no physical device or model), `pyproject.toml` (ruff + pytest configuration), `.github/workflows/ci.yml`, `requirements-lock.txt` (single source of truth for dependencies), `scripts/check_test_deps.py` (checks that test imports are consistent with the lock), `scripts/create_pr.py` (UTF-8-safe REST script for creating PRs)
+- Helper scripts: `get_packages.py` (export the package names of apps installed on the phone), `debug_detector.py` (YOLO weights self-check), `find_input.py` (manually probe which height ratios bring up the keyboard)
+- Documentation: `test.md` is the comparative experiment plan (task set, metrics, judging criteria)
 
-输入框定位优先使用 uiautomator2 的控件树（`EditText` 等）；`models/input_box.pt` 是 YOLO 视觉兜底权重。
+Input-box localization prefers the uiautomator2 control tree (`EditText` etc.); `models/input_box.pt` is the YOLO visual fallback weights.
 
-### 输入框检测权重
+### Input Box Detection Weights
 
-`models/input_box.pt` 随仓库分发（约 5.4 MB），是 `input_box` + `search_icon` 两类别模型，`input_detector.py` 按类别名分别产出输入框与搜索图标候选。`.gitignore` 只放行这一个权重文件，其它 `*.pt`（训练产物、本地模型）仍不入库。
+`models/input_box.pt` is shipped with the repository (about 5.4 MB) and is a two-class model with `input_box` + `search_icon`; `input_detector.py` produces input-box and search-icon candidates separately by class name. `.gitignore` allow-lists only this one weights file; other `*.pt` files (training artifacts, local models) are still not tracked.
 
-- 来源：本项目 2026-11-25 在自有截图数据集上训练（YOLO11n，30 epoch，CPU），训练产物不入库，只提交 `best.pt`
-- 验证集（54 张 / 80 个实例）：整体 P 0.929 / R 0.803 / mAP50 0.936 / mAP50-95 0.753；`input_box` mAP50 0.959、`search_icon` mAP50 0.912
-- 真机抽样（6 张微信/QQ 截图）：`input_box` 置信度 0.82–0.96，浅色主题也能检出；旧版权重在同类截图上为 0.21–0.37，且浅色主题漏检
-- 校验值：
+- Source: trained by this project on 2026-11-25 on its own screenshot dataset (YOLO11n, 30 epochs, CPU); training artifacts are not committed, only `best.pt`
+- Validation set (54 images / 80 instances): overall P 0.929 / R 0.803 / mAP50 0.936 / mAP50-95 0.753; `input_box` mAP50 0.959, `search_icon` mAP50 0.912
+- Real-device sampling (6 WeChat/QQ screenshots): `input_box` confidence 0.82–0.96, detected even with the light theme; the old weights gave 0.21–0.37 on the same screenshots and missed detections on the light theme
+- Checksums:
 
   ```bash
   git hash-object models/input_box.pt
-  # 期望 7274985afc25368c0989ef69e1af71c60e2c6c15
+  # expected 7274985afc25368c0989ef69e1af71c60e2c6c15
 
   sha256sum models/input_box.pt
-  # 期望 435403193CC96FEC4BF72505AB55237D723735898B70B634E8B900A7F02FE2CE
+  # expected 435403193CC96FEC4BF72505AB55237D723735898B70B634E8B900A7F02FE2CE
   ```
 
-- 如仍想用旧版单类别权重：`peter-lgxj/gui_yolo_model` 的 `runs/detect/runs/input_box5/weights/best.pt`（blob sha1 `2f5adef8fe64be1898363e8d38b5098ff4c62c2a`），用 `GUI_MODEL_PATH` 指向即可
-- 置信度：`input_detector.py` 默认 `conf=0.3`；屏幕候选筛选里 `search_icon` 用 0.45、`input_box` 用 0.65。真机误检多时可上调
-- 无权重或加载失败时自动降级到 uiautomator2 控件树（`EditText`）检测，不会中断任务
+- If you still want the old single-class weights: `runs/detect/runs/input_box5/weights/best.pt` in `peter-lgxj/gui_yolo_model` (blob sha1 `2f5adef8fe64be1898363e8d38b5098ff4c62c2a`); just point `GUI_MODEL_PATH` at it
+- Confidence: `input_detector.py` uses `conf=0.3` by default; in the on-screen candidate filtering, `search_icon` uses 0.45 and `input_box` uses 0.65. Raise these if real-device false positives are frequent
+- With no weights or a load failure it automatically degrades to uiautomator2 control-tree (`EditText`) detection and never aborts the task
 
-## 实验
+## Experiments
 
-`experiments/tasks.json` 收录 `test.md` 的 20 个任务（含 App、理论步数、难度等级），runner 按等级自动决定重复次数（`repeat_by_level`，当前 L1/L2 为 3 次、L3 为 2 次；**L3 最终次数是 `test.md` 4.2 的待定项**，当前值只是实现默认，可用 `--repeat` 强制统一）：
+`experiments/tasks.json` contains the 20 tasks from `test.md` (with App, theoretical step count and difficulty level); the runner decides the repeat count automatically by level (`repeat_by_level`, currently 3 for L1/L2 and 2 for L3; **the final L3 repeat count is an open item in `test.md` §4.2** — the current value is only the implementation default and can be unified with `--repeat`):
 
-> 外部数据集 `测试数据集\微Q邮\ddl_tasks.json` 的 D04 原文只写「进入班级群」，手机上有多个 QQ 群时可能进错群。`run_experiment.py` 在加载任务后按 `task_id` 覆盖为「进入『2026 计算机班级群』」，**不改数据集原文件**；其他任务原样保留。QQ 单群冒烟可用根目录的 `sources.qq.example.yaml`（复制为 `sources.qq.yaml`），它只扫这一个群，输出/状态目录独立，不影响默认 `sources.yaml`。
+> D04 in the external dataset `测试数据集\微Q邮\ddl_tasks.json` only says "enter the class group" (进入班级群), which may enter the wrong group when several QQ groups exist on the phone. After loading tasks, `run_experiment.py` overrides it by `task_id` with "enter the 「2026 计算机班级群」 group" (`进入『2026 计算机班级群』`), **without modifying the dataset file itself**; other tasks are kept as-is. For a single-QQ-group smoke test you can use `sources.qq.example.yaml` in the repository root (copy it to `sources.qq.yaml`); it scans only that one group, with independent output/state directories that do not affect the default `sources.yaml`.
 
 ```bash
-# 执行任务集（需要真机与密钥）
+# Run the task set (requires a physical device and keys)
 python experiments/run_experiment.py --tasks experiments/tasks.json --mode single
 
-# 聚合 TSR / 多 App TSR / SE / AT / ST / CS
+# Aggregate TSR / multi-App TSR / SE / AT / ST / CS
 python experiments/metrics.py experiments/results/<run_dir>
 
-# 消融：关闭语义分析层
+# Ablation: turn off the semantic analysis layer
 python experiments/run_experiment.py --tasks experiments/tasks.json --no-semantic --tag no_semantic
 
-# 强制每个任务只跑 3 次（覆盖按等级规则）
+# Force every task to run only 3 times (overrides the by-level rule)
 python experiments/run_experiment.py --tasks experiments/tasks.json --repeat 3
 
-# 多设备：指定 adb serial（等价于设置 ANDROID_SERIAL）
+# Multiple devices: specify an adb serial (equivalent to setting ANDROID_SERIAL)
 python experiments/run_experiment.py --tasks experiments/tasks.json --serial emulator-5554
 
-# 失败重放：只重跑上次失败/超时/崩溃的任务
+# Failure replay: re-run only the tasks that failed/timed out/crashed last time
 python experiments/run_experiment.py --tasks experiments/tasks.json \
   --only-failed experiments/results/<run_dir>/results.jsonl
 
-# 只跑指定等级 / 指定任务号（不影响按等级的重复次数规则）
+# Run only the given levels / task IDs (does not affect the by-level repeat rule)
 python experiments/run_experiment.py --tasks experiments/tasks.json --levels L1,L2
 python experiments/run_experiment.py --tasks experiments/tasks.json --task-ids T01,T05
 
-# AT 口径可切换：--at-mode 选样本（all/success/best），--at-aggregate 选跨任务聚合
+# AT conventions are switchable: --at-mode selects samples (all/success/best), --at-aggregate selects the cross-task aggregation
 python experiments/metrics.py experiments/results/<run_dir> --at-mode success
 python experiments/metrics.py experiments/results/<run_dir> --at-aggregate total_per_task
 ```
 
-AT 的两种跨任务聚合（`--at-aggregate`）：
+The two cross-task AT aggregations (`--at-aggregate`):
 
-- `task_mean`（默认）：先算每个任务的尝试平均耗时，再对任务等权平均；与旧结果一致
-- `total_per_task`：所有纳入统计的 attempt 总耗时 ÷ 任务数
+- `task_mean` (default): compute each task's mean attempt latency first, then average equally across tasks; consistent with older results
+- `total_per_task`: total latency of all attempts included in the statistics ÷ number of tasks
 
-每任务尝试次数相同时两者相等；尝试次数不等（超时、失败重放、缺失判定）时会分叉。`--at-mode` 决定哪些 attempt 纳入统计，两者可组合。
+The two are equal when every task has the same number of attempts, and diverge when attempt counts differ (timeouts, failure replay, missing judgements). `--at-mode` decides which attempts enter the statistics, and the two can be combined.
 
-结果默认写到 `experiments/results/`（已在 `.gitignore` 中）。筛选条件（`levels` / `task_ids` / `only_failed`）会写进 `manifest.json` 与每条 `results.jsonl` 的 `filters` 字段，事后能看出"只跑了某几个任务"。runner 会在每个任务前回桌面并 force-stop 本任务涉及的已知应用（`--no-reset` 可关闭），`manifest.json` 记录 git SHA、执行/规划模型全名、温度、任务集哈希与设备信息。
+Results are written to `experiments/results/` by default (already in `.gitignore`). Filters (`levels` / `task_ids` / `only_failed`) are written into `manifest.json` and the `filters` field of every `results.jsonl` line, so it is possible afterwards to see that "only some tasks were run". The runner returns to the home screen before each task and force-stops the known apps involved in that task (disable with `--no-reset`); `manifest.json` records the git SHA, the full names of the execution/planning models, the temperature, the task-set hash and device information.
 
-baseline 接入：三个 wrapper 已按上游实际入口构造命令，也都可以用环境变量覆盖完整命令。协议是 stdin 一行 JSON（`task` 必填，`apps` 可选）→ stdout 一行 JSON（`summary/steps/elapsed/returncode/upstream_status`），退出码透传。
+Baseline integration: the three wrappers construct commands according to the upstream entry points, and every complete command can also be overridden with an environment variable. The protocol is one line of JSON on stdin (`task` required, `apps` optional) → one line of JSON on stdout (`summary/steps/elapsed/returncode/upstream_status`), with the exit code passed through.
 
-**命令按上游文档构造，未实跑**：本机无真机，也没有安装这三套系统的依赖/密钥；下面的入口、参数与输出格式来自上游仓库代码核对，接入前请按上游 README 完成环境准备。
+**Commands are built from upstream documentation and have not actually been run**: this machine has no physical device, nor the dependencies/keys of these three systems installed; the entry points, parameters and output formats below come from cross-checking the upstream repository code — complete the environment setup per each upstream README before integrating.
 
 ```bash
 python experiments/run_experiment.py --baseline openautoglm \
   --baseline-command "python experiments/baselines/openautoglm_wrapper.py"
 ```
 
-- **Open-AutoGLM**（`zai-org/Open-AutoGLM`）
-  - 环境变量：`OPEN_AUTOGLM_DIR`；可选 `OPEN_AUTOGLM_MAX_STEPS`
-  - 默认命令：`python main.py [--device-id $ANDROID_SERIAL] [--max-steps N] "<task>"`
-  - 任务位置参数是最后一个参数（不是 `--task`）；模型服务用上游的 `--base-url/--model/--apikey` 或 `PHONE_AGENT_*` 环境变量
-  - 输出：每步打印 `💭 思考：` / `🎯 动作：`，结束时打印 `Result: <message>`（超步数为 `Result: Max steps reached`）
-  - 步骤数按 `🎯` 行统计；`upstream_status` 只区分 `finished` / `max_steps`，不当作成功判定
-- **Mobile-Agent-v2**（`X-PLUG/MobileAgent` 的 `Mobile-Agent-v2/`）
-  - 环境变量：`MOBILE_AGENT_V2_DIR`；可选 `MOBILE_AGENT_V2_CMD`
-  - 默认命令：`python run.py`。上游没有命令行参数，任务与 API 配置写在 run.py 顶部（`instruction` / `adb_path` / `API_url` / `token` / `qwen_api`）；仍为空时 wrapper 会直接报错提示
-  - 输出：每步 `### Decision ###` 块（Thought/Action/Operation），截图在 `screenshot/`；动作 `Stop` 结束
-  - 步骤数按 ` Decision ` 标题行统计；`upstream_status=stopped` 仅表示出现 Stop
-- **AppAgent**（`TencentQQGYLab/AppAgent`，原 `mnotgod96/AppAgent` 已迁移）
-  - 环境变量：`APPAGENT_DIR`；应用名取 stdin JSON 的 `apps[0]` 或 `APPAGENT_APP`；可选 `APPAGENT_CMD` / `APPAGENT_STDIN`
-  - 默认命令：`python run.py --app <app>`；上游是交互式输入，默认把 `APPAGENT_STDIN`（缺省 `y\n<task>\n`）喂给子进程，对应「无文档库 + 单设备」的提示顺序；环境不同请自行设置
-  - 输出：每轮 `Round <n>`，日志在 `tasks/task_<app>_<时间戳>/log_*.txt`；结束文案为 `Task completed successfully` / `Task finished due to reaching max rounds` / `Task finished unexpectedly`
-  - 步骤数按 `Round ` 行统计；`upstream_status` 记录对应结束文案，仍不当作成功判定
+- **Open-AutoGLM** (`zai-org/Open-AutoGLM`)
+  - Environment variables: `OPEN_AUTOGLM_DIR`; optional `OPEN_AUTOGLM_MAX_STEPS`
+  - Default command: `python main.py [--device-id $ANDROID_SERIAL] [--max-steps N] "<task>"`
+  - The task is a positional argument and must be the last one (not `--task`); the model service is configured with the upstream `--base-url/--model/--apikey` or the `PHONE_AGENT_*` environment variables
+  - Output: each step prints `💭 思考：` / `🎯 动作：`, and at the end prints `Result: <message>` (`Result: Max steps reached` when steps are exceeded)
+  - Step count is taken from the `🎯` lines; `upstream_status` distinguishes only `finished` / `max_steps` and is not used as a success judgement
+- **Mobile-Agent-v2** (the `Mobile-Agent-v2/` directory of `X-PLUG/MobileAgent`)
+  - Environment variables: `MOBILE_AGENT_V2_DIR`; optional `MOBILE_AGENT_V2_CMD`
+  - Default command: `python run.py`. Upstream has no command-line arguments; the task and API configuration are written at the top of run.py (`instruction` / `adb_path` / `API_url` / `token` / `qwen_api`); if they are still empty the wrapper reports an error directly
+  - Output: a `### Decision ###` block per step (Thought/Action/Operation), screenshots in `screenshot/`; the action `Stop` ends the run
+  - Step count is taken from the ` Decision ` heading lines; `upstream_status=stopped` only means that a Stop occurred
+- **AppAgent** (`TencentQQGYLab/AppAgent`; the original `mnotgod96/AppAgent` has moved)
+  - Environment variables: `APPAGENT_DIR`; the app name is taken from `apps[0]` of the stdin JSON or from `APPAGENT_APP`; optional `APPAGENT_CMD` / `APPAGENT_STDIN`
+  - Default command: `python run.py --app <app>`; upstream reads interactively, so by default `APPAGENT_STDIN` (default `y\n<task>\n`) is fed to the child process, matching the prompt order for "no document library + single device"; set it yourself if your environment differs
+  - Output: `Round <n>` per round, logs in `tasks/task_<app>_<timestamp>/log_*.txt`; the final text is `Task completed successfully` / `Task finished due to reaching max rounds` / `Task finished unexpectedly`
+  - Step count is taken from the `Round ` lines; `upstream_status` records the corresponding final text and is still not used as a success judgement
 
-`BASELINE_STEP_MARKER` 可覆盖步骤标记（多个候选标记用默认值，无需设置）。`success` 仍由人工判定，baseline 的 `upstream_status` 只作为复盘线索写进 `baseline_raw`。协议层已有离线假上游测试。
+`BASELINE_STEP_MARKER` can override the step marker (with several candidate markers the default is used, so there is no need to set it). `success` is still judged manually, and a baseline's `upstream_status` is only written into `baseline_raw` as a clue for review. The protocol layer already has an offline fake-upstream test.
 
-任务成功与否仍需人工判定：可写 `results.jsonl` 的 `success` 字段，或同目录 `judgement.json`。注意任务级布尔 `{"T01": true}` 只能算 TSR，要算 CS 必须逐次判定 `{"T01": [true, false, true]}`。每任务的原始执行证据在 `runs/<时间戳>/`。
+Whether a task succeeded still has to be judged manually: either write the `success` field of `results.jsonl`, or a `judgement.json` in the same directory. Note that a task-level boolean `{"T01": true}` can only yield TSR; to compute CS you must judge each attempt `{"T01": [true, false, true]}`. Each task's raw execution evidence is in `runs/<timestamp>/`.
 
-CI（`.github/workflows/ci.yml`）不连接手机、不调用模型。
+CI (`.github/workflows/ci.yml`) does not connect to a phone and does not call models.
 
-### 提交材料索引
+### Submission Materials Index
 
-| 材料 | 位置 | 说明 |
+| Material | Location | Description |
 |---|---|---|
-| 提示词 | `prompts/ddl-agent-prompts.md` | 由 `python scripts/export_prompts.py` 从代码生成；改提示词后重新生成 |
-| 三类样例输入 | `examples/cases/README.md` | D01 普通 / D08 变更条件 / D18 失败；含无需手机的离线替代 |
-| 评测脚本 | `experiments/run_experiment.py`、`experiments/metrics.py`、`experiments/export_evidence.py` | 任务集、指标聚合、脱敏证据导出 |
-| 评测结果 | `docs/proposal-compliance.md`、`docs/ddl-agent-design.md` | 合成集 baseline / 消融 / 相似度的实际数字与限制 |
-| 脱敏 trace | `docs/evidence/` | 真机只读运行的脱敏步骤记录 |
+| Prompts | `prompts/ddl-agent-prompts.md` | Generated from the code by `python scripts/export_prompts.py`; regenerate after changing prompts |
+| Three kinds of sample input | `examples/cases/README.md` | D01 normal / D08 changed conditions / D18 failure; includes offline substitutes that need no phone |
+| Evaluation scripts | `experiments/run_experiment.py`, `experiments/metrics.py`, `experiments/export_evidence.py` | Task set, metric aggregation, sanitized evidence export |
+| Evaluation results | `docs/proposal-compliance.md`, `docs/ddl-agent-design.md` | Actual numbers and limitations of baseline / ablation / similarity on the synthetic set |
+| Sanitized traces | `docs/evidence/` | Sanitized step records of real-device read-only runs |
 
-## Mocks、未启用与不可用依赖
+## Mocks, Disabled and Unavailable Dependencies
 
-下列各项不是可直接使用的完整能力，使用时按“未启用 / 未验证 / 可选”标注：
+The items below are not complete, directly usable capabilities; when using them, label them as "disabled / unverified / optional":
 
-| 项 | 当前状态 | 对使用与报告的影响 |
+| Item | Current status | Impact on use and reporting |
 |---|---|---|
-| Microsoft Graph | 只有保留的骨架，未启用 | Outlook 只走手机 App 读屏，不接 Graph；不能写成第二条读取路径 |
-| 本地视觉模型 Qwen3-VL-8B GGUF | 可选、非默认；权重与 llama.cpp 运行时在仓库外，未进 CI | 默认仍走云端 DeepSeek；没有本地权重时该路径不可用 |
-| QQ 通道 | 无官方 API；走手机 UI + 截图 OCR，群列表滚动有上限（`QQ_LIST_MAX_SCROLLS` 默认 8） | 不是 mock，但受 QQ 界面版本影响；不能写成“官方接口” |
-| 三个 baseline（Open-AutoGLM / Mobile-Agent-v2 / AppAgent） | wrapper 已按上游文档写好，协议用假上游测过；**未安装、未实跑** | 报告只能写“未验证”，不能写对比结果或排名 |
-| embedding 语义匹配 | 可选依赖，默认不装、不联网 | 没有 embedding 时用词法匹配；不能写成默认能力 |
-| YOLO 输入框权重 | 随仓库分发（`models/input_box.pt`，`input_box` + `search_icon` 两类） | 验证集与 6 张真机截图核对过；未做置信度阈值的系统调优 |
+| Microsoft Graph | Only a retained skeleton, disabled | Outlook goes through phone App screen reading only, with no Graph integration; it must not be described as a second read path |
+| Local vision model Qwen3-VL-8B GGUF | Optional, not the default; weights and the llama.cpp runtime live outside the repository and are not in CI | The default is still cloud DeepSeek; without local weights this path is unavailable |
+| QQ channel | No official API; it uses the phone UI + screenshot OCR, and group-list scrolling has a limit (`QQ_LIST_MAX_SCROLLS`, default 8) | Not a mock, but subject to QQ UI versions; it must not be described as an "official API" |
+| The three baselines (Open-AutoGLM / Mobile-Agent-v2 / AppAgent) | The wrappers are written per upstream documentation and the protocol has been tested with a fake upstream; **not installed and not actually run** | The report may only say "unverified", never comparison results or rankings |
+| Embedding semantic matching | Optional dependency, not installed and no network by default | Without embeddings it uses lexical matching; it must not be described as a default capability |
+| YOLO input-box weights | Shipped with the repository (`models/input_box.pt`, two classes `input_box` + `search_icon`) | Checked against the validation set and 6 real-device screenshots; no systematic tuning of the confidence threshold has been done |
 
-## 已知限制（部分真机验证）
+## Known Limitations (Partial Real-Device Verification)
 
-- 单机、单账号：微信「文件传输助手」自聊做过一次只读读取与端到端抽取验证（`docs/real-device-test-report.md`）；QQ「COMP7503 作业通知群」测试群做过一次 once 只读扫描（2026-11-24，抓取 204 / 新消息 184 / 新候选 13，最终 11.28）。微信真实课程群、Outlook、图片型 DDL、定时模式、点击与输入、跨 App 信息传递仍未在真实环境跑通。
-- Android 17（API 37）上 uiautomator2 3.7.1 仍不可用（[#1209](https://github.com/openatx/uiautomator2/issues/1209)），程序会回退到 `adb_dump`。回退链路的真机 A/B 已完成一次（235deea，合并观察两组各 1 次，见「验证标签」），但**修复规则成本后尚未复跑**；修复前的回退样本只用于离线解析，不作为提速证据。
-- 依赖版本：`requirements-lock.txt` 是在 Windows + Python 3.12 的虚拟环境里实际解析得到的；换机器（尤其 GPU/系统不同）需重新 `pip freeze` 替换。
-- 基线系统（Open-AutoGLM / Mobile-Agent-v2 / AppAgent）的命令、输出解析与配置要求已按上游代码写实，协议用假上游测过；但三个真实系统仍未在本机安装、未接真机联调，命令未实跑。
-- 任务前重置只做「回桌面 + force-stop 已知包名」，**无法自动清除应用内草稿、聊天输入框、剪贴板与输入法状态**；`reset` 字段会区分 `stopped` / `failed` / `not_installed` / `not_mapped`。
-- `run.py`、`app.py`、`frontend.py`、实验 runner 共用 `runs/.device.lock`：锁覆盖「reset + 整个任务执行期」，拿不到锁的入口会直接报错/记为失败，不会在别人操作手机时 force-stop。锁文件记录 token + pid，释放时校验归属；僵尸锁只在持有进程已退出时回收。
-- 需要 Python 3.10+（使用了 `dict | None` 等注解，3.8/3.9 导入即报错）。
+- Single device, single account: a read-only read and end-to-end extraction verification was done once on the WeChat "File Transfer Assistant" (「文件传输助手」) self-chat (`docs/real-device-test-report.md`); a once-only read-only scan was done on the QQ "COMP7503 作业通知群" test group (2026-11-24; 204 fetched / 184 new messages / 13 new candidates, final 11.28). Real WeChat course groups, Outlook, image-based DDLs, the scheduled mode, tapping and input, and cross-App information passing have still not been run end to end in a real environment.
+- On Android 17 (API 37), uiautomator2 3.7.1 is still unusable ([#1209](https://github.com/openatx/uiautomator2/issues/1209)), and the program falls back to `adb_dump`. Real-device A/B of the fallback path has been completed once (235deea, one run in each merged-observation group; see "Verification Labels"), but **it has not been re-run since the rule-cost fix**; the pre-fix fallback samples are only used for offline parsing and are not speed-up evidence.
+- Dependency versions: `requirements-lock.txt` was actually resolved in a Windows + Python 3.12 virtual environment; switching machines (especially with a different GPU/OS) requires re-running `pip freeze` and replacing it.
+- Baseline systems (Open-AutoGLM / Mobile-Agent-v2 / AppAgent): their commands, output parsing and configuration requirements are written faithfully to the upstream code, and the protocol has been tested with a fake upstream; but the three real systems are still not installed on this machine and have not been integrated with a physical device, and the commands have not actually been run.
+- The pre-task reset only does "return to home screen + force-stop known package names"; **it cannot automatically clear in-app drafts, chat input boxes, the clipboard or the IME state**; the `reset` field distinguishes `stopped` / `failed` / `not_installed` / `not_mapped`.
+- `run.py`, `app.py`, `frontend.py` and the experiment runner share `runs/.device.lock`: the lock covers "reset + the whole task execution period", and an entry point that cannot acquire the lock either reports an error directly or is recorded as failed — it never force-stops while someone else is operating the phone. The lock file records a token + pid and verifies ownership on release; a stale lock is reclaimed only when the holding process has exited.
+- Requires Python 3.10+ (annotations such as `dict | None` are used; 3.8/3.9 fail at import).
 
-## 开发与测试
+## Development and Testing
 
 ```bash
-pip install -r requirements-lock.txt   # 与 CI 同一份依赖（含 pytest/ruff/openpyxl）
-python scripts/check_test_deps.py      # 校验 tests 的第三方 import 都已在 lock 里
+pip install -r requirements-lock.txt   # the same dependencies as CI (including pytest/ruff/openpyxl)
+python scripts/check_test_deps.py      # verify that every third-party import in tests is in the lock
 
-pytest -q          # 单元测试：动作容错、指标聚合、任务集校验、配置加载、baseline 协议
-ruff check .       # 只启用能发现真实错误的规则（E9/F63/F7/F82）
+pytest -q          # unit tests: action fault tolerance, metric aggregation, task-set validation, config loading, baseline protocol
+ruff check .       # only rules that catch real errors are enabled (E9/F63/F7/F82)
 ```
 
-### 用脚本创建 PR（中文不乱码）
+### Creating PRs with a Script (No Chinese Mojibake)
 
-PowerShell 5 的 `Invoke-RestMethod` 会按本地 ANSI 代码页序列化 JSON，中文标题偶尔变成 `????`（曾出现 `fix: ???? UI ...`）。统一改用脚本：
+PowerShell 5's `Invoke-RestMethod` serializes JSON according to the local ANSI code page, so Chinese titles occasionally turn into `????` (this once produced `fix: ???? UI ...`). Use the script instead:
 
 ```bash
-# 创建 PR；仓库默认从 origin 推断
+# Create a PR; the repository is inferred from origin by default
 python scripts/create_pr.py --head fix/my-branch --title "fix: 中文标题" --body-file pr_body.md
 
-# 更新已有 PR 的标题/正文
+# Update the title/body of an existing PR
 python scripts/create_pr.py --update 19 --title "fix: 中文标题" --body-file pr_body.md
 ```
 
-- 请求体由 Python 以 UTF-8 字节发送（`json.dumps(ensure_ascii=False).encode("utf-8")`），并显式声明 `charset=utf-8`；
-- token 从 `git credential fill` 读取，只放 Authorization 头，不打印明文；
-- 创建/更新后立即 GET 回读，逐字比对标题与正文（换行统一为 LF），不一致时非零退出；
-- PowerShell 5 与 PowerShell 7 都适用：脚本不依赖 shell 的默认编码。正文建议用 `--body-file`（UTF-8 文件），避免长命令行参数与引号转义。
+- The request body is sent by Python as UTF-8 bytes (`json.dumps(ensure_ascii=False).encode("utf-8")`), with an explicit `charset=utf-8`;
+- The token is read from `git credential fill` and placed only in the Authorization header; it is never printed in plain text;
+- After creating/updating, it immediately GETs the resource back and compares title and body character by character (newlines normalized to LF), exiting non-zero on any mismatch;
+- Works on both PowerShell 5 and PowerShell 7: the script does not depend on the shell's default encoding. For the body, prefer `--body-file` (a UTF-8 file) to avoid long command-line arguments and quote escaping.
 
-### 新增测试依赖只改一个文件
+### Adding Test Dependencies Touches Only One File
 
-1. 在 `requirements-lock.txt` 里加**精确版本**（例如 `bs4==4.12.3`），必要时在 `requirements.txt` 补最低版本；
-2. 不要改 `.github/workflows/ci.yml` 的依赖清单——CI 直接 `pip install -r requirements-lock.txt`；
-3. 本地跑 `python scripts/check_test_deps.py`（CI 也会跑）：
-   - 它静态扫描 `tests/` 的 `import`，把第三方模块映射到发行包名；
-   - 若某个 import 不在 lock 里，直接非零退出并列出引用文件；
-   - `python -m pip check` 另行校验已安装依赖之间没有冲突。
-4. 测试输入只能放 `tests/fixtures/`；**不要读 `runs/`、`output/`、`state/`**，这些目录被 `.gitignore` 忽略，CI checkout 后不存在。测试里有一条守卫会扫描这类路径拼接。
+1. Add an **exact version** to `requirements-lock.txt` (e.g. `bs4==4.12.3`), and add the minimum version to `requirements.txt` if necessary;
+2. Do not change the dependency list in `.github/workflows/ci.yml` — CI simply runs `pip install -r requirements-lock.txt`;
+3. Run `python scripts/check_test_deps.py` locally (CI runs it too):
+   - it statically scans the `import`s in `tests/` and maps third-party modules to distribution names;
+   - if an import is not in the lock, it exits non-zero immediately and lists the referencing files;
+   - `python -m pip check` separately verifies that the installed dependencies do not conflict.
+4. Test inputs may only go in `tests/fixtures/`; **do not read `runs/`, `output/` or `state/`** — these directories are ignored by `.gitignore` and do not exist after CI checkout. There is a guard in the tests that scans for such path concatenations.
 
-### CI 行为
+### CI Behaviour
 
-- 触发：`push` 只在 `main`；feature 分支走 `pull_request`；另留 `workflow_dispatch` 手动触发。
-- 并发：`concurrency` 按 workflow + ref 分组，同分支新推送取消旧 run。
-- 单 job `test`（ubuntu + Python 3.12）：从 lock 安装 → `pip check` → compileall → tasks JSON → dry-run → ruff → 依赖一致性检查 → 导入冒烟 → pytest。
+- Triggers: `push` only on `main`; feature branches go through `pull_request`; `workflow_dispatch` is also available for manual triggering.
+- Concurrency: `concurrency` is grouped by workflow + ref, so a new push on the same branch cancels the old run.
+- A single `test` job (ubuntu + Python 3.12): install from the lock → `pip check` → compileall → tasks JSON → dry-run → ruff → dependency consistency check → import smoke test → pytest.
 
-锁文件是 Windows + Python 3.12 下 `pip freeze` 得到的**版本锁（未带 hash）**；Linux/Windows 的 wheel 集不同，缺 wheel 会直接让 job 失败。将来若用 `pip-compile --generate-hashes`（或 `uv pip compile --generate-hashes`）生成 hash 锁，workflow 会自动改用 `pip install --require-hashes`。
+The lock file is a **version lock (without hashes)** obtained by `pip freeze` on Windows + Python 3.12; the wheel sets on Linux/Windows differ, and a missing wheel makes the job fail immediately. If hashed locks are generated in the future with `pip-compile --generate-hashes` (or `uv pip compile --generate-hashes`), the workflow automatically switches to `pip install --require-hashes`.
 
-> 历史教训：此前 `ci.yml` 另维护一份手写 pip 子集，新增测试用到 `uiautomator2` / `cv2` / `flask` 时 CI 连续红灯；现已统一为 lock 单源，并由 `check_test_deps.py` 兜底。
+> Historical lesson: `ci.yml` used to maintain a separate hand-written pip subset, and CI went red repeatedly when new tests needed `uiautomator2` / `cv2` / `flask`; it is now unified to the single lock source, with `check_test_deps.py` as a safety net.
 
-## 注意事项
+## Notes
 
-执行任务会操作真实手机，请在测试设备上验证流程，并关注涉及消息发送、下单和支付的操作。
+Running tasks operates a real phone; please validate the flow on a test device and pay attention to operations that send messages, place orders or make payments.
 
-Web 界面的 `SECRET_KEY` 与 CORS 可用环境变量 `FLASK_SECRET_KEY`、`CORS_ALLOWED_ORIGINS` 覆盖，默认值只适合本机调试。
+The web interface's `SECRET_KEY` and CORS can be overridden with the `FLASK_SECRET_KEY` and `CORS_ALLOWED_ORIGINS` environment variables; the defaults are only suitable for local debugging.
 
-截图会经模型 API 上传至对应服务商；涉及聊天记录等隐私内容时请自行评估。
+Screenshots are uploaded to the corresponding provider through the model API; assess privacy implications yourself when chat records or similar content are involved.
 
-## 许可证
+## License
 
-MIT License，见 [LICENSE](LICENSE)。
+MIT License, see [LICENSE](LICENSE).
