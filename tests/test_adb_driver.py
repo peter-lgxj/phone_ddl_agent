@@ -633,6 +633,41 @@ def test_explicit_u2_mode_does_not_silently_fall_back(monkeypatch):
         phone_driver.create_phone_controller(object(), mode="uiautomator2")
 
 
+def test_auto_mode_falls_back_when_u2_module_missing(monkeypatch, capsys):
+    """缺依赖（ModuleNotFoundError）不得中断扫描，应按 Android 17 同样回退 adb_dump。"""
+
+    class MissingU2:
+        def __init__(self, locator):
+            raise ModuleNotFoundError("No module named 'uiautomator2'")
+
+    class FakeAdb:
+        kind = "adb_dump"
+
+        def __init__(self, locator):
+            self.locator = locator
+
+    monkeypatch.setattr(phone_driver, "PhoneController", MissingU2)
+    monkeypatch.setattr(phone_driver, "AdbDumpController", FakeAdb)
+
+    controller = phone_driver.create_phone_controller(object())
+    assert controller.kind == "adb_dump"
+    out = capsys.readouterr().out
+    assert "未安装 uiautomator2，使用 adb_dump" in out
+
+
+def test_explicit_u2_mode_reports_missing_module_clearly(monkeypatch):
+    class MissingU2:
+        def __init__(self, locator):
+            raise ModuleNotFoundError("No module named 'uiautomator2'")
+
+    monkeypatch.setattr(phone_driver, "PhoneController", MissingU2)
+    with pytest.raises(RuntimeError) as excinfo:
+        phone_driver.create_phone_controller(object(), mode="uiautomator2")
+    message = str(excinfo.value)
+    assert "未安装 uiautomator2" in message
+    assert "SCREEN_DRIVER=adb_dump" in message
+
+
 # ---------------------------------------------------------------- 报错文案
 def test_android17_message_points_to_issue_and_fallback():
     message = _compatibility_message(
