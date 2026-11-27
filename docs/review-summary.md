@@ -34,7 +34,7 @@ Scope: PR #1 (the 1 commit on main since `967c58a` after the squash merge), cove
 - `experiments/run_experiment.py`: repeated execution, single/multi-app and baseline modes, per-task reset, manifest (git SHA/dirty, full model name, temperature, device information)
 - `experiments/metrics.py`: TSR, multi-app TSR, SE, AT, ST, CS; CS refuses to compute when the judgement granularity is mixed and reports coverage
 - `experiments/baselines/`: stdin/stdout JSON protocol + generic subprocess adapter + three wrapper skeletons (**not installed, not integrated**)
-- `tests/`: 548 passed, 2 skipped (the skipped ones are optional cases that need the local embedding model); the other cases do not depend on a real device/model; CI runs compileall, tasks validation, dry-run, ruff, pytest
+- `tests/`: 644 passed, 2 skipped (646 collected; the skipped ones are optional cases that need the local embedding model); the other cases do not depend on a real device/model; CI runs compileall, tasks validation, dry-run, ruff, pytest
 - Dependencies: `requirements.txt` (version lower bounds) + `requirements-lock.txt` (resolved on this machine with 3.12) + `requirements-dev.txt`
 - Docs: README adds run prerequisites, configuration table, project structure, experiment usage, weight sources, privacy notes; the 30-step criterion and leftover T19 text in `test.md` have been cleaned up
 
@@ -57,7 +57,7 @@ Mainly from the `现状审查清单` (current-state review checklist) and five r
 
 ### Actually run (local machine)
 
-- Python 3.12.14 venv: `pytest` **548 passed, 2 skipped**, `ruff` all green, `run_experiment.py --dry-run` passed
+- Python 3.12.14 venv: `pytest` **644 passed, 2 skipped** (646 collected), `ruff` all green, `run_experiment.py --dry-run` passed
 - Real device: OPPO PLJ110 / Android 17 / 1080×2374 (because Android 17 is incompatible with uiautomator2 3.7.1, the device uses `SCREEN_DRIVER=adb_dump`), WeChat 「文件传输助手」 self-chat conversation, single device, single account, read-only; including scroll OCR observation, timeout partial results, and end-to-end extraction; see `docs/real-device-test-report.md`
 - GitHub Actions: based on the latest run of this PR
 
