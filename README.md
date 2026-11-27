@@ -34,6 +34,10 @@ A scan occupies the phone, and the API is by default only callable from the loca
 and send the same value in the `X-DDL-Token` request header. Real device mutual exclusion is guaranteed by the device lock held by the scanning thread,
 so a "pre-check passed but then preempted by another window" situation cannot occur.
 
+To present the web page on a machine without a phone, run `python scripts/demo.py --offline --out output` first: the page and its calendar panel read `output/calendar.html`, so the DDL calendar can be shown without a device. A scan started from the page itself still requires an authorized phone.
+
+To present the web page on a machine without a phone, run `python scripts/demo.py --offline --out output` first: the page and its calendar panel read `output/calendar.html`, so the DDL calendar can be shown without a device. A scan started from the page itself still requires an authorized phone.
+
 1. On first use, first tell the agent what to retrieve (natural language, written into `sources.yaml`):
 
    ```bash
