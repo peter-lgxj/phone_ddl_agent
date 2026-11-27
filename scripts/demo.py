@@ -188,36 +188,22 @@ def main(argv: list[str] | None = None) -> int:
     elif args.live:
         mode = "live"
 
-    devices = connected_devices() if mode != "offline" else []
-    live_reason = ""
-    if mode == "live" and not devices:
-        live_reason = "未检测到已连接手机：请开启 USB 调试并用 `adb devices` 确认。"
-    if mode == "auto":
-        mode = "live" if devices else "offline"
-        if not devices:
-            live_reason = "未检测到已连接手机，自动使用离线回放。"
-
+    fallback_allowed = mode == "auto" and not args.no_fallback
     try:
-        if mode == "live" and not devices:
-            if args.no_fallback or args.live:
-                # 显式 --live 失败必须非零退出，不能悄悄改成离线冒充成功
-                raise DemoError(live_reason or "未检测到设备")
-            print(f"提示：{live_reason} 改用离线回放。")
-            mode = "offline"
-            records, engine, paths, _now, notes = _offline(args)
-        elif mode == "live":
+        if mode != "offline":
             try:
+                if not connected_devices():
+                    raise DemoError(
+                        "未检测到已连接手机：请开启 USB 调试并用 `adb devices` 确认。"
+                    )
                 records, engine, paths, _now, notes = _live(args)
+                mode = "live"
             except DemoError as exc:
-                if args.no_fallback or args.live:
+                if not fallback_allowed:
                     raise
-                print(f"提示：{live_reason or exc} 改用离线回放。")
+                print(f"提示：{exc} 改用离线回放。")
                 mode = "offline"
-                records, engine, paths, _now, notes = _offline(args)
-            else:
-                if live_reason:
-                    notes.insert(0, live_reason)
-        else:
+        if mode == "offline":
             records, engine, paths, _now, notes = _offline(args)
     except DemoError as exc:
         print(f"演示失败：{exc}")
