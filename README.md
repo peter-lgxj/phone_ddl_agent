@@ -570,7 +570,7 @@ The cost of raising `HISTORY_IMAGE_WINDOW`: vision tokens and VRAM usage rise, a
 - Interface: `app.py` + `templates/` (Flask + SocketIO), `frontend.py` (optional Streamlit)
 - Configuration: `config.py`, `.env.example`
 - Experiments: `experiments/` (task set, repeated runner, metric aggregation, baseline adapter layer and three upstream wrappers)
-- Tests and engineering: `tests/` (644 passed, 2 skipped; CI runs the full suite with no physical device or model), `pyproject.toml` (ruff + pytest configuration), `.github/workflows/ci.yml`, `requirements-lock.txt` (single source of truth for dependencies), `scripts/check_test_deps.py` (checks that test imports are consistent with the lock), `scripts/create_pr.py` (UTF-8-safe REST script for creating PRs)
+- Tests and engineering: `tests/` (646 passed, 2 skipped; CI runs the full suite with no physical device or model), `pyproject.toml` (ruff + pytest configuration), `.github/workflows/ci.yml`, `requirements-lock.txt` (single source of truth for dependencies), `scripts/check_test_deps.py` (checks that test imports are consistent with the lock), `scripts/create_pr.py` (UTF-8-safe REST script for creating PRs)
 - Helper scripts: `get_packages.py` (export the package names of apps installed on the phone), `debug_detector.py` (YOLO weights self-check), `find_input.py` (manually probe which height ratios bring up the keyboard)
 - Documentation: `test.md` is the comparative experiment plan (task set, metrics, judging criteria)
 
