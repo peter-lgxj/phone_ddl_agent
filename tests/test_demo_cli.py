@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import scripts.demo as demo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,15 +44,35 @@ def test_auto_mode_falls_back_to_offline_without_device(tmp_path, monkeypatch):
     assert (tmp_path / "data.json").exists()
 
 
-def test_live_mode_without_device_reports_next_step(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize(
+    "mode_args", [["--live"], ["--mode", "live"], ["--mode", "auto", "--no-fallback"]],
+    ids=["live-flag", "live-mode", "auto-without-fallback"],
+)
+def test_required_live_without_device_reports_next_step(mode_args, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(demo, "connected_devices", lambda: [])
 
-    code = demo.main(["--live", "--no-fallback", "--out", str(tmp_path)])
+    code = demo.main([*mode_args, "--out", str(tmp_path)])
 
     output = capsys.readouterr().out
     assert code == 2
     assert "adb devices" in output
     assert "Traceback" not in output
+    assert "改用离线回放" not in output
+    assert not (tmp_path / "data.json").exists()
+
+
+def test_auto_mode_falls_back_after_live_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(demo, "connected_devices", lambda: ["device-1"])
+
+    def fail_live(_args):
+        raise demo.DemoError("真机读取失败")
+
+    monkeypatch.setattr(demo, "_live", fail_live)
+    code = demo.main(["--out", str(tmp_path)])
+
+    assert code == 0
+    assert "改用离线回放" in capsys.readouterr().out
+    assert (tmp_path / "data.json").exists()
 
 
 def test_missing_demo_config_gives_readable_error(tmp_path, monkeypatch, capsys):
@@ -107,8 +129,9 @@ def test_live_total_failure_exits_nonzero_without_artifacts(tmp_path, monkeypatc
     assert not (tmp_path / "out" / "calendar.html").exists()
 
 
-def test_explicit_live_does_not_fall_back_to_offline(tmp_path, monkeypatch, capsys):
-    """显式 --live 失败时不能再悄悄改成离线回放并返回 0。"""
+@pytest.mark.parametrize("mode_args", [["--live"], ["--mode", "live"]], ids=["flag", "mode"])
+def test_explicit_live_does_not_fall_back_to_offline(mode_args, tmp_path, monkeypatch, capsys):
+    """显式真机模式失败时不能改成离线回放并返回 0。"""
     from ddl_agent.monitor.runner import CycleResult
 
     monkeypatch.setattr(demo, "connected_devices", lambda: ["device-1"])
@@ -126,7 +149,7 @@ def test_explicit_live_does_not_fall_back_to_offline(tmp_path, monkeypatch, caps
     )
 
     code = demo.main([
-        "--live", "--sources", str(tmp_path / "sources.yaml"),
+        *mode_args, "--sources", str(tmp_path / "sources.yaml"),
         "--out", str(tmp_path / "out"),
     ])
 
